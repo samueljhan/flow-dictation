@@ -1,10 +1,13 @@
 const express = require('express');
 const OpenAI = require('openai');
 const cors = require('cors');
+const multer = require('multer');
+const fs = require('fs');
 require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || 8080
+const upload = multer({ dest: 'uploads/' });
+const PORT = process.env.PORT || 8080;
 
 app.use(cors());
 app.use(express.json());
@@ -34,15 +37,17 @@ CRITICAL RULES:
 
 IMPORTANT: Do not include patient names, MRNs, dates of birth, or any identifiers.`;
 
+// Text-based report generation endpoint
 app.post('/api/generate-report', async (req, res) => {
   try {
     const { findings, specialty } = req.body;
+    
     if (!findings) {
       return res.status(400).json({ error: 'Findings are required' });
     }
 
     console.log(`Generating ${specialty} report...`);
-
+    
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
@@ -60,10 +65,78 @@ app.post('/api/generate-report', async (req, res) => {
   }
 });
 
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', service: 'Flow Dictation API' });
+// Audio transcription endpoint
+app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Audio file is required' });
+    }
+
+    const audioFile = fs.createReadStream(req.file.path);
+    
+    const transcription = await openai.audio.transcriptions.create({
+      file: audioFile,
+      model: 'whisper-1',
+    });
+
+    // Clean up uploaded file
+    fs.unlinkSync(req.file.path);
+    
+    res.json({ text: transcription.text });
+  } catch (error) {
+    console.error('Transcription error:', error);
+    // Clean up file if it exists
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+    res.status(500).json({ error: 'Transcription failed', details: error.message });
+  }
 });
 
-app.listen(PORT, () => {
+// Process transcribed text into formatted report
+app.post('/api/process', async (req, res) => {
+  try {
+    const { text, template } = req.body;
+    
+    if (!text) {
+      return res.status(400).json({ error: 'Text is required' });
+    }
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content: template === 'radiology' 
+            ? RADIOLOGY_SYSTEM_PROMPT
+            : `You are a medical transcription assistant. Format the following transcription according to the ${template} template. Maintain medical accuracy and proper formatting.`
+        },
+        {
+          role: 'user',
+          content: text
+        }
+      ],
+      temperature: 0.3,
+      max_tokens: 1000
+    });
+
+    res.json({ formatted: completion.choices[0].message.content });
+  } catch (error) {
+    console.error('Processing error:', error);
+    res.status(500).json({ error: 'Processing failed', details: error.message });
+  }
+});
+
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    service: 'Flow Dictation API',
+    features: ['text-generation', 'audio-transcription', 'text-processing']
+  });
+});
+
+// Start server - bind to 0.0.0.0 for Railway
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🏥 Flow Dictation running on port ${PORT}`);
 });

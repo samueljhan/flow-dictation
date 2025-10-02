@@ -1,0 +1,674 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flow Dictation - Medical Report Generator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #1a1a1a;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: #2a2a2a;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+            max-width: 1000px;
+            width: 100%;
+            height: 90vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .header {
+            background: #1f1f1f;
+            color: #e0e0e0;
+            padding: 25px 30px;
+            border-radius: 20px 20px 0 0;
+            border-bottom: 1px solid #3a3a3a;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            opacity: 0.7;
+            font-size: 14px;
+        }
+
+        .specialty-selector {
+            padding: 15px 30px;
+            background: #242424;
+            border-bottom: 1px solid #3a3a3a;
+        }
+
+        .specialty-selector label {
+            font-weight: 400;
+            color: #909090;
+            margin-right: 12px;
+            font-size: 13px;
+        }
+
+        .specialty-selector select {
+            padding: 6px 12px;
+            border: 1px solid #3a3a3a;
+            border-radius: 6px;
+            font-size: 13px;
+            background: #2a2a2a;
+            color: #909090;
+            cursor: pointer;
+            transition: border-color 0.3s;
+            font-weight: 400;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+        }
+
+        .specialty-selector select:focus {
+            outline: none;
+            border-color: #505050;
+        }
+
+        .chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 30px;
+            background: #2a2a2a;
+        }
+
+        .message {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 15px;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message.user {
+            flex-direction: row-reverse;
+        }
+
+        .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 16px;
+            flex-shrink: 0;
+        }
+
+        .user .avatar {
+            background: #404040;
+            color: #e0e0e0;
+        }
+
+        .assistant .avatar {
+            background: #353535;
+            color: #b0b0b0;
+        }
+
+        .message-content {
+            max-width: 70%;
+            padding: 15px 20px;
+            border-radius: 15px;
+            line-height: 1.6;
+        }
+
+        .user .message-content {
+            background: #3a3a3a;
+            color: #e0e0e0;
+            border-radius: 15px 15px 0 15px;
+        }
+
+        .assistant .message-content {
+            background: #333333;
+            color: #d0d0d0;
+            border: 1px solid #404040;
+            border-radius: 15px 15px 15px 0;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+
+        .report-section {
+            margin: 15px 0;
+        }
+
+        .report-section h3 {
+            font-size: 14px;
+            font-weight: 700;
+            color: #909090;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .report-section p {
+            margin: 5px 0;
+            font-size: 14px;
+        }
+
+        .copy-btn {
+            background: #404040;
+            color: #e0e0e0;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            margin-top: 10px;
+            transition: all 0.3s;
+        }
+
+        .copy-btn:hover {
+            background: #505050;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+        }
+
+        .copy-btn:active {
+            transform: translateY(0);
+        }
+
+        .copy-btn.copied {
+            background: #28a745;
+        }
+
+        .input-container {
+            padding: 20px 30px;
+            background: #242424;
+            border-top: 1px solid #3a3a3a;
+            display: flex;
+            gap: 15px;
+            align-items: flex-end;
+        }
+
+        .input-wrapper {
+            flex: 1;
+            position: relative;
+        }
+
+        #userInput {
+            width: 100%;
+            padding: 15px 120px 15px 20px;
+            border: 1px solid #3a3a3a;
+            border-radius: 25px;
+            font-size: 15px;
+            resize: none;
+            font-family: inherit;
+            transition: border-color 0.3s;
+            min-height: 50px;
+            max-height: 150px;
+            background: #2a2a2a;
+            color: #e0e0e0;
+        }
+
+        #userInput::placeholder {
+            color: #707070;
+        }
+
+        #userInput:focus {
+            outline: none;
+            border-color: #505050;
+        }
+
+        .voice-btn {
+            position: absolute;
+            right: 70px;
+            bottom: 12px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 20px;
+            padding: 5px 10px;
+            border-radius: 50%;
+            transition: background 0.3s;
+        }
+
+        .voice-btn:hover {
+            background: #3a3a3a;
+        }
+
+        .voice-btn.recording {
+            color: #dc3545;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        #sendBtn {
+            background: #404040;
+            color: #e0e0e0;
+            border: none;
+            padding: 15px;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 50px;
+            height: 50px;
+            flex-shrink: 0;
+        }
+
+        #sendBtn svg {
+            transition: transform 0.3s;
+        }
+
+        #sendBtn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+            background: #505050;
+        }
+
+        #sendBtn:hover svg {
+            transform: translateY(-2px);
+        }
+
+        #sendBtn:active {
+            transform: translateY(0);
+        }
+
+        #sendBtn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .disclaimer {
+            padding: 6px 30px;
+            background: #242424;
+            border-top: 1px solid #3a3a3a;
+            color: #909090;
+            font-size: 12px;
+            text-align: center;
+            font-weight: 400;
+            line-height: 1.2;
+        }
+
+        .disclaimer-secondary {
+            padding: 6px 30px;
+            padding-top: 2px;
+            border-top: none;
+            font-size: 12px;
+            color: #909090;
+            line-height: 1.2;
+        }
+
+        .welcome-message {
+            text-align: center;
+            padding: 60px 20px;
+            color: #909090;
+        }
+
+        .welcome-message h2 {
+            font-size: 24px;
+            margin-bottom: 15px;
+            color: #b0b0b0;
+        }
+
+        .welcome-message p {
+            font-size: 15px;
+            line-height: 1.6;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .example-prompts {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-top: 30px;
+        }
+
+        .example-prompt {
+            background: #333333;
+            padding: 15px;
+            border-radius: 12px;
+            border: 1px solid #404040;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-align: left;
+        }
+
+        .example-prompt:hover {
+            border-color: #505050;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+        }
+
+        .example-prompt strong {
+            color: #b0b0b0;
+            display: block;
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+
+        .example-prompt span {
+            font-size: 13px;
+            color: #808080;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                height: 100vh;
+                border-radius: 0;
+            }
+
+            .header {
+                border-radius: 0;
+            }
+
+            .message-content {
+                max-width: 85%;
+            }
+
+            .input-container {
+                gap: 10px;
+            }
+
+            .disclaimer {
+                font-size: 12px;
+                padding: 10px 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🏥 Flow Dictation</h1>
+            <p>AI-Powered Medical Report Generator for Residents</p>
+        </div>
+
+        <div class="specialty-selector">
+            <label for="specialty">Specialty:</label>
+            <select id="specialty">
+                <option value="radiology">Radiology</option>
+                <option value="general" disabled>General Medicine (Coming Soon)</option>
+                <option value="surgery" disabled>Surgery (Coming Soon)</option>
+                <option value="pathology" disabled>Pathology (Coming Soon)</option>
+            </select>
+        </div>
+
+        <div class="chat-container" id="chatContainer">
+            <div class="welcome-message">
+                <h2>Welcome to Flow Dictation! 👋</h2>
+                <p>Describe your findings in natural language or dictate them, and I'll generate structured, guideline-aligned radiology reports ready to copy into your PACS system.</p>
+                
+                <div class="example-prompts">
+                    <div class="example-prompt" onclick="useExample(this)">
+                        <strong>🫁 Chest X-Ray</strong>
+                        <span>"Chest x-ray shows right lower lobe infiltrate with small pleural effusion"</span>
+                    </div>
+                    <div class="example-prompt" onclick="useExample(this)">
+                        <strong>🧠 Head CT</strong>
+                        <span>"Head CT without contrast, 65 year old with headache, no acute findings"</span>
+                    </div>
+                    <div class="example-prompt" onclick="useExample(this)">
+                        <strong>🦴 Fracture Study</strong>
+                        <span>"AP and lateral wrist showing distal radius fracture with dorsal angulation"</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="input-container">
+            <div class="input-wrapper">
+                <textarea 
+                    id="userInput" 
+                    placeholder="Type or dictate your findings... (e.g., 'Chest CT showing multiple pulmonary nodules')"
+                    rows="1"
+                ></textarea>
+                <button class="voice-btn" id="voiceBtn" title="Voice input">🎤</button>
+            </div>
+            <button id="sendBtn">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 19V5M5 12l7-7 7 7"/>
+                </svg>
+            </button>
+        </div>
+        <div class="disclaimer">
+            Not HIPAA compliant. Do not enter patient identifiers or PHI.
+        </div>
+        <div class="disclaimer disclaimer-secondary">
+            Not for clinical decision-making. Clinician review required.
+        </div>
+    </div>
+
+    <script>
+        const chatContainer = document.getElementById('chatContainer');
+        const userInput = document.getElementById('userInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const voiceBtn = document.getElementById('voiceBtn');
+        let conversationHistory = [];
+        let recognition;
+
+        // Auto-resize textarea
+        userInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+        });
+
+        // Initialize speech recognition
+        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            recognition = new SpeechRecognition();
+            recognition.continuous = false;
+            recognition.interimResults = false;
+
+            recognition.onstart = function() {
+                voiceBtn.classList.add('recording');
+                voiceBtn.textContent = '🔴';
+            };
+
+            recognition.onend = function() {
+                voiceBtn.classList.remove('recording');
+                voiceBtn.textContent = '🎤';
+            };
+
+            recognition.onresult = function(event) {
+                const transcript = event.results[0][0].transcript;
+                userInput.value += (userInput.value ? ' ' : '') + transcript;
+                userInput.dispatchEvent(new Event('input'));
+            };
+
+            voiceBtn.addEventListener('click', function() {
+                if (voiceBtn.classList.contains('recording')) {
+                    recognition.stop();
+                } else {
+                    recognition.start();
+                }
+            });
+        } else {
+            voiceBtn.style.display = 'none';
+        }
+
+        function useExample(element) {
+            const text = element.querySelector('span').textContent.replace(/['"]/g, '');
+            userInput.value = text;
+            userInput.dispatchEvent(new Event('input'));
+            userInput.focus();
+        }
+
+        function addMessage(text, isUser) {
+            const welcomeMsg = chatContainer.querySelector('.welcome-message');
+            if (welcomeMsg) {
+                welcomeMsg.remove();
+            }
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user' : 'assistant'}`;
+            
+            const avatar = document.createElement('div');
+            avatar.className = 'avatar';
+            avatar.textContent = isUser ? 'Y' : 'FD';
+            
+            const content = document.createElement('div');
+            content.className = 'message-content';
+            content.innerHTML = text;
+            
+            messageDiv.appendChild(avatar);
+            messageDiv.appendChild(content);
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        async function generateReport(findings) {
+            const specialty = document.getElementById('specialty').value;
+            
+            try {
+                // Call the backend API
+                const response = await fetch('/api/generate-report', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        findings: findings,
+                        specialty: specialty
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                return formatReportHTML(data.report);
+                
+            } catch (error) {
+                console.error('Error generating report:', error);
+                return `<div class="report-section">
+                    <p style="color: #ff6b6b;">⚠️ Error generating report. Please check that the backend server is running.</p>
+                    <p style="font-size: 12px; color: #909090; margin-top: 10px;">Error: ${error.message}</p>
+                </div>`;
+            }
+        }
+
+        function formatReportHTML(reportText) {
+            // Parse the AI response and format with HTML
+            const sections = reportText.split('\n\n');
+            let html = '';
+            
+            sections.forEach(section => {
+                const lines = section.split('\n');
+                const heading = lines[0];
+                const content = lines.slice(1).join('\n');
+                
+                // Check if this looks like a section heading
+                if (heading.match(/^[A-Z\s]+:?$/)) {
+                    html += `<div class="report-section">
+                        <h3>${heading.replace(':', '')}</h3>
+                        <p>${content.trim()}</p>
+                    </div>`;
+                } else {
+                    html += `<div class="report-section">
+                        <p>${section}</p>
+                    </div>`;
+                }
+            });
+            
+            html += '<button class="copy-btn" onclick="copyReport(this)">📋 Copy Report</button>';
+            return html;
+        }
+
+
+
+        function copyReport(button) {
+            const reportContent = button.parentElement;
+            const sections = reportContent.querySelectorAll('.report-section');
+            let textToCopy = '';
+            
+            sections.forEach(section => {
+                const heading = section.querySelector('h3').textContent;
+                const paragraphs = Array.from(section.querySelectorAll('p'))
+                    .map(p => p.textContent)
+                    .join('\n');
+                textToCopy += `${heading}:\n${paragraphs}\n\n`;
+            });
+
+            navigator.clipboard.writeText(textToCopy).then(() => {
+                const originalText = button.textContent;
+                button.textContent = '✅ Copied!';
+                button.classList.add('copied');
+                setTimeout(() => {
+                    button.textContent = originalText;
+                    button.classList.remove('copied');
+                }, 2000);
+            });
+        }
+
+        function sendMessage() {
+            const message = userInput.value.trim();
+            if (!message) return;
+
+            addMessage(message, true);
+            conversationHistory.push({role: 'user', content: message});
+            
+            userInput.value = '';
+            userInput.style.height = 'auto';
+            sendBtn.disabled = true;
+
+            // Show loading message
+            const loadingMsg = 'Generating report...';
+            addMessage(loadingMsg, false);
+
+            generateReport(message).then(report => {
+                // Remove loading message
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMessage = messages[messages.length - 1];
+                lastMessage.remove();
+                
+                // Add actual report
+                addMessage(report, false);
+                conversationHistory.push({role: 'assistant', content: report});
+                sendBtn.disabled = false;
+                userInput.focus();
+            });
+        }
+
+        sendBtn.addEventListener('click', sendMessage);
+        userInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        userInput.focus();
+    </script>
+</body>
+</html>

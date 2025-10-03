@@ -23,6 +23,12 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
+// Debug: Check environment variables
+console.log('Environment check:');
+console.log('- OpenAI key present:', !!process.env.OPENAI_API_KEY);
+console.log('- Deepgram key present:', !!process.env.DEEPGRAM_API_KEY);
+console.log('- Deepgram key value:', process.env.DEEPGRAM_API_KEY ? 'exists' : 'MISSING');
+
 const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
 
 const RADIOLOGY_SYSTEM_PROMPT = `You are an expert radiologist assistant helping residents write structured radiology reports.

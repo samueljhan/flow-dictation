@@ -73,8 +73,6 @@
             background: #2a2a2a;
             color: #909090;
             cursor: pointer;
-            transition: border-color 0.3s;
-            font-weight: 400;
         }
 
         .chat-container {
@@ -92,19 +90,11 @@
         }
 
         @keyframes slideIn {
-            from {
-                opacity: 0;
-                transform: translateY(10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
         }
 
-        .message.user {
-            flex-direction: row-reverse;
-        }
+        .message.user { flex-direction: row-reverse; }
 
         .avatar {
             width: 40px;
@@ -118,15 +108,8 @@
             flex-shrink: 0;
         }
 
-        .user .avatar {
-            background: #404040;
-            color: #e0e0e0;
-        }
-
-        .assistant .avatar {
-            background: #353535;
-            color: #b0b0b0;
-        }
+        .user .avatar { background: #404040; color: #e0e0e0; }
+        .assistant .avatar { background: #353535; color: #b0b0b0; }
 
         .message-content {
             max-width: 70%;
@@ -146,12 +129,9 @@
             color: #d0d0d0;
             border: 1px solid #404040;
             border-radius: 15px 15px 15px 0;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
         }
 
-        .report-section {
-            margin: 15px 0;
-        }
+        .report-section { margin: 15px 0; }
 
         .report-section h3 {
             font-size: 14px;
@@ -159,12 +139,6 @@
             color: #909090;
             margin-bottom: 8px;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .report-section p {
-            margin: 5px 0;
-            font-size: 14px;
         }
 
         .copy-btn {
@@ -175,18 +149,12 @@
             border-radius: 6px;
             cursor: pointer;
             font-size: 13px;
-            font-weight: 600;
             margin-top: 10px;
             transition: all 0.3s;
         }
 
-        .copy-btn:hover {
-            background: #505050;
-        }
-
-        .copy-btn.copied {
-            background: #28a745;
-        }
+        .copy-btn:hover { background: #505050; }
+        .copy-btn.copied { background: #28a745; }
 
         .input-container {
             padding: 20px 30px;
@@ -197,10 +165,7 @@
             align-items: flex-end;
         }
 
-        .input-wrapper {
-            flex: 1;
-            position: relative;
-        }
+        .input-wrapper { flex: 1; position: relative; }
 
         #userInput {
             width: 100%;
@@ -210,17 +175,13 @@
             font-size: 15px;
             resize: none;
             font-family: inherit;
-            transition: border-color 0.3s;
             min-height: 50px;
             max-height: 150px;
             background: #2a2a2a;
             color: #e0e0e0;
         }
 
-        #userInput:focus {
-            outline: none;
-            border-color: #505050;
-        }
+        #userInput:focus { outline: none; border-color: #505050; }
 
         .voice-btn {
             position: absolute;
@@ -235,19 +196,14 @@
             transition: all 0.3s;
         }
 
-        .voice-btn:hover {
-            background: #3a3a3a;
-        }
+        .voice-btn:hover { background: #3a3a3a; }
 
         .voice-btn.recording {
             color: #dc3545;
             animation: pulse 1.5s infinite;
         }
 
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
         #sendBtn {
             background: #404040;
@@ -256,10 +212,6 @@
             padding: 15px;
             border-radius: 50%;
             cursor: pointer;
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            justify-content: center;
             width: 50px;
             height: 50px;
         }
@@ -305,32 +257,26 @@
             border-color: #505050;
             transform: translateY(-2px);
         }
-
-        .interim-text {
-            color: #808080;
-            font-style: italic;
-        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>🏥 Flow Dictation</h1>
-            <p>AI-Powered Medical Report Generator with Real-time Transcription</p>
+            <p>AI-Powered Medical Report Generator with Deepgram</p>
         </div>
 
         <div class="specialty-selector">
             <label for="specialty">Specialty:</label>
             <select id="specialty">
                 <option value="radiology">Radiology</option>
-                <option value="general" disabled>General Medicine (Coming Soon)</option>
             </select>
         </div>
 
         <div class="chat-container" id="chatContainer">
             <div class="welcome-message">
                 <h2>Welcome to Flow Dictation! 👋</h2>
-                <p>Describe your findings in natural language or dictate them using medical-grade AI transcription powered by Deepgram.</p>
+                <p>Describe your findings or dictate them using medical-grade AI transcription.</p>
                 
                 <div class="example-prompts">
                     <div class="example-prompt" onclick="useExample(this)">
@@ -351,11 +297,7 @@
 
         <div class="input-container">
             <div class="input-wrapper">
-                <textarea 
-                    id="userInput" 
-                    placeholder="Type or dictate your findings..."
-                    rows="1"
-                ></textarea>
+                <textarea id="userInput" placeholder="Type or dictate your findings..." rows="1"></textarea>
                 <button class="voice-btn" id="voiceBtn" title="Start dictation">🎤</button>
             </div>
             <button id="sendBtn">
@@ -376,12 +318,10 @@
         const voiceBtn = document.getElementById('voiceBtn');
         let conversationHistory = [];
         
-        // Deepgram WebSocket streaming
         let deepgramSocket = null;
         let mediaRecorder = null;
         let audioStream = null;
         let isRecording = false;
-        let interimTranscript = '';
         let finalTranscript = '';
 
         userInput.addEventListener('input', function() {
@@ -396,7 +336,6 @@
             userInput.focus();
         }
 
-        // Initialize Deepgram streaming
         async function startDeepgramStreaming() {
             try {
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -420,12 +359,12 @@
                     });
 
                     mediaRecorder.addEventListener('dataavailable', (event) => {
-                        if (event.data.size > 0 && deepgramSocket.readyState === WebSocket.OPEN) {
+                        if (event.data.size > 0 && deepgramSocket && deepgramSocket.readyState === WebSocket.OPEN) {
                             deepgramSocket.send(event.data);
                         }
                     });
 
-                    mediaRecorder.start(250); // Send audio chunks every 250ms
+                    mediaRecorder.start(250);
                     isRecording = true;
                     voiceBtn.classList.add('recording');
                     voiceBtn.textContent = '🔴';
@@ -436,12 +375,10 @@
                     
                     if (data.type === 'transcript') {
                         if (data.is_final) {
-                            finalTranscript += data.text + ' ';
+                            finalTranscript += (finalTranscript ? ' ' : '') + data.text;
                             userInput.value = finalTranscript;
-                            interimTranscript = '';
                         } else {
-                            interimTranscript = data.text;
-                            userInput.value = finalTranscript + interimTranscript;
+                            userInput.value = finalTranscript + (finalTranscript ? ' ' : '') + data.text;
                         }
                         userInput.dispatchEvent(new Event('input'));
                     } else if (data.type === 'error') {
@@ -456,7 +393,7 @@
                 };
 
                 deepgramSocket.onclose = () => {
-                    console.log('Deepgram WebSocket closed');
+                    console.log('Deepgram disconnected');
                     stopDeepgramStreaming();
                 };
 
@@ -483,9 +420,6 @@
             isRecording = false;
             voiceBtn.classList.remove('recording');
             voiceBtn.textContent = '🎤';
-            deepgramSocket = null;
-            mediaRecorder = null;
-            audioStream = null;
         }
 
         voiceBtn.addEventListener('click', () => {
@@ -493,7 +427,6 @@
                 stopDeepgramStreaming();
             } else {
                 finalTranscript = userInput.value;
-                interimTranscript = '';
                 startDeepgramStreaming();
             }
         });
@@ -520,13 +453,11 @@
         }
 
         async function generateReport(findings) {
-            const specialty = document.getElementById('specialty').value;
-            
             try {
                 const response = await fetch('/api/generate-report', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ findings, specialty })
+                    body: JSON.stringify({ findings, specialty: 'radiology' })
                 });
 
                 if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
@@ -534,10 +465,8 @@
                 return formatReportHTML(data.report);
                 
             } catch (error) {
-                console.error('Error generating report:', error);
-                return `<div class="report-section">
-                    <p style="color: #ff6b6b;">⚠️ Error generating report.</p>
-                </div>`;
+                console.error('Error:', error);
+                return `<p style="color: #ff6b6b;">⚠️ Error generating report.</p>`;
             }
         }
 
@@ -595,11 +524,9 @@
             if (!message) return;
 
             addMessage(message, true);
-            conversationHistory.push({role: 'user', content: message});
             
             userInput.value = '';
             finalTranscript = '';
-            interimTranscript = '';
             userInput.style.height = 'auto';
             sendBtn.disabled = true;
 
@@ -610,7 +537,6 @@
                 messages[messages.length - 1].remove();
                 
                 addMessage(report, false);
-                conversationHistory.push({role: 'assistant', content: report});
                 sendBtn.disabled = false;
                 userInput.focus();
             });

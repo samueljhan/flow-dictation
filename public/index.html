@@ -357,8 +357,15 @@
                         
                         console.log('Microphone access granted');
                         
+                        // Check supported MIME types
+                        const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
+                            ? 'audio/webm;codecs=opus'
+                            : 'audio/webm';
+                        
+                        console.log('Using MIME type:', mimeType);
+                        
                         mediaRecorder = new MediaRecorder(audioStream, {
-                            mimeType: 'audio/webm'
+                            mimeType: mimeType
                         });
 
                         mediaRecorder.addEventListener('dataavailable', (event) => {

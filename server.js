@@ -67,27 +67,33 @@ wss.on('connection', async (ws) => {
       endpointing: 300,
       utterance_end_ms: 1000,
       vad_events: true,
+      encoding: 'opus',
+      sample_rate: 16000,
     });
 
     deepgramLive.on('open', () => {
-      console.log('Deepgram connection opened');
+      console.log('✅ Deepgram connection opened successfully');
       
       deepgramLive.on('transcript', (data) => {
-        console.log('Received transcript:', data.channel.alternatives[0].transcript);
+        console.log('📝 Received transcript data:', JSON.stringify(data));
         const transcript = data.channel.alternatives[0].transcript;
+        console.log('📝 Transcript text:', transcript);
         
         if (transcript && transcript.trim().length > 0) {
+          console.log('✅ Sending transcript to client:', transcript);
           ws.send(JSON.stringify({
             type: 'transcript',
             text: transcript,
             is_final: data.is_final,
             speech_final: data.speech_final
           }));
+        } else {
+          console.log('⚠️ Empty transcript, skipping');
         }
       });
 
       deepgramLive.on('error', (error) => {
-        console.error('Deepgram error:', error);
+        console.error('❌ Deepgram error:', error);
         ws.send(JSON.stringify({
           type: 'error',
           message: error.message
@@ -95,7 +101,15 @@ wss.on('connection', async (ws) => {
       });
 
       deepgramLive.on('close', () => {
-        console.log('Deepgram connection closed');
+        console.log('🔴 Deepgram connection closed');
+      });
+
+      deepgramLive.on('warning', (warning) => {
+        console.warn('⚠️ Deepgram warning:', warning);
+      });
+
+      deepgramLive.on('metadata', (metadata) => {
+        console.log('📊 Deepgram metadata:', metadata);
       });
     });
 

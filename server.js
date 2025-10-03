@@ -66,9 +66,6 @@ wss.on('connection', async (ws) => {
       interim_results: true,
       endpointing: 300,
       utterance_end_ms: 1000,
-      vad_events: true,
-      encoding: 'opus',
-      sample_rate: 16000,
     });
 
     deepgramLive.on('open', () => {

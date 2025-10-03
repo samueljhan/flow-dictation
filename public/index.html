@@ -349,9 +349,10 @@
                         audioStream = await navigator.mediaDevices.getUserMedia({ 
                             audio: {
                                 channelCount: 1,
-                                sampleRate: 16000,
+                                sampleRate: 48000,
                                 echoCancellation: true,
-                                noiseSuppression: true
+                                noiseSuppression: true,
+                                autoGainControl: true
                             } 
                         });
                         
@@ -432,6 +433,8 @@
         }
 
         function stopDeepgramStreaming() {
+            console.log('Stopping Deepgram streaming...');
+            
             if (mediaRecorder && mediaRecorder.state !== 'inactive') {
                 mediaRecorder.stop();
             }
@@ -440,8 +443,13 @@
                 audioStream.getTracks().forEach(track => track.stop());
             }
             
+            // Don't close socket immediately - wait for final transcripts
             if (deepgramSocket && deepgramSocket.readyState === WebSocket.OPEN) {
-                deepgramSocket.close();
+                setTimeout(() => {
+                    if (deepgramSocket && deepgramSocket.readyState === WebSocket.OPEN) {
+                        deepgramSocket.close();
+                    }
+                }, 1000); // Wait 1 second for final transcripts
             }
             
             isRecording = false;

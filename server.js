@@ -73,6 +73,7 @@ wss.on('connection', async (ws) => {
       console.log('Deepgram connection opened');
       
       deepgramLive.on('transcript', (data) => {
+        console.log('Received transcript:', data.channel.alternatives[0].transcript);
         const transcript = data.channel.alternatives[0].transcript;
         
         if (transcript && transcript.trim().length > 0) {
@@ -99,8 +100,12 @@ wss.on('connection', async (ws) => {
     });
 
     ws.on('message', (message) => {
+      console.log('Received audio chunk:', message.length, 'bytes');
       if (deepgramLive && deepgramLive.getReadyState() === 1) {
+        console.log('Forwarding to Deepgram...');
         deepgramLive.send(message);
+      } else {
+        console.log('Deepgram not ready, state:', deepgramLive ? deepgramLive.getReadyState() : 'null');
       }
     });
 
@@ -194,4 +199,4 @@ app.get('/api/health', (req, res) => {
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🏥 Flow Dictation running on port ${PORT}`);
   console.log(`🎤 Deepgram medical transcription enabled`);
-});// Force rebuild
+});

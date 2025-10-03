@@ -3,9 +3,15 @@ const OpenAI = require('openai');
 const cors = require('cors');
 const multer = require('multer');
 const fs = require('fs');
+const { createClient } = require('@deepgram/sdk');
+const http = require('http');
+const WebSocket = require('ws');
 require('dotenv').config();
 
 const app = express();
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+
 const upload = multer({ dest: 'uploads/' });
 const PORT = process.env.PORT || 8080;
 
@@ -16,6 +22,8 @@ app.use(express.static('public'));
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
+
+const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
 
 const RADIOLOGY_SYSTEM_PROMPT = `You are an expert radiologist assistant helping residents write structured radiology reports.
 
@@ -36,6 +44,82 @@ CRITICAL RULES:
 8. Format for easy copying into PACS
 
 IMPORTANT: Do not include patient names, MRNs, dates of birth, or any identifiers.`;
+
+// WebSocket handler for Deepgram streaming
+wss.on('connection', async (ws) => {
+  console.log('Client connected for streaming transcription');
+  
+  let deepgramLive = null;
+  
+  try {
+    deepgramLive = deepgram.listen.live({
+      model: 'nova-2-medical',
+      language: 'en-US',
+      smart_format: true,
+      punctuate: true,
+      interim_results: true,
+      endpointing: 300,
+      utterance_end_ms: 1000,
+      vad_events: true,
+    });
+
+    deepgramLive.on('open', () => {
+      console.log('Deepgram connection opened');
+      
+      deepgramLive.on('transcript', (data) => {
+        const transcript = data.channel.alternatives[0].transcript;
+        
+        if (transcript && transcript.trim().length > 0) {
+          ws.send(JSON.stringify({
+            type: 'transcript',
+            text: transcript,
+            is_final: data.is_final,
+            speech_final: data.speech_final
+          }));
+        }
+      });
+
+      deepgramLive.on('error', (error) => {
+        console.error('Deepgram error:', error);
+        ws.send(JSON.stringify({
+          type: 'error',
+          message: error.message
+        }));
+      });
+
+      deepgramLive.on('close', () => {
+        console.log('Deepgram connection closed');
+      });
+    });
+
+    ws.on('message', (message) => {
+      if (deepgramLive && deepgramLive.getReadyState() === 1) {
+        deepgramLive.send(message);
+      }
+    });
+
+    ws.on('close', () => {
+      console.log('Client disconnected');
+      if (deepgramLive) {
+        deepgramLive.finish();
+      }
+    });
+
+    ws.on('error', (error) => {
+      console.error('WebSocket error:', error);
+      if (deepgramLive) {
+        deepgramLive.finish();
+      }
+    });
+
+  } catch (error) {
+    console.error('Error setting up Deepgram:', error);
+    ws.send(JSON.stringify({
+      type: 'error',
+      message: 'Failed to initialize transcription service'
+    }));
+  }
+});
 
 // Text-based report generation endpoint
 app.post('/api/generate-report', async (req, res) => {
@@ -65,7 +149,7 @@ app.post('/api/generate-report', async (req, res) => {
   }
 });
 
-// Audio transcription endpoint
+// Audio transcription endpoint (fallback)
 app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
   try {
     if (!req.file) {
@@ -79,51 +163,15 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
       model: 'whisper-1',
     });
 
-    // Clean up uploaded file
     fs.unlinkSync(req.file.path);
     
     res.json({ text: transcription.text });
   } catch (error) {
     console.error('Transcription error:', error);
-    // Clean up file if it exists
     if (req.file && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);
     }
     res.status(500).json({ error: 'Transcription failed', details: error.message });
-  }
-});
-
-// Process transcribed text into formatted report
-app.post('/api/process', async (req, res) => {
-  try {
-    const { text, template } = req.body;
-    
-    if (!text) {
-      return res.status(400).json({ error: 'Text is required' });
-    }
-
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        {
-          role: 'system',
-          content: template === 'radiology' 
-            ? RADIOLOGY_SYSTEM_PROMPT
-            : `You are a medical transcription assistant. Format the following transcription according to the ${template} template. Maintain medical accuracy and proper formatting.`
-        },
-        {
-          role: 'user',
-          content: text
-        }
-      ],
-      temperature: 0.3,
-      max_tokens: 1000
-    });
-
-    res.json({ formatted: completion.choices[0].message.content });
-  } catch (error) {
-    console.error('Processing error:', error);
-    res.status(500).json({ error: 'Processing failed', details: error.message });
   }
 });
 
@@ -132,11 +180,12 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     service: 'Flow Dictation API',
-    features: ['text-generation', 'audio-transcription', 'text-processing']
+    features: ['text-generation', 'deepgram-streaming', 'audio-transcription']
   });
 });
 
-// Start server - bind to 0.0.0.0 for Railway
-app.listen(PORT, '0.0.0.0', () => {
+// Start server
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`🏥 Flow Dictation running on port ${PORT}`);
+  console.log(`🎤 Deepgram medical transcription enabled`);
 });

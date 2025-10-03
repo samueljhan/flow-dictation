@@ -345,33 +345,52 @@
                 deepgramSocket.onopen = async () => {
                     console.log('Deepgram WebSocket connected');
                     
-                    audioStream = await navigator.mediaDevices.getUserMedia({ 
-                        audio: {
-                            channelCount: 1,
-                            sampleRate: 16000,
-                            echoCancellation: true,
-                            noiseSuppression: true
-                        } 
-                    });
-                    
-                    mediaRecorder = new MediaRecorder(audioStream, {
-                        mimeType: 'audio/webm'
-                    });
+                    try {
+                        audioStream = await navigator.mediaDevices.getUserMedia({ 
+                            audio: {
+                                channelCount: 1,
+                                sampleRate: 16000,
+                                echoCancellation: true,
+                                noiseSuppression: true
+                            } 
+                        });
+                        
+                        console.log('Microphone access granted');
+                        
+                        mediaRecorder = new MediaRecorder(audioStream, {
+                            mimeType: 'audio/webm'
+                        });
 
-                    mediaRecorder.addEventListener('dataavailable', (event) => {
-                        if (event.data.size > 0 && deepgramSocket && deepgramSocket.readyState === WebSocket.OPEN) {
-                            deepgramSocket.send(event.data);
-                        }
-                    });
+                        mediaRecorder.addEventListener('dataavailable', (event) => {
+                            if (event.data.size > 0 && deepgramSocket && deepgramSocket.readyState === WebSocket.OPEN) {
+                                console.log('Sending audio chunk:', event.data.size, 'bytes');
+                                deepgramSocket.send(event.data);
+                            }
+                        });
 
-                    mediaRecorder.start(250);
-                    isRecording = true;
-                    voiceBtn.classList.add('recording');
-                    voiceBtn.textContent = '🔴';
+                        mediaRecorder.addEventListener('start', () => {
+                            console.log('MediaRecorder started');
+                        });
+
+                        mediaRecorder.addEventListener('error', (error) => {
+                            console.error('MediaRecorder error:', error);
+                        });
+
+                        mediaRecorder.start(250);
+                        isRecording = true;
+                        voiceBtn.classList.add('recording');
+                        voiceBtn.textContent = '🔴';
+                        console.log('Recording started');
+                    } catch (micError) {
+                        console.error('Microphone error:', micError);
+                        alert('Could not access microphone: ' + micError.message);
+                        stopDeepgramStreaming();
+                    }
                 };
 
                 deepgramSocket.onmessage = (message) => {
                     const data = JSON.parse(message.data);
+                    console.log('Received from server:', data);
                     
                     if (data.type === 'transcript') {
                         if (data.is_final) {
@@ -383,6 +402,7 @@
                         userInput.dispatchEvent(new Event('input'));
                     } else if (data.type === 'error') {
                         console.error('Deepgram error:', data.message);
+                        alert('Transcription error: ' + data.message);
                         stopDeepgramStreaming();
                     }
                 };
@@ -399,7 +419,7 @@
 
             } catch (error) {
                 console.error('Error starting Deepgram:', error);
-                alert('Could not access microphone. Please check permissions.');
+                alert('Could not start transcription: ' + error.message);
                 stopDeepgramStreaming();
             }
         }

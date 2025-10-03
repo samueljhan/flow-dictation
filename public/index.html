@@ -75,14 +75,6 @@
             cursor: pointer;
             transition: border-color 0.3s;
             font-weight: 400;
-            -webkit-appearance: none;
-            -moz-appearance: none;
-            appearance: none;
-        }
-
-        .specialty-selector select:focus {
-            outline: none;
-            border-color: #505050;
         }
 
         .chat-container {
@@ -190,12 +182,6 @@
 
         .copy-btn:hover {
             background: #505050;
-            transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-        }
-
-        .copy-btn:active {
-            transform: translateY(0);
         }
 
         .copy-btn.copied {
@@ -231,10 +217,6 @@
             color: #e0e0e0;
         }
 
-        #userInput::placeholder {
-            color: #707070;
-        }
-
         #userInput:focus {
             outline: none;
             border-color: #505050;
@@ -250,7 +232,7 @@
             font-size: 20px;
             padding: 5px 10px;
             border-radius: 50%;
-            transition: background 0.3s;
+            transition: all 0.3s;
         }
 
         .voice-btn:hover {
@@ -280,31 +262,6 @@
             justify-content: center;
             width: 50px;
             height: 50px;
-            flex-shrink: 0;
-        }
-
-        #sendBtn svg {
-            transition: transform 0.3s;
-        }
-
-        #sendBtn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
-            background: #505050;
-        }
-
-        #sendBtn:hover svg {
-            transform: translateY(-2px);
-        }
-
-        #sendBtn:active {
-            transform: translateY(0);
-        }
-
-        #sendBtn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
         }
 
         .disclaimer {
@@ -314,17 +271,6 @@
             color: #909090;
             font-size: 12px;
             text-align: center;
-            font-weight: 400;
-            line-height: 1.2;
-        }
-
-        .disclaimer-secondary {
-            padding: 6px 30px;
-            padding-top: 2px;
-            border-top: none;
-            font-size: 12px;
-            color: #909090;
-            line-height: 1.2;
         }
 
         .welcome-message {
@@ -337,13 +283,6 @@
             font-size: 24px;
             margin-bottom: 15px;
             color: #b0b0b0;
-        }
-
-        .welcome-message p {
-            font-size: 15px;
-            line-height: 1.6;
-            max-width: 600px;
-            margin: 0 auto;
         }
 
         .example-prompts {
@@ -360,49 +299,16 @@
             border: 1px solid #404040;
             cursor: pointer;
             transition: all 0.3s;
-            text-align: left;
         }
 
         .example-prompt:hover {
             border-color: #505050;
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
         }
 
-        .example-prompt strong {
-            color: #b0b0b0;
-            display: block;
-            margin-bottom: 5px;
-            font-size: 14px;
-        }
-
-        .example-prompt span {
-            font-size: 13px;
+        .interim-text {
             color: #808080;
-        }
-
-        @media (max-width: 768px) {
-            .container {
-                height: 100vh;
-                border-radius: 0;
-            }
-
-            .header {
-                border-radius: 0;
-            }
-
-            .message-content {
-                max-width: 85%;
-            }
-
-            .input-container {
-                gap: 10px;
-            }
-
-            .disclaimer {
-                font-size: 12px;
-                padding: 10px 20px;
-            }
+            font-style: italic;
         }
     </style>
 </head>
@@ -410,7 +316,7 @@
     <div class="container">
         <div class="header">
             <h1>🏥 Flow Dictation</h1>
-            <p>AI-Powered Medical Report Generator for Residents</p>
+            <p>AI-Powered Medical Report Generator with Real-time Transcription</p>
         </div>
 
         <div class="specialty-selector">
@@ -418,15 +324,13 @@
             <select id="specialty">
                 <option value="radiology">Radiology</option>
                 <option value="general" disabled>General Medicine (Coming Soon)</option>
-                <option value="surgery" disabled>Surgery (Coming Soon)</option>
-                <option value="pathology" disabled>Pathology (Coming Soon)</option>
             </select>
         </div>
 
         <div class="chat-container" id="chatContainer">
             <div class="welcome-message">
                 <h2>Welcome to Flow Dictation! 👋</h2>
-                <p>Describe your findings in natural language or dictate them, and I'll generate structured, guideline-aligned radiology reports ready to copy into your PACS system.</p>
+                <p>Describe your findings in natural language or dictate them using medical-grade AI transcription powered by Deepgram.</p>
                 
                 <div class="example-prompts">
                     <div class="example-prompt" onclick="useExample(this)">
@@ -449,22 +353,19 @@
             <div class="input-wrapper">
                 <textarea 
                     id="userInput" 
-                    placeholder="Type or dictate your findings... (e.g., 'Chest CT showing multiple pulmonary nodules')"
+                    placeholder="Type or dictate your findings..."
                     rows="1"
                 ></textarea>
-                <button class="voice-btn" id="voiceBtn" title="Voice input">🎤</button>
+                <button class="voice-btn" id="voiceBtn" title="Start dictation">🎤</button>
             </div>
             <button id="sendBtn">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M12 19V5M5 12l7-7 7 7"/>
                 </svg>
             </button>
         </div>
         <div class="disclaimer">
-            Not HIPAA compliant. Do not enter patient identifiers or PHI.
-        </div>
-        <div class="disclaimer disclaimer-secondary">
-            Not for clinical decision-making. Clinician review required.
+            Not HIPAA compliant. Do not enter patient identifiers or PHI. Clinician review required.
         </div>
     </div>
 
@@ -474,47 +375,19 @@
         const sendBtn = document.getElementById('sendBtn');
         const voiceBtn = document.getElementById('voiceBtn');
         let conversationHistory = [];
-        let recognition;
+        
+        // Deepgram WebSocket streaming
+        let deepgramSocket = null;
+        let mediaRecorder = null;
+        let audioStream = null;
+        let isRecording = false;
+        let interimTranscript = '';
+        let finalTranscript = '';
 
-        // Auto-resize textarea
         userInput.addEventListener('input', function() {
             this.style.height = 'auto';
             this.style.height = Math.min(this.scrollHeight, 150) + 'px';
         });
-
-        // Initialize speech recognition
-        if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            recognition = new SpeechRecognition();
-            recognition.continuous = false;
-            recognition.interimResults = false;
-
-            recognition.onstart = function() {
-                voiceBtn.classList.add('recording');
-                voiceBtn.textContent = '🔴';
-            };
-
-            recognition.onend = function() {
-                voiceBtn.classList.remove('recording');
-                voiceBtn.textContent = '🎤';
-            };
-
-            recognition.onresult = function(event) {
-                const transcript = event.results[0][0].transcript;
-                userInput.value += (userInput.value ? ' ' : '') + transcript;
-                userInput.dispatchEvent(new Event('input'));
-            };
-
-            voiceBtn.addEventListener('click', function() {
-                if (voiceBtn.classList.contains('recording')) {
-                    recognition.stop();
-                } else {
-                    recognition.start();
-                }
-            });
-        } else {
-            voiceBtn.style.display = 'none';
-        }
 
         function useExample(element) {
             const text = element.querySelector('span').textContent.replace(/['"]/g, '');
@@ -523,11 +396,111 @@
             userInput.focus();
         }
 
+        // Initialize Deepgram streaming
+        async function startDeepgramStreaming() {
+            try {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const host = window.location.host;
+                deepgramSocket = new WebSocket(`${protocol}//${host}`);
+
+                deepgramSocket.onopen = async () => {
+                    console.log('Deepgram WebSocket connected');
+                    
+                    audioStream = await navigator.mediaDevices.getUserMedia({ 
+                        audio: {
+                            channelCount: 1,
+                            sampleRate: 16000,
+                            echoCancellation: true,
+                            noiseSuppression: true
+                        } 
+                    });
+                    
+                    mediaRecorder = new MediaRecorder(audioStream, {
+                        mimeType: 'audio/webm'
+                    });
+
+                    mediaRecorder.addEventListener('dataavailable', (event) => {
+                        if (event.data.size > 0 && deepgramSocket.readyState === WebSocket.OPEN) {
+                            deepgramSocket.send(event.data);
+                        }
+                    });
+
+                    mediaRecorder.start(250); // Send audio chunks every 250ms
+                    isRecording = true;
+                    voiceBtn.classList.add('recording');
+                    voiceBtn.textContent = '🔴';
+                };
+
+                deepgramSocket.onmessage = (message) => {
+                    const data = JSON.parse(message.data);
+                    
+                    if (data.type === 'transcript') {
+                        if (data.is_final) {
+                            finalTranscript += data.text + ' ';
+                            userInput.value = finalTranscript;
+                            interimTranscript = '';
+                        } else {
+                            interimTranscript = data.text;
+                            userInput.value = finalTranscript + interimTranscript;
+                        }
+                        userInput.dispatchEvent(new Event('input'));
+                    } else if (data.type === 'error') {
+                        console.error('Deepgram error:', data.message);
+                        stopDeepgramStreaming();
+                    }
+                };
+
+                deepgramSocket.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    stopDeepgramStreaming();
+                };
+
+                deepgramSocket.onclose = () => {
+                    console.log('Deepgram WebSocket closed');
+                    stopDeepgramStreaming();
+                };
+
+            } catch (error) {
+                console.error('Error starting Deepgram:', error);
+                alert('Could not access microphone. Please check permissions.');
+                stopDeepgramStreaming();
+            }
+        }
+
+        function stopDeepgramStreaming() {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+            
+            if (audioStream) {
+                audioStream.getTracks().forEach(track => track.stop());
+            }
+            
+            if (deepgramSocket && deepgramSocket.readyState === WebSocket.OPEN) {
+                deepgramSocket.close();
+            }
+            
+            isRecording = false;
+            voiceBtn.classList.remove('recording');
+            voiceBtn.textContent = '🎤';
+            deepgramSocket = null;
+            mediaRecorder = null;
+            audioStream = null;
+        }
+
+        voiceBtn.addEventListener('click', () => {
+            if (isRecording) {
+                stopDeepgramStreaming();
+            } else {
+                finalTranscript = userInput.value;
+                interimTranscript = '';
+                startDeepgramStreaming();
+            }
+        });
+
         function addMessage(text, isUser) {
             const welcomeMsg = chatContainer.querySelector('.welcome-message');
-            if (welcomeMsg) {
-                welcomeMsg.remove();
-            }
+            if (welcomeMsg) welcomeMsg.remove();
 
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${isUser ? 'user' : 'assistant'}`;
@@ -550,36 +523,25 @@
             const specialty = document.getElementById('specialty').value;
             
             try {
-                // Call the backend API
                 const response = await fetch('/api/generate-report', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        findings: findings,
-                        specialty: specialty
-                    })
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ findings, specialty })
                 });
 
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 const data = await response.json();
                 return formatReportHTML(data.report);
                 
             } catch (error) {
                 console.error('Error generating report:', error);
                 return `<div class="report-section">
-                    <p style="color: #ff6b6b;">⚠️ Error generating report. Please check that the backend server is running.</p>
-                    <p style="font-size: 12px; color: #909090; margin-top: 10px;">Error: ${error.message}</p>
+                    <p style="color: #ff6b6b;">⚠️ Error generating report.</p>
                 </div>`;
             }
         }
 
         function formatReportHTML(reportText) {
-            // Parse the AI response and format with HTML
             const sections = reportText.split('\n\n');
             let html = '';
             
@@ -588,16 +550,13 @@
                 const heading = lines[0];
                 const content = lines.slice(1).join('\n');
                 
-                // Check if this looks like a section heading
                 if (heading.match(/^[A-Z\s]+:?$/)) {
                     html += `<div class="report-section">
                         <h3>${heading.replace(':', '')}</h3>
                         <p>${content.trim()}</p>
                     </div>`;
                 } else {
-                    html += `<div class="report-section">
-                        <p>${section}</p>
-                    </div>`;
+                    html += `<div class="report-section"><p>${section}</p></div>`;
                 }
             });
             
@@ -605,27 +564,27 @@
             return html;
         }
 
-
-
         function copyReport(button) {
             const reportContent = button.parentElement;
             const sections = reportContent.querySelectorAll('.report-section');
             let textToCopy = '';
             
             sections.forEach(section => {
-                const heading = section.querySelector('h3').textContent;
+                const heading = section.querySelector('h3')?.textContent || '';
                 const paragraphs = Array.from(section.querySelectorAll('p'))
-                    .map(p => p.textContent)
-                    .join('\n');
-                textToCopy += `${heading}:\n${paragraphs}\n\n`;
+                    .map(p => p.textContent).join('\n');
+                if (heading) {
+                    textToCopy += `${heading}:\n${paragraphs}\n\n`;
+                } else {
+                    textToCopy += `${paragraphs}\n\n`;
+                }
             });
 
             navigator.clipboard.writeText(textToCopy).then(() => {
-                const originalText = button.textContent;
                 button.textContent = '✅ Copied!';
                 button.classList.add('copied');
                 setTimeout(() => {
-                    button.textContent = originalText;
+                    button.textContent = '📋 Copy Report';
                     button.classList.remove('copied');
                 }, 2000);
             });
@@ -639,20 +598,17 @@
             conversationHistory.push({role: 'user', content: message});
             
             userInput.value = '';
+            finalTranscript = '';
+            interimTranscript = '';
             userInput.style.height = 'auto';
             sendBtn.disabled = true;
 
-            // Show loading message
-            const loadingMsg = 'Generating report...';
-            addMessage(loadingMsg, false);
+            addMessage('Generating report...', false);
 
             generateReport(message).then(report => {
-                // Remove loading message
                 const messages = chatContainer.querySelectorAll('.message');
-                const lastMessage = messages[messages.length - 1];
-                lastMessage.remove();
+                messages[messages.length - 1].remove();
                 
-                // Add actual report
                 addMessage(report, false);
                 conversationHistory.push({role: 'assistant', content: report});
                 sendBtn.disabled = false;

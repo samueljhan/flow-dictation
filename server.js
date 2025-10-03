@@ -194,4 +194,4 @@ app.get('/api/health', (req, res) => {
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🏥 Flow Dictation running on port ${PORT}`);
   console.log(`🎤 Deepgram medical transcription enabled`);
-});
+});// Force rebuild

@@ -21,31 +21,6 @@ console.log('=== Environment Check ===');
 console.log('OpenAI API Key:', !!process.env.OPENAI_API_KEY ? '✓ Set' : '✗ Missing');
 console.log('========================');
 
-// Common radiology term corrections
-const RADIOLOGY_VOCABULARY = {
-  'new motor thorax': 'pneumothorax',
-  'plural effusion': 'pleural effusion',
-  'consolidation': 'consolidation',
-  'atelectasis': 'atelectasis',
-  'infiltrate': 'infiltrate',
-  'lymphadenopathy': 'lymphadenopathy',
-  'adenopathy': 'adenopathy',
-  'calcification': 'calcification',
-  'nodule': 'nodule',
-  'mass': 'mass',
-  'lesion': 'lesion',
-  'opacity': 'opacity',
-  'lucency': 'lucency',
-  'air bronchogram': 'air bronchogram',
-  'bronchiectasis': 'bronchiectasis',
-  'emphysema': 'emphysema',
-  'fibrosis': 'fibrosis',
-  'edema': 'edema',
-  'hemorrhage': 'hemorrhage',
-  'infarct': 'infarct',
-  'ischemia': 'ischemia',
-};
-
 const RADIOLOGY_SYSTEM_PROMPT = `You are an expert radiologist assistant helping residents write structured radiology reports.
 
 CRITICAL RULES:
@@ -97,29 +72,34 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
     }
 
     console.log('Transcribing audio file...');
-    const audioFile = fs.createReadStream(req.file.path);
+    
+    // Add .webm extension so OpenAI recognizes the format
+    const webmPath = req.file.path + '.webm';
+    fs.renameSync(req.file.path, webmPath);
+    
+    const audioFile = fs.createReadStream(webmPath);
     
     // Step 1: Transcribe with Whisper using medical prompt
     const transcription = await openai.audio.transcriptions.create({
       file: audioFile,
       model: 'whisper-1',
       language: 'en',
-      prompt: 'This is a radiology report dictation including medical terms like pneumothorax, pleural effusion, consolidation, atelectasis, infiltrate, lymphadenopathy, bronchiectasis, mass, nodule, lesion, opacity, calcification, adenopathy.', // Vocabulary hints
+      prompt: 'This is a radiology report dictation including medical terms like pneumothorax, pleural effusion, consolidation, atelectasis, infiltrate, lymphadenopathy, bronchiectasis, mass, nodule, lesion, opacity, calcification, adenopathy.',
     });
 
-    fs.unlinkSync(req.file.path);
+    fs.unlinkSync(webmPath);
     
     let correctedText = transcription.text;
     
     // Step 2: Post-process with GPT-4o to fix medical terms
     console.log('Post-processing with medical correction...');
     const correction = await openai.chat.completions.create({
-      model: 'gpt-4o-mini', // Faster and cheaper for corrections
+      model: 'gpt-4o-mini',
       messages: [
         { role: 'system', content: MEDICAL_CORRECTION_PROMPT },
         { role: 'user', content: transcription.text }
       ],
-      temperature: 0.1, // Low temperature for consistent corrections
+      temperature: 0.1,
       max_tokens: 500
     });
 
@@ -130,13 +110,15 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
     
     res.json({ 
       text: correctedText,
-      original: transcription.text // Include original for debugging
+      original: transcription.text
     });
     
   } catch (error) {
     console.error('Transcription error:', error);
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
+    if (req.file) {
+      const webmPath = req.file.path + '.webm';
+      if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      if (fs.existsSync(webmPath)) fs.unlinkSync(webmPath);
     }
     res.status(500).json({ error: 'Transcription failed', details: error.message });
   }

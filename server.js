@@ -52,19 +52,20 @@ CRITICAL RULES:
 
 IMPORTANT: Do not include patient names, MRNs, dates of birth, or any identifiers.`;
 
-// AssemblyAI Streaming via WebSocket
 wss.on('connection', async (clientWs) => {
   console.log('Client connected for AssemblyAI transcription');
   
   let transcriber = null;
   let isReady = false;
+  let audioBuffer = [];
+  const SAMPLE_RATE = 16000;
+  const BUFFER_SIZE = SAMPLE_RATE / 20; // 50ms of audio at 16kHz = 800 samples
 
   try {
     transcriber = assemblyai.streaming.transcriber({
-      sampleRate: 16_000,
+      sampleRate: SAMPLE_RATE,
     });
 
-    // Set up all event listeners BEFORE connect()
     transcriber.on('open', ({ sessionId }) => {
       console.log('✅ AssemblyAI session opened:', sessionId);
       isReady = true;
@@ -94,17 +95,27 @@ wss.on('connection', async (clientWs) => {
       isReady = false;
     });
 
-    // NOW connect
     await transcriber.connect();
-    
-    // Give it a tiny bit of time to fully open
     await new Promise(resolve => setTimeout(resolve, 100));
 
-    // Forward audio only when ready
     clientWs.on('message', (message) => {
-      if (Buffer.isBuffer(message) && isReady && transcriber) {
+      if (!Buffer.isBuffer(message) || !isReady || !transcriber) return;
+
+      // Convert buffer to Int16Array
+      const samples = new Int16Array(message.buffer, message.byteOffset, message.byteLength / 2);
+      
+      // Add to buffer
+      audioBuffer.push(...samples);
+
+      // Send when we have enough samples (50ms)
+      while (audioBuffer.length >= BUFFER_SIZE) {
+        const chunk = audioBuffer.slice(0, BUFFER_SIZE);
+        audioBuffer = audioBuffer.slice(BUFFER_SIZE);
+        
+        const buffer = Buffer.from(new Int16Array(chunk).buffer);
+        
         try {
-          transcriber.sendAudio(message);
+          transcriber.sendAudio(buffer);
         } catch (err) {
           console.error('Error sending audio:', err.message);
         }
@@ -114,6 +125,7 @@ wss.on('connection', async (clientWs) => {
     clientWs.on('close', async () => {
       console.log('Client disconnected');
       isReady = false;
+      audioBuffer = [];
       if (transcriber) {
         await transcriber.close();
       }

@@ -57,14 +57,20 @@ wss.on('connection', async (clientWs) => {
   console.log('Client connected for AssemblyAI transcription');
   
   let transcriber = null;
+  let isTranscriberReady = false;
 
   try {
-    // Use client.streaming.transcriber for Universal-Streaming
     transcriber = assemblyai.streaming.transcriber({
       sampleRate: 16_000,
     });
 
-    // Handle 'turn' events (Universal-Streaming)
+    // Wait for socket to open
+    transcriber.on('open', ({ sessionId }) => {
+      console.log('✅ AssemblyAI session opened:', sessionId);
+      isTranscriberReady = true;
+    });
+
+    // Handle 'turn' events
     transcriber.on('turn', (turn) => {
       console.log('Transcript:', turn.transcript);
       
@@ -83,23 +89,25 @@ wss.on('connection', async (clientWs) => {
       }));
     });
 
-    transcriber.on('close', () => {
-      console.log('AssemblyAI transcriber closed');
+    transcriber.on('close', (code, reason) => {
+      console.log('AssemblyAI transcriber closed:', code, reason);
+      isTranscriberReady = false;
     });
 
     // Connect
     await transcriber.connect();
-    console.log('✅ AssemblyAI streaming connected');
+    console.log('Connecting to AssemblyAI...');
 
-    // Forward audio
+    // Forward audio only when ready
     clientWs.on('message', (message) => {
-      if (Buffer.isBuffer(message) && transcriber) {
+      if (Buffer.isBuffer(message) && transcriber && isTranscriberReady) {
         transcriber.sendAudio(message);
       }
     });
 
     clientWs.on('close', async () => {
       console.log('Client disconnected');
+      isTranscriberReady = false;
       if (transcriber) {
         await transcriber.close();
       }

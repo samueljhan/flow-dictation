@@ -52,6 +52,34 @@
             font-size: 14px;
         }
 
+        .microphone-status {
+            padding: 10px 30px;
+            background: #242424;
+            border-bottom: 1px solid #3a3a3a;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            color: #909090;
+        }
+
+        .mic-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #666;
+        }
+
+        .mic-indicator.connected {
+            background: #28a745;
+            animation: pulse-green 2s infinite;
+        }
+
+        @keyframes pulse-green {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
         .specialty-selector {
             padding: 15px 30px;
             background: #242424;
@@ -266,6 +294,11 @@
             <p>Enterprise-Grade Medical Transcription with AssemblyAI</p>
         </div>
 
+        <div class="microphone-status">
+            <div class="mic-indicator" id="micIndicator"></div>
+            <span id="micStatus">Detecting microphone...</span>
+        </div>
+
         <div class="specialty-selector">
             <label for="specialty">Specialty:</label>
             <select id="specialty">
@@ -276,7 +309,7 @@
         <div class="chat-container" id="chatContainer">
             <div class="welcome-message">
                 <h2>Welcome to Flow Dictation! 👋</h2>
-                <p>Real-time medical transcription powered by AssemblyAI Medical.</p>
+                <p>Press the record button on your Philips dictaphone to start transcribing.</p>
                 
                 <div class="example-prompts">
                     <div class="example-prompt" onclick="useExample(this)">
@@ -316,6 +349,8 @@
         const userInput = document.getElementById('userInput');
         const sendBtn = document.getElementById('sendBtn');
         const voiceBtn = document.getElementById('voiceBtn');
+        const micIndicator = document.getElementById('micIndicator');
+        const micStatus = document.getElementById('micStatus');
         
         let ws = null;
         let audioContext = null;
@@ -323,6 +358,72 @@
         let audioWorkletNode = null;
         let isRecording = false;
         let finalTranscript = '';
+        let philipsMic = null;
+
+        // Detect Philips microphone
+        async function detectPhilipsMicrophone() {
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const audioDevices = devices.filter(device => device.kind === 'audioinput');
+                
+                // Look for Philips microphone (adjust the name match as needed)
+                philipsMic = audioDevices.find(device => 
+                    device.label.toLowerCase().includes('philips') ||
+                    device.label.toLowerCase().includes('speechmike') ||
+                    device.label.toLowerCase().includes('precision')
+                );
+
+                if (philipsMic) {
+                    micIndicator.classList.add('connected');
+                    micStatus.textContent = `✓ ${philipsMic.label}`;
+                    console.log('Philips microphone detected:', philipsMic.label);
+                    
+                    // Listen for keyboard events from dictaphone button
+                    setupDictaphoneListener();
+                } else {
+                    // Use default microphone
+                    const defaultMic = audioDevices.find(d => d.deviceId === 'default') || audioDevices[0];
+                    if (defaultMic) {
+                        philipsMic = defaultMic;
+                        micIndicator.classList.add('connected');
+                        micStatus.textContent = `Using: ${defaultMic.label}`;
+                    } else {
+                        micStatus.textContent = '⚠️ No microphone detected';
+                    }
+                }
+            } catch (error) {
+                console.error('Error detecting microphone:', error);
+                micStatus.textContent = '⚠️ Microphone access denied';
+            }
+        }
+
+        // Setup listener for dictaphone button (usually sends keyboard event)
+        function setupDictaphoneListener() {
+            // Philips dictaphones typically send F4 or other function keys
+            document.addEventListener('keydown', (e) => {
+                // F4, F5, or custom dictaphone key
+                if (e.key === 'F4' || e.key === 'F5' || e.code === 'MediaRecord') {
+                    e.preventDefault();
+                    if (!isRecording) {
+                        startRecording();
+                    }
+                }
+            });
+
+            document.addEventListener('keyup', (e) => {
+                if (e.key === 'F4' || e.key === 'F5' || e.code === 'MediaRecord') {
+                    e.preventDefault();
+                    if (isRecording) {
+                        stopRecording();
+                    }
+                }
+            });
+
+            console.log('Dictaphone button listener activated (F4/F5)');
+        }
+
+        // Detect microphone on page load
+        detectPhilipsMicrophone();
 
         userInput.addEventListener('input', function() {
             this.style.height = 'auto';
@@ -338,28 +439,29 @@
 
         async function startRecording() {
             try {
-                // Connect WebSocket
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 ws = new WebSocket(`${protocol}//${window.location.host}`);
                 
                 ws.onopen = async () => {
                     console.log('WebSocket connected');
                     
-                    // Get microphone
-                    mediaStream = await navigator.mediaDevices.getUserMedia({ 
+                    // Use the detected Philips microphone
+                    const constraints = {
                         audio: {
+                            deviceId: philipsMic ? { exact: philipsMic.deviceId } : undefined,
                             channelCount: 1,
                             sampleRate: 16000,
                             echoCancellation: true,
-                            noiseSuppression: true
-                        } 
-                    });
+                            noiseSuppression: true,
+                            autoGainControl: true
+                        }
+                    };
+
+                    mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
                     
-                    // Create audio context
                     audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
                     const source = audioContext.createMediaStreamSource(mediaStream);
                     
-                    // Create processor for PCM data
                     await audioContext.audioWorklet.addModule('data:text/javascript,' + encodeURIComponent(`
                         class AudioProcessor extends AudioWorkletProcessor {
                             process(inputs) {
@@ -391,6 +493,7 @@
                     isRecording = true;
                     voiceBtn.classList.add('recording');
                     voiceBtn.textContent = '🔴';
+                    micStatus.textContent = `🔴 Recording with ${philipsMic.label}`;
                 };
                 
                 ws.onmessage = (event) => {
@@ -426,6 +529,7 @@
             isRecording = false;
             voiceBtn.classList.remove('recording');
             voiceBtn.textContent = '🎤';
+            micStatus.textContent = `✓ ${philipsMic ? philipsMic.label : 'Microphone ready'}`;
             
             if (audioWorkletNode) {
                 audioWorkletNode.disconnect();

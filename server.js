@@ -52,32 +52,30 @@ CRITICAL RULES:
 
 IMPORTANT: Do not include patient names, MRNs, dates of birth, or any identifiers.`;
 
-// AssemblyAI Universal-Streaming via WebSocket
+// AssemblyAI Streaming via WebSocket
 wss.on('connection', async (clientWs) => {
   console.log('Client connected for AssemblyAI transcription');
   
-  let realtimeTranscriber = null;
+  let transcriber = null;
 
   try {
-    // Create transcriber with Universal-Streaming
-    realtimeTranscriber = assemblyai.realtime.transcriber({
+    // Use client.streaming.transcriber for Universal-Streaming
+    transcriber = assemblyai.streaming.transcriber({
       sampleRate: 16_000,
     });
 
-    // Handle transcript events
-    realtimeTranscriber.on('transcript', (transcript) => {
-      if (!transcript.text) return;
-      
-      console.log('Transcript:', transcript.text);
+    // Handle 'turn' events (Universal-Streaming)
+    transcriber.on('turn', (turn) => {
+      console.log('Transcript:', turn.transcript);
       
       clientWs.send(JSON.stringify({
         type: 'transcript',
-        text: transcript.text,
-        is_final: transcript.message_type === 'FinalTranscript'
+        text: turn.transcript,
+        is_final: turn.end_of_turn
       }));
     });
 
-    realtimeTranscriber.on('error', (error) => {
+    transcriber.on('error', (error) => {
       console.error('AssemblyAI error:', error);
       clientWs.send(JSON.stringify({
         type: 'error',
@@ -85,25 +83,25 @@ wss.on('connection', async (clientWs) => {
       }));
     });
 
-    realtimeTranscriber.on('close', () => {
+    transcriber.on('close', () => {
       console.log('AssemblyAI transcriber closed');
     });
 
-    // Connect to AssemblyAI
-    await realtimeTranscriber.connect();
-    console.log('✅ AssemblyAI transcriber connected');
+    // Connect
+    await transcriber.connect();
+    console.log('✅ AssemblyAI streaming connected');
 
-    // Forward audio from client
+    // Forward audio
     clientWs.on('message', (message) => {
-      if (Buffer.isBuffer(message) && realtimeTranscriber) {
-        realtimeTranscriber.sendAudio(message);
+      if (Buffer.isBuffer(message) && transcriber) {
+        transcriber.sendAudio(message);
       }
     });
 
     clientWs.on('close', async () => {
       console.log('Client disconnected');
-      if (realtimeTranscriber) {
-        await realtimeTranscriber.close();
+      if (transcriber) {
+        await transcriber.close();
       }
     });
 

@@ -52,12 +52,14 @@ CRITICAL RULES:
 
 IMPORTANT: Do not include patient names, MRNs, dates of birth, or any identifiers.`;
 
+// AssemblyAI Universal-Streaming Real-Time Transcription via WebSocket
 wss.on('connection', async (clientWs) => {
   console.log('Client connected for AssemblyAI transcription');
   
   let realtimeTranscriber = null;
 
   try {
+    // Create real-time transcriber with Universal-Streaming configuration
     realtimeTranscriber = assemblyai.realtime.transcriber({
       sample_rate: 16000,
       encoding: 'pcm_s16le',
@@ -67,6 +69,7 @@ wss.on('connection', async (clientWs) => {
       max_end_of_turn_silence: 2000,
     });
 
+    // Handle transcription results from Universal-Streaming
     realtimeTranscriber.on('transcript', (message) => {
       if (!message.transcript) return;
       
@@ -93,7 +96,7 @@ wss.on('connection', async (clientWs) => {
     });
 
     await realtimeTranscriber.connect();
-    console.log('✅ AssemblyAI connected');
+    console.log('✅ AssemblyAI Universal-Streaming connected');
 
     clientWs.on('message', (message) => {
       if (Buffer.isBuffer(message) && realtimeTranscriber) {
@@ -159,11 +162,13 @@ app.post('/api/generate-report', async (req, res) => {
       return res.status(400).json({ error: 'Findings are required' });
     }
 
+    console.log(`Generating ${specialty} report...`);
+    
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
         { role: "system", content: RADIOLOGY_SYSTEM_PROMPT },
-        { role: "user", content: `Generate a radiology report for these findings: \${findings}` }
+        { role: "user", content: `Generate a radiology report for these findings: ${findings}` }
       ],
       temperature: 0.3,
       max_tokens: 1000
@@ -185,6 +190,6 @@ app.get('/api/health', (req, res) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🏥 Flow Dictation running on port \${PORT}`);
-  console.log('🎤 AssemblyAI Universal-Streaming enabled');
+  console.log(`🏥 Flow Dictation running on port ${PORT}`);
+  console.log(`🎤 AssemblyAI Universal-Streaming enabled`);
 });

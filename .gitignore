@@ -1,3 +1,7 @@
 node_modules/
 .env
 .DS_Store
+*.backup
+*.bak
+.env.*
+sk-proj-*

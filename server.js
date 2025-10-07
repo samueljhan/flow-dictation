@@ -32,7 +32,7 @@ console.log('OpenAI:', !!process.env.OPENAI_API_KEY ? '✓' : '✗');
 console.log('AssemblyAI:', !!process.env.ASSEMBLYAI_API_KEY ? '✓' : '✗');
 console.log('========================');
 
-const RADIOLOGY_SYSTEM_PROMPT = `You are an expert radiologist assistant helping residents write structured radiology reports.
+const RADIOLOGY_SYSTEM_PROMPT = \`You are an expert radiologist assistant helping residents write structured radiology reports.
 
 CRITICAL RULES:
 1. Generate reports in this EXACT structure with these headers:
@@ -50,37 +50,33 @@ CRITICAL RULES:
 7. Use present tense for findings
 8. Format for easy copying into PACS
 
-IMPORTANT: Do not include patient names, MRNs, dates of birth, or any identifiers.`;
+IMPORTANT: Do not include patient names, MRNs, dates of birth, or any identifiers.\`;
 
-// AssemblyAI Real-Time Transcription via WebSocket
 wss.on('connection', async (clientWs) => {
   console.log('Client connected for AssemblyAI transcription');
   
   let realtimeTranscriber = null;
 
   try {
-    // Create real-time transcriber with medical vocabulary
     realtimeTranscriber = assemblyai.realtime.transcriber({
-      sampleRate: 16000,
-      wordBoost: [
-        'pneumothorax', 'pleural', 'effusion', 'consolidation', 
-        'atelectasis', 'infiltrate', 'lymphadenopathy', 'adenopathy',
-        'bronchiectasis', 'emphysema', 'fibrosis', 'edema',
-        'nodule', 'mass', 'lesion', 'opacity', 'calcification'
-      ],
-      encoding: 'pcm_s16le'
+      sample_rate: 16000,
+      encoding: 'pcm_s16le',
+      format_turns: true,
+      end_of_turn_confidence_threshold: 0.7,
+      min_end_of_turn_silence_when_confident: 400,
+      max_end_of_turn_silence: 2000,
     });
 
-    // Handle transcription results
-    realtimeTranscriber.on('transcript', (transcript) => {
-      if (!transcript.text) return;
+    realtimeTranscriber.on('transcript', (message) => {
+      if (!message.transcript) return;
       
-      console.log('Transcript:', transcript.text);
+      console.log('Transcript:', message.transcript);
       
       clientWs.send(JSON.stringify({
         type: 'transcript',
-        text: transcript.text,
-        is_final: transcript.message_type === 'FinalTranscript'
+        text: message.transcript,
+        is_final: message.end_of_turn,
+        is_formatted: message.turn_is_formatted
       }));
     });
 
@@ -96,11 +92,9 @@ wss.on('connection', async (clientWs) => {
       console.log('AssemblyAI transcriber closed');
     });
 
-    // Connect to AssemblyAI
     await realtimeTranscriber.connect();
-    console.log('✅ AssemblyAI transcriber connected');
+    console.log('✅ AssemblyAI connected');
 
-    // Forward audio from client to AssemblyAI
     clientWs.on('message', (message) => {
       if (Buffer.isBuffer(message) && realtimeTranscriber) {
         realtimeTranscriber.sendAudio(message);
@@ -123,7 +117,6 @@ wss.on('connection', async (clientWs) => {
   }
 });
 
-// Fallback: File-based transcription for testing
 app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
   try {
     if (!req.file) {
@@ -135,18 +128,12 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
     const webmPath = req.file.path + '.webm';
     fs.renameSync(req.file.path, webmPath);
     
-    // Upload to AssemblyAI
     const transcript = await assemblyai.transcripts.transcribe({
       audio: webmPath,
-      word_boost: [
-        'pneumothorax', 'pleural', 'effusion', 'consolidation',
-        'atelectasis', 'infiltrate', 'lymphadenopathy', 'bronchiectasis'
-      ]
+      speech_model: 'best'
     });
 
     fs.unlinkSync(webmPath);
-    
-    console.log('Transcribed:', transcript.text);
     
     res.json({ 
       text: transcript.text,
@@ -172,13 +159,11 @@ app.post('/api/generate-report', async (req, res) => {
       return res.status(400).json({ error: 'Findings are required' });
     }
 
-    console.log(`Generating ${specialty} report...`);
-    
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
         { role: "system", content: RADIOLOGY_SYSTEM_PROMPT },
-        { role: "user", content: `Generate a radiology report for these findings: ${findings}` }
+        { role: "user", content: \`Generate a radiology report for these findings: \${findings}\` }
       ],
       temperature: 0.3,
       max_tokens: 1000
@@ -195,11 +180,11 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     service: 'Flow Dictation API',
-    features: ['assemblyai-realtime', 'report-generation']
+    features: ['assemblyai-universal-streaming', 'report-generation']
   });
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🏥 Flow Dictation running on port ${PORT}`);
-  console.log(`🎤 AssemblyAI Medical Transcription enabled`);
+  console.log(\`🏥 Flow Dictation running on port \${PORT}\`);
+  console.log('🎤 AssemblyAI Universal-Streaming enabled');
 });

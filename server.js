@@ -32,7 +32,7 @@ console.log('OpenAI:', !!process.env.OPENAI_API_KEY ? '✓' : '✗');
 console.log('AssemblyAI:', !!process.env.ASSEMBLYAI_API_KEY ? '✓' : '✗');
 console.log('========================');
 
-const RADIOLOGY_SYSTEM_PROMPT = \`You are an expert radiologist assistant helping residents write structured radiology reports.
+const RADIOLOGY_SYSTEM_PROMPT = `You are an expert radiologist assistant helping residents write structured radiology reports.
 
 CRITICAL RULES:
 1. Generate reports in this EXACT structure with these headers:
@@ -50,7 +50,7 @@ CRITICAL RULES:
 7. Use present tense for findings
 8. Format for easy copying into PACS
 
-IMPORTANT: Do not include patient names, MRNs, dates of birth, or any identifiers.\`;
+IMPORTANT: Do not include patient names, MRNs, dates of birth, or any identifiers.`;
 
 wss.on('connection', async (clientWs) => {
   console.log('Client connected for AssemblyAI transcription');
@@ -163,7 +163,7 @@ app.post('/api/generate-report', async (req, res) => {
       model: "gpt-4o",
       messages: [
         { role: "system", content: RADIOLOGY_SYSTEM_PROMPT },
-        { role: "user", content: \`Generate a radiology report for these findings: \${findings}\` }
+        { role: "user", content: `Generate a radiology report for these findings: \${findings}` }
       ],
       temperature: 0.3,
       max_tokens: 1000
@@ -185,6 +185,6 @@ app.get('/api/health', (req, res) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(\`🏥 Flow Dictation running on port \${PORT}\`);
+  console.log(`🏥 Flow Dictation running on port \${PORT}`);
   console.log('🎤 AssemblyAI Universal-Streaming enabled');
 });

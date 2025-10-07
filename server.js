@@ -3,9 +3,15 @@ const OpenAI = require('openai');
 const cors = require('cors');
 const multer = require('multer');
 const fs = require('fs');
+const { AssemblyAI } = require('assemblyai');
+const http = require('http');
+const WebSocket = require('ws');
 require('dotenv').config();
 
 const app = express();
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+
 const upload = multer({ dest: 'uploads/' });
 const PORT = process.env.PORT || 8080;
 
@@ -17,8 +23,13 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
+const assemblyai = new AssemblyAI({
+  apiKey: process.env.ASSEMBLYAI_API_KEY
+});
+
 console.log('=== Environment Check ===');
-console.log('OpenAI API Key:', !!process.env.OPENAI_API_KEY ? '✓ Set' : '✗ Missing');
+console.log('OpenAI:', !!process.env.OPENAI_API_KEY ? '✓' : '✗');
+console.log('AssemblyAI:', !!process.env.ASSEMBLYAI_API_KEY ? '✓' : '✗');
 console.log('========================');
 
 const RADIOLOGY_SYSTEM_PROMPT = `You are an expert radiologist assistant helping residents write structured radiology reports.
@@ -41,76 +52,105 @@ CRITICAL RULES:
 
 IMPORTANT: Do not include patient names, MRNs, dates of birth, or any identifiers.`;
 
-const MEDICAL_CORRECTION_PROMPT = `You are a medical transcription specialist. Fix any medical terminology errors in the following dictation while preserving the speaker's intended meaning.
+// AssemblyAI Real-Time Transcription via WebSocket
+wss.on('connection', async (clientWs) => {
+  console.log('Client connected for AssemblyAI transcription');
+  
+  let realtimeTranscriber = null;
 
-Common errors to fix:
-- "new motor thorax" → "pneumothorax"
-- "plural effusion" → "pleural effusion"
-- "infiltrate" misheard as "in filtrate"
-- "atelectasis" misheard as "at electric basis"
-- "lymphadenopathy" misheard as "limb adenopathy"
-- "consolidation" misheard as "console a dashin"
-- "bronchiectasis" misheard as "bronco ectasis"
-- Anatomical terms (ileum vs ilium, mucosa vs mucous)
-- Drug names and dosages
-- Measurement units (cm, mm, Hounsfield units)
+  try {
+    // Create real-time transcriber with medical vocabulary
+    realtimeTranscriber = assemblyai.realtime.transcriber({
+      sampleRate: 16000,
+      wordBoost: [
+        'pneumothorax', 'pleural', 'effusion', 'consolidation', 
+        'atelectasis', 'infiltrate', 'lymphadenopathy', 'adenopathy',
+        'bronchiectasis', 'emphysema', 'fibrosis', 'edema',
+        'nodule', 'mass', 'lesion', 'opacity', 'calcification'
+      ],
+      encoding: 'pcm_s16le'
+    });
 
-Rules:
-1. ONLY fix obvious medical terminology errors
-2. Do NOT change the meaning or add information
-3. Do NOT reformat or restructure
-4. Keep all measurements, laterality (right/left), and anatomical descriptions exact
-5. Return ONLY the corrected text, nothing else
+    // Handle transcription results
+    realtimeTranscriber.on('transcript', (transcript) => {
+      if (!transcript.text) return;
+      
+      console.log('Transcript:', transcript.text);
+      
+      clientWs.send(JSON.stringify({
+        type: 'transcript',
+        text: transcript.text,
+        is_final: transcript.message_type === 'FinalTranscript'
+      }));
+    });
 
-Dictation to correct:`;
+    realtimeTranscriber.on('error', (error) => {
+      console.error('AssemblyAI error:', error);
+      clientWs.send(JSON.stringify({
+        type: 'error',
+        message: error.message
+      }));
+    });
 
-// Enhanced Whisper transcription with medical context
+    realtimeTranscriber.on('close', () => {
+      console.log('AssemblyAI transcriber closed');
+    });
+
+    // Connect to AssemblyAI
+    await realtimeTranscriber.connect();
+    console.log('✅ AssemblyAI transcriber connected');
+
+    // Forward audio from client to AssemblyAI
+    clientWs.on('message', (message) => {
+      if (Buffer.isBuffer(message) && realtimeTranscriber) {
+        realtimeTranscriber.sendAudio(message);
+      }
+    });
+
+    clientWs.on('close', async () => {
+      console.log('Client disconnected');
+      if (realtimeTranscriber) {
+        await realtimeTranscriber.close();
+      }
+    });
+
+  } catch (error) {
+    console.error('Error setting up AssemblyAI:', error);
+    clientWs.send(JSON.stringify({
+      type: 'error',
+      message: 'Failed to initialize transcription: ' + error.message
+    }));
+  }
+});
+
+// Fallback: File-based transcription for testing
 app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'Audio file is required' });
     }
 
-    console.log('Transcribing audio file...');
+    console.log('Transcribing with AssemblyAI...');
     
-    // Add .webm extension so OpenAI recognizes the format
     const webmPath = req.file.path + '.webm';
     fs.renameSync(req.file.path, webmPath);
     
-    const audioFile = fs.createReadStream(webmPath);
-    
-    // Step 1: Transcribe with Whisper using medical prompt
-    const transcription = await openai.audio.transcriptions.create({
-      file: audioFile,
-      model: 'whisper-1',
-      language: 'en',
-      prompt: 'This is a radiology report dictation including medical terms like pneumothorax, pleural effusion, consolidation, atelectasis, infiltrate, lymphadenopathy, bronchiectasis, mass, nodule, lesion, opacity, calcification, adenopathy.',
+    // Upload to AssemblyAI
+    const transcript = await assemblyai.transcripts.transcribe({
+      audio: webmPath,
+      word_boost: [
+        'pneumothorax', 'pleural', 'effusion', 'consolidation',
+        'atelectasis', 'infiltrate', 'lymphadenopathy', 'bronchiectasis'
+      ]
     });
 
     fs.unlinkSync(webmPath);
     
-    let correctedText = transcription.text;
-    
-    // Step 2: Post-process with GPT-4o to fix medical terms
-    console.log('Post-processing with medical correction...');
-    const correction = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: MEDICAL_CORRECTION_PROMPT },
-        { role: 'user', content: transcription.text }
-      ],
-      temperature: 0.1,
-      max_tokens: 500
-    });
-
-    correctedText = correction.choices[0].message.content.trim();
-    
-    console.log('Original:', transcription.text);
-    console.log('Corrected:', correctedText);
+    console.log('Transcribed:', transcript.text);
     
     res.json({ 
-      text: correctedText,
-      original: transcription.text
+      text: transcript.text,
+      confidence: transcript.confidence
     });
     
   } catch (error) {
@@ -124,7 +164,6 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
   }
 });
 
-// Enhanced report generation
 app.post('/api/generate-report', async (req, res) => {
   try {
     const { findings, specialty } = req.body;
@@ -156,11 +195,11 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     service: 'Flow Dictation API',
-    features: ['whisper-transcription', 'medical-correction', 'report-generation']
+    features: ['assemblyai-realtime', 'report-generation']
   });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`🏥 Flow Dictation running on port ${PORT}`);
-  console.log(`🎤 Enhanced Whisper + Medical Post-Processing enabled`);
+  console.log(`🎤 AssemblyAI Medical Transcription enabled`);
 });

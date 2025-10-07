@@ -257,19 +257,13 @@
             border-color: #505050;
             transform: translateY(-2px);
         }
-
-        .transcribing-indicator {
-            color: #4CAF50;
-            font-size: 12px;
-            font-style: italic;
-        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>🏥 Flow Dictation</h1>
-            <p>Medical-Grade AI Transcription + Report Generation</p>
+            <p>Enterprise-Grade Medical Transcription with AssemblyAI</p>
         </div>
 
         <div class="specialty-selector">
@@ -282,7 +276,7 @@
         <div class="chat-container" id="chatContainer">
             <div class="welcome-message">
                 <h2>Welcome to Flow Dictation! 👋</h2>
-                <p>Dictate your findings with medical-grade accuracy powered by Whisper + GPT-4o.</p>
+                <p>Real-time medical transcription powered by AssemblyAI Medical.</p>
                 
                 <div class="example-prompts">
                     <div class="example-prompt" onclick="useExample(this)">
@@ -323,10 +317,11 @@
         const sendBtn = document.getElementById('sendBtn');
         const voiceBtn = document.getElementById('voiceBtn');
         
-        let mediaRecorder = null;
-        let audioStream = null;
+        let ws = null;
+        let audioContext = null;
+        let mediaStream = null;
+        let audioWorkletNode = null;
         let isRecording = false;
-        let audioChunks = [];
         let finalTranscript = '';
 
         userInput.addEventListener('input', function() {
@@ -343,77 +338,87 @@
 
         async function startRecording() {
             try {
-                audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                // Connect WebSocket
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                ws = new WebSocket(`${protocol}//${window.location.host}`);
                 
-                mediaRecorder = new MediaRecorder(audioStream);
-                audioChunks = [];
-
-                mediaRecorder.ondataavailable = (event) => {
-                    if (event.data.size > 0) {
-                        audioChunks.push(event.data);
-                    }
+                ws.onopen = async () => {
+                    console.log('WebSocket connected');
+                    
+                    // Get microphone
+                    mediaStream = await navigator.mediaDevices.getUserMedia({ 
+                        audio: {
+                            channelCount: 1,
+                            sampleRate: 16000,
+                            echoCancellation: true,
+                            noiseSuppression: true
+                        } 
+                    });
+                    
+                    // Create audio context
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                    const source = audioContext.createMediaStreamSource(mediaStream);
+                    
+                    // Create processor for PCM data
+                    await audioContext.audioWorklet.addModule('data:text/javascript,' + encodeURIComponent(`
+                        class AudioProcessor extends AudioWorkletProcessor {
+                            process(inputs) {
+                                const input = inputs[0];
+                                if (input.length > 0) {
+                                    const samples = input[0];
+                                    const pcm = new Int16Array(samples.length);
+                                    for (let i = 0; i < samples.length; i++) {
+                                        pcm[i] = Math.max(-32768, Math.min(32767, samples[i] * 32768));
+                                    }
+                                    this.port.postMessage(pcm.buffer);
+                                }
+                                return true;
+                            }
+                        }
+                        registerProcessor('audio-processor', AudioProcessor);
+                    `));
+                    
+                    audioWorkletNode = new AudioWorkletNode(audioContext, 'audio-processor');
+                    audioWorkletNode.port.onmessage = (event) => {
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            ws.send(event.data);
+                        }
+                    };
+                    
+                    source.connect(audioWorkletNode);
+                    audioWorkletNode.connect(audioContext.destination);
+                    
+                    isRecording = true;
+                    voiceBtn.classList.add('recording');
+                    voiceBtn.textContent = '🔴';
                 };
-
-                mediaRecorder.onstop = async () => {
-                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                    audioChunks = [];
+                
+                ws.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
                     
-                    // Show transcribing indicator
-                    const indicator = document.createElement('span');
-                    indicator.className = 'transcribing-indicator';
-                    indicator.textContent = ' (transcribing...)';
-                    userInput.parentElement.appendChild(indicator);
-                    
-                    // Send to server for transcription
-                    const formData = new FormData();
-                    formData.append('audio', audioBlob, 'recording.webm');
-                    
-                    try {
-                        const response = await fetch('/api/transcribe', {
-                            method: 'POST',
-                            body: formData
-                        });
-                        
-                        const data = await response.json();
-                        if (data.text) {
+                    if (data.type === 'transcript') {
+                        if (data.is_final) {
                             finalTranscript += (finalTranscript ? ' ' : '') + data.text;
                             userInput.value = finalTranscript;
-                            userInput.dispatchEvent(new Event('input'));
+                        } else {
+                            userInput.value = finalTranscript + (finalTranscript ? ' ' : '') + data.text;
                         }
-                        
-                        indicator.remove();
-                    } catch (error) {
-                        console.error('Transcription error:', error);
-                        indicator.textContent = ' (error)';
-                        setTimeout(() => indicator.remove(), 2000);
-                    }
-                    
-                    // If still recording, start next chunk
-                    if (isRecording) {
-                        audioChunks = [];
-                        mediaRecorder.start();
-                        setTimeout(() => {
-                            if (mediaRecorder && mediaRecorder.state === 'recording') {
-                                mediaRecorder.stop();
-                            }
-                        }, 2000); // 2-second chunks for faster feedback
+                        userInput.dispatchEvent(new Event('input'));
+                    } else if (data.type === 'error') {
+                        console.error('Transcription error:', data.message);
+                        alert('Transcription error: ' + data.message);
+                        stopRecording();
                     }
                 };
-
-                isRecording = true;
-                voiceBtn.classList.add('recording');
-                voiceBtn.textContent = '🔴';
                 
-                mediaRecorder.start();
-                setTimeout(() => {
-                    if (mediaRecorder && mediaRecorder.state === 'recording') {
-                        mediaRecorder.stop();
-                    }
-                }, 2000); // Faster 2-second chunks
-
+                ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    stopRecording();
+                };
+                
             } catch (error) {
-                console.error('Microphone error:', error);
-                alert('Could not access microphone: ' + error.message);
+                console.error('Error starting recording:', error);
+                alert('Could not start recording: ' + error.message);
             }
         }
 
@@ -422,13 +427,24 @@
             voiceBtn.classList.remove('recording');
             voiceBtn.textContent = '🎤';
             
-            if (mediaRecorder && mediaRecorder.state === 'recording') {
-                mediaRecorder.stop();
+            if (audioWorkletNode) {
+                audioWorkletNode.disconnect();
+                audioWorkletNode = null;
             }
             
-            if (audioStream) {
-                audioStream.getTracks().forEach(track => track.stop());
-                audioStream = null;
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+            
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+            }
+            
+            if (ws) {
+                ws.close();
+                ws = null;
             }
         }
 

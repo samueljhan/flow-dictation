@@ -57,20 +57,19 @@ wss.on('connection', async (clientWs) => {
   console.log('Client connected for AssemblyAI transcription');
   
   let transcriber = null;
-  let isTranscriberReady = false;
+  let isReady = false;
 
   try {
     transcriber = assemblyai.streaming.transcriber({
       sampleRate: 16_000,
     });
 
-    // Wait for socket to open
+    // Set up all event listeners BEFORE connect()
     transcriber.on('open', ({ sessionId }) => {
       console.log('✅ AssemblyAI session opened:', sessionId);
-      isTranscriberReady = true;
+      isReady = true;
     });
 
-    // Handle 'turn' events
     transcriber.on('turn', (turn) => {
       console.log('Transcript:', turn.transcript);
       
@@ -83,6 +82,7 @@ wss.on('connection', async (clientWs) => {
 
     transcriber.on('error', (error) => {
       console.error('AssemblyAI error:', error);
+      isReady = false;
       clientWs.send(JSON.stringify({
         type: 'error',
         message: error.message
@@ -90,24 +90,30 @@ wss.on('connection', async (clientWs) => {
     });
 
     transcriber.on('close', (code, reason) => {
-      console.log('AssemblyAI transcriber closed:', code, reason);
-      isTranscriberReady = false;
+      console.log('AssemblyAI closed:', code, reason);
+      isReady = false;
     });
 
-    // Connect
+    // NOW connect
     await transcriber.connect();
-    console.log('Connecting to AssemblyAI...');
+    
+    // Give it a tiny bit of time to fully open
+    await new Promise(resolve => setTimeout(resolve, 100));
 
     // Forward audio only when ready
     clientWs.on('message', (message) => {
-      if (Buffer.isBuffer(message) && transcriber && isTranscriberReady) {
-        transcriber.sendAudio(message);
+      if (Buffer.isBuffer(message) && isReady && transcriber) {
+        try {
+          transcriber.sendAudio(message);
+        } catch (err) {
+          console.error('Error sending audio:', err.message);
+        }
       }
     });
 
     clientWs.on('close', async () => {
       console.log('Client disconnected');
-      isTranscriberReady = false;
+      isReady = false;
       if (transcriber) {
         await transcriber.close();
       }

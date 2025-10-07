@@ -52,34 +52,28 @@ CRITICAL RULES:
 
 IMPORTANT: Do not include patient names, MRNs, dates of birth, or any identifiers.`;
 
-// AssemblyAI Universal-Streaming Real-Time Transcription via WebSocket
+// AssemblyAI Universal-Streaming via WebSocket
 wss.on('connection', async (clientWs) => {
   console.log('Client connected for AssemblyAI transcription');
   
   let realtimeTranscriber = null;
 
   try {
-    // Create real-time transcriber with Universal-Streaming configuration
+    // Create transcriber with Universal-Streaming
     realtimeTranscriber = assemblyai.realtime.transcriber({
-      sample_rate: 16000,
-      encoding: 'pcm_s16le',
-      format_turns: true,
-      end_of_turn_confidence_threshold: 0.7,
-      min_end_of_turn_silence_when_confident: 400,
-      max_end_of_turn_silence: 2000,
+      sampleRate: 16_000,
     });
 
-    // Handle transcription results from Universal-Streaming
-    realtimeTranscriber.on('transcript', (message) => {
-      if (!message.transcript) return;
+    // Handle transcript events
+    realtimeTranscriber.on('transcript', (transcript) => {
+      if (!transcript.text) return;
       
-      console.log('Transcript:', message.transcript);
+      console.log('Transcript:', transcript.text);
       
       clientWs.send(JSON.stringify({
         type: 'transcript',
-        text: message.transcript,
-        is_final: message.end_of_turn,
-        is_formatted: message.turn_is_formatted
+        text: transcript.text,
+        is_final: transcript.message_type === 'FinalTranscript'
       }));
     });
 
@@ -95,9 +89,11 @@ wss.on('connection', async (clientWs) => {
       console.log('AssemblyAI transcriber closed');
     });
 
+    // Connect to AssemblyAI
     await realtimeTranscriber.connect();
-    console.log('✅ AssemblyAI Universal-Streaming connected');
+    console.log('✅ AssemblyAI transcriber connected');
 
+    // Forward audio from client
     clientWs.on('message', (message) => {
       if (Buffer.isBuffer(message) && realtimeTranscriber) {
         realtimeTranscriber.sendAudio(message);
@@ -115,7 +111,7 @@ wss.on('connection', async (clientWs) => {
     console.error('Error setting up AssemblyAI:', error);
     clientWs.send(JSON.stringify({
       type: 'error',
-      message: 'Failed to initialize transcription: ' + error.message
+      message: 'Failed to initialize: ' + error.message
     }));
   }
 });
@@ -126,14 +122,11 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
       return res.status(400).json({ error: 'Audio file is required' });
     }
 
-    console.log('Transcribing with AssemblyAI...');
-    
     const webmPath = req.file.path + '.webm';
     fs.renameSync(req.file.path, webmPath);
     
     const transcript = await assemblyai.transcripts.transcribe({
-      audio: webmPath,
-      speech_model: 'best'
+      audio: webmPath
     });
 
     fs.unlinkSync(webmPath);
@@ -162,8 +155,6 @@ app.post('/api/generate-report', async (req, res) => {
       return res.status(400).json({ error: 'Findings are required' });
     }
 
-    console.log(`Generating ${specialty} report...`);
-    
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
@@ -184,8 +175,7 @@ app.post('/api/generate-report', async (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok', 
-    service: 'Flow Dictation API',
-    features: ['assemblyai-universal-streaming', 'report-generation']
+    service: 'Flow Dictation API'
   });
 });
 

@@ -3,15 +3,9 @@ const OpenAI = require('openai');
 const cors = require('cors');
 const multer = require('multer');
 const fs = require('fs');
-const { createClient } = require('@deepgram/sdk');
-const http = require('http');
-const WebSocket = require('ws');
 require('dotenv').config();
 
 const app = express();
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
-
 const upload = multer({ dest: 'uploads/' });
 const PORT = process.env.PORT || 8080;
 
@@ -23,13 +17,34 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// Debug: Check environment variables
-console.log('Environment check:');
-console.log('- OpenAI key present:', !!process.env.OPENAI_API_KEY);
-console.log('- Deepgram key present:', !!process.env.DEEPGRAM_API_KEY);
-console.log('- Deepgram key value:', process.env.DEEPGRAM_API_KEY ? 'exists' : 'MISSING');
+console.log('=== Environment Check ===');
+console.log('OpenAI API Key:', !!process.env.OPENAI_API_KEY ? '✓ Set' : '✗ Missing');
+console.log('========================');
 
-const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
+// Common radiology term corrections
+const RADIOLOGY_VOCABULARY = {
+  'new motor thorax': 'pneumothorax',
+  'plural effusion': 'pleural effusion',
+  'consolidation': 'consolidation',
+  'atelectasis': 'atelectasis',
+  'infiltrate': 'infiltrate',
+  'lymphadenopathy': 'lymphadenopathy',
+  'adenopathy': 'adenopathy',
+  'calcification': 'calcification',
+  'nodule': 'nodule',
+  'mass': 'mass',
+  'lesion': 'lesion',
+  'opacity': 'opacity',
+  'lucency': 'lucency',
+  'air bronchogram': 'air bronchogram',
+  'bronchiectasis': 'bronchiectasis',
+  'emphysema': 'emphysema',
+  'fibrosis': 'fibrosis',
+  'edema': 'edema',
+  'hemorrhage': 'hemorrhage',
+  'infarct': 'infarct',
+  'ischemia': 'ischemia',
+};
 
 const RADIOLOGY_SYSTEM_PROMPT = `You are an expert radiologist assistant helping residents write structured radiology reports.
 
@@ -51,101 +66,83 @@ CRITICAL RULES:
 
 IMPORTANT: Do not include patient names, MRNs, dates of birth, or any identifiers.`;
 
-// WebSocket handler for Deepgram streaming
-wss.on('connection', async (ws) => {
-  console.log('Client connected for streaming transcription');
-  
-  let deepgramLive = null;
-  
+const MEDICAL_CORRECTION_PROMPT = `You are a medical transcription specialist. Fix any medical terminology errors in the following dictation while preserving the speaker's intended meaning.
+
+Common errors to fix:
+- "new motor thorax" → "pneumothorax"
+- "plural effusion" → "pleural effusion"
+- "infiltrate" misheard as "in filtrate"
+- "atelectasis" misheard as "at electric basis"
+- "lymphadenopathy" misheard as "limb adenopathy"
+- "consolidation" misheard as "console a dashin"
+- "bronchiectasis" misheard as "bronco ectasis"
+- Anatomical terms (ileum vs ilium, mucosa vs mucous)
+- Drug names and dosages
+- Measurement units (cm, mm, Hounsfield units)
+
+Rules:
+1. ONLY fix obvious medical terminology errors
+2. Do NOT change the meaning or add information
+3. Do NOT reformat or restructure
+4. Keep all measurements, laterality (right/left), and anatomical descriptions exact
+5. Return ONLY the corrected text, nothing else
+
+Dictation to correct:`;
+
+// Enhanced Whisper transcription with medical context
+app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
   try {
-    deepgramLive = deepgram.listen.live({
-      model: 'nova-2-medical',
-      language: 'en-US',
-      smart_format: true,
-      punctuate: true,
-      interim_results: true,
-      endpointing: 300,
-      utterance_end_ms: 1000,
-      encoding: 'opus',
-      sample_rate: 48000,
+    if (!req.file) {
+      return res.status(400).json({ error: 'Audio file is required' });
+    }
+
+    console.log('Transcribing audio file...');
+    const audioFile = fs.createReadStream(req.file.path);
+    
+    // Step 1: Transcribe with Whisper using medical prompt
+    const transcription = await openai.audio.transcriptions.create({
+      file: audioFile,
+      model: 'whisper-1',
+      language: 'en',
+      prompt: 'This is a radiology report dictation including medical terms like pneumothorax, pleural effusion, consolidation, atelectasis, infiltrate, lymphadenopathy, bronchiectasis, mass, nodule, lesion, opacity, calcification, adenopathy.', // Vocabulary hints
     });
 
-    deepgramLive.on('open', () => {
-      console.log('✅ Deepgram connection opened successfully');
-      
-      deepgramLive.on('transcript', (data) => {
-        console.log('📝 Received transcript data:', JSON.stringify(data));
-        const transcript = data.channel.alternatives[0].transcript;
-        console.log('📝 Transcript text:', transcript);
-        
-        if (transcript && transcript.trim().length > 0) {
-          console.log('✅ Sending transcript to client:', transcript);
-          ws.send(JSON.stringify({
-            type: 'transcript',
-            text: transcript,
-            is_final: data.is_final,
-            speech_final: data.speech_final
-          }));
-        } else {
-          console.log('⚠️ Empty transcript, skipping');
-        }
-      });
-
-      deepgramLive.on('error', (error) => {
-        console.error('❌ Deepgram error:', error);
-        ws.send(JSON.stringify({
-          type: 'error',
-          message: error.message
-        }));
-      });
-
-      deepgramLive.on('close', () => {
-        console.log('🔴 Deepgram connection closed');
-      });
-
-      deepgramLive.on('warning', (warning) => {
-        console.warn('⚠️ Deepgram warning:', warning);
-      });
-
-      deepgramLive.on('metadata', (metadata) => {
-        console.log('📊 Deepgram metadata:', metadata);
-      });
+    fs.unlinkSync(req.file.path);
+    
+    let correctedText = transcription.text;
+    
+    // Step 2: Post-process with GPT-4o to fix medical terms
+    console.log('Post-processing with medical correction...');
+    const correction = await openai.chat.completions.create({
+      model: 'gpt-4o-mini', // Faster and cheaper for corrections
+      messages: [
+        { role: 'system', content: MEDICAL_CORRECTION_PROMPT },
+        { role: 'user', content: transcription.text }
+      ],
+      temperature: 0.1, // Low temperature for consistent corrections
+      max_tokens: 500
     });
 
-    ws.on('message', (message) => {
-      console.log('Received audio chunk:', message.length, 'bytes');
-      if (deepgramLive && deepgramLive.getReadyState() === 1) {
-        console.log('Forwarding to Deepgram...');
-        deepgramLive.send(message);
-      } else {
-        console.log('Deepgram not ready, state:', deepgramLive ? deepgramLive.getReadyState() : 'null');
-      }
+    correctedText = correction.choices[0].message.content.trim();
+    
+    console.log('Original:', transcription.text);
+    console.log('Corrected:', correctedText);
+    
+    res.json({ 
+      text: correctedText,
+      original: transcription.text // Include original for debugging
     });
-
-    ws.on('close', () => {
-      console.log('Client disconnected');
-      if (deepgramLive) {
-        deepgramLive.finish();
-      }
-    });
-
-    ws.on('error', (error) => {
-      console.error('WebSocket error:', error);
-      if (deepgramLive) {
-        deepgramLive.finish();
-      }
-    });
-
+    
   } catch (error) {
-    console.error('Error setting up Deepgram:', error);
-    ws.send(JSON.stringify({
-      type: 'error',
-      message: 'Failed to initialize transcription service'
-    }));
+    console.error('Transcription error:', error);
+    if (req.file && fs.existsSync(req.file.path)) {
+      fs.unlinkSync(req.file.path);
+    }
+    res.status(500).json({ error: 'Transcription failed', details: error.message });
   }
 });
 
-// Text-based report generation endpoint
+// Enhanced report generation
 app.post('/api/generate-report', async (req, res) => {
   try {
     const { findings, specialty } = req.body;
@@ -173,43 +170,15 @@ app.post('/api/generate-report', async (req, res) => {
   }
 });
 
-// Audio transcription endpoint (fallback)
-app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'Audio file is required' });
-    }
-
-    const audioFile = fs.createReadStream(req.file.path);
-    
-    const transcription = await openai.audio.transcriptions.create({
-      file: audioFile,
-      model: 'whisper-1',
-    });
-
-    fs.unlinkSync(req.file.path);
-    
-    res.json({ text: transcription.text });
-  } catch (error) {
-    console.error('Transcription error:', error);
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
-    res.status(500).json({ error: 'Transcription failed', details: error.message });
-  }
-});
-
-// Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     service: 'Flow Dictation API',
-    features: ['text-generation', 'deepgram-streaming', 'audio-transcription']
+    features: ['whisper-transcription', 'medical-correction', 'report-generation']
   });
 });
 
-// Start server
-server.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🏥 Flow Dictation running on port ${PORT}`);
-  console.log(`🎤 Deepgram medical transcription enabled`);
+  console.log(`🎤 Enhanced Whisper + Medical Post-Processing enabled`);
 });

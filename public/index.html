@@ -257,13 +257,19 @@
             border-color: #505050;
             transform: translateY(-2px);
         }
+
+        .transcribing-indicator {
+            color: #4CAF50;
+            font-size: 12px;
+            font-style: italic;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>🏥 Flow Dictation</h1>
-            <p>AI-Powered Medical Report Generator with Deepgram</p>
+            <p>Medical-Grade AI Transcription + Report Generation</p>
         </div>
 
         <div class="specialty-selector">
@@ -276,7 +282,7 @@
         <div class="chat-container" id="chatContainer">
             <div class="welcome-message">
                 <h2>Welcome to Flow Dictation! 👋</h2>
-                <p>Describe your findings or dictate them using medical-grade AI transcription.</p>
+                <p>Dictate your findings with medical-grade accuracy powered by Whisper + GPT-4o.</p>
                 
                 <div class="example-prompts">
                     <div class="example-prompt" onclick="useExample(this)">
@@ -316,12 +322,11 @@
         const userInput = document.getElementById('userInput');
         const sendBtn = document.getElementById('sendBtn');
         const voiceBtn = document.getElementById('voiceBtn');
-        let conversationHistory = [];
         
-        let deepgramSocket = null;
         let mediaRecorder = null;
         let audioStream = null;
         let isRecording = false;
+        let audioChunks = [];
         let finalTranscript = '';
 
         userInput.addEventListener('input', function() {
@@ -336,133 +341,103 @@
             userInput.focus();
         }
 
-        async function startDeepgramStreaming() {
+        async function startRecording() {
             try {
-                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const host = window.location.host;
-                deepgramSocket = new WebSocket(`${protocol}//${host}`);
+                audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                
+                mediaRecorder = new MediaRecorder(audioStream);
+                audioChunks = [];
 
-                deepgramSocket.onopen = async () => {
-                    console.log('Deepgram WebSocket connected');
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) {
+                        audioChunks.push(event.data);
+                    }
+                };
+
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    audioChunks = [];
+                    
+                    // Show transcribing indicator
+                    const indicator = document.createElement('span');
+                    indicator.className = 'transcribing-indicator';
+                    indicator.textContent = ' (transcribing...)';
+                    userInput.parentElement.appendChild(indicator);
+                    
+                    // Send to server for transcription
+                    const formData = new FormData();
+                    formData.append('audio', audioBlob, 'recording.webm');
                     
                     try {
-                        audioStream = await navigator.mediaDevices.getUserMedia({ 
-                            audio: {
-                                channelCount: 1,
-                                sampleRate: 48000,
-                                echoCancellation: true,
-                                noiseSuppression: true,
-                                autoGainControl: true
-                            } 
+                        const response = await fetch('/api/transcribe', {
+                            method: 'POST',
+                            body: formData
                         });
                         
-                        console.log('Microphone access granted');
-                        
-                        // Check supported MIME types
-                        const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
-                            ? 'audio/webm;codecs=opus'
-                            : 'audio/webm';
-                        
-                        console.log('Using MIME type:', mimeType);
-                        
-                        mediaRecorder = new MediaRecorder(audioStream, {
-                            mimeType: mimeType
-                        });
-
-                        mediaRecorder.addEventListener('dataavailable', (event) => {
-                            if (event.data.size > 0 && deepgramSocket && deepgramSocket.readyState === WebSocket.OPEN) {
-                                console.log('Sending audio chunk:', event.data.size, 'bytes');
-                                deepgramSocket.send(event.data);
-                            }
-                        });
-
-                        mediaRecorder.addEventListener('start', () => {
-                            console.log('MediaRecorder started');
-                        });
-
-                        mediaRecorder.addEventListener('error', (error) => {
-                            console.error('MediaRecorder error:', error);
-                        });
-
-                        mediaRecorder.start(250);
-                        isRecording = true;
-                        voiceBtn.classList.add('recording');
-                        voiceBtn.textContent = '🔴';
-                        console.log('Recording started');
-                    } catch (micError) {
-                        console.error('Microphone error:', micError);
-                        alert('Could not access microphone: ' + micError.message);
-                        stopDeepgramStreaming();
-                    }
-                };
-
-                deepgramSocket.onmessage = (message) => {
-                    const data = JSON.parse(message.data);
-                    console.log('Received from server:', data);
-                    
-                    if (data.type === 'transcript') {
-                        if (data.is_final) {
+                        const data = await response.json();
+                        if (data.text) {
                             finalTranscript += (finalTranscript ? ' ' : '') + data.text;
                             userInput.value = finalTranscript;
-                        } else {
-                            userInput.value = finalTranscript + (finalTranscript ? ' ' : '') + data.text;
+                            userInput.dispatchEvent(new Event('input'));
                         }
-                        userInput.dispatchEvent(new Event('input'));
-                    } else if (data.type === 'error') {
-                        console.error('Deepgram error:', data.message);
-                        alert('Transcription error: ' + data.message);
-                        stopDeepgramStreaming();
+                        
+                        indicator.remove();
+                    } catch (error) {
+                        console.error('Transcription error:', error);
+                        indicator.textContent = ' (error)';
+                        setTimeout(() => indicator.remove(), 2000);
+                    }
+                    
+                    // If still recording, start next chunk
+                    if (isRecording) {
+                        audioChunks = [];
+                        mediaRecorder.start();
+                        setTimeout(() => {
+                            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                                mediaRecorder.stop();
+                            }
+                        }, 2000); // 2-second chunks for faster feedback
                     }
                 };
 
-                deepgramSocket.onerror = (error) => {
-                    console.error('WebSocket error:', error);
-                    stopDeepgramStreaming();
-                };
-
-                deepgramSocket.onclose = () => {
-                    console.log('Deepgram disconnected');
-                    stopDeepgramStreaming();
-                };
+                isRecording = true;
+                voiceBtn.classList.add('recording');
+                voiceBtn.textContent = '🔴';
+                
+                mediaRecorder.start();
+                setTimeout(() => {
+                    if (mediaRecorder && mediaRecorder.state === 'recording') {
+                        mediaRecorder.stop();
+                    }
+                }, 2000); // Faster 2-second chunks
 
             } catch (error) {
-                console.error('Error starting Deepgram:', error);
-                alert('Could not start transcription: ' + error.message);
-                stopDeepgramStreaming();
+                console.error('Microphone error:', error);
+                alert('Could not access microphone: ' + error.message);
             }
         }
 
-        function stopDeepgramStreaming() {
-            console.log('Stopping Deepgram streaming...');
+        function stopRecording() {
+            isRecording = false;
+            voiceBtn.classList.remove('recording');
+            voiceBtn.textContent = '🎤';
             
-            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
                 mediaRecorder.stop();
             }
             
             if (audioStream) {
                 audioStream.getTracks().forEach(track => track.stop());
+                audioStream = null;
             }
-            
-            // Don't close socket immediately - wait for final transcripts
-            if (deepgramSocket && deepgramSocket.readyState === WebSocket.OPEN) {
-                setTimeout(() => {
-                    if (deepgramSocket && deepgramSocket.readyState === WebSocket.OPEN) {
-                        deepgramSocket.close();
-                    }
-                }, 1000); // Wait 1 second for final transcripts
-            }
-            
-            isRecording = false;
-            voiceBtn.classList.remove('recording');
-            voiceBtn.textContent = '🎤';
         }
 
         voiceBtn.addEventListener('click', () => {
             if (isRecording) {
-                stopDeepgramStreaming();
+                stopRecording();
             } else {
                 finalTranscript = userInput.value;
-                startDeepgramStreaming();
+                startRecording();
             }
         });
 

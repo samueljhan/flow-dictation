@@ -52,6 +52,46 @@
             font-size: 14px;
         }
 
+        .dictaphone-setup {
+            padding: 15px 30px;
+            background: #1f4a2e;
+            border-bottom: 1px solid #3a3a3a;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .dictaphone-setup.connected {
+            background: #1f3a2e;
+        }
+
+        .setup-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            color: #a0e0b0;
+        }
+
+        .setup-btn {
+            background: #28a745;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.3s;
+        }
+
+        .setup-btn:hover {
+            background: #218838;
+        }
+
+        .setup-btn.connected {
+            background: #666;
+        }
+
         .microphone-status {
             padding: 10px 30px;
             background: #242424;
@@ -203,11 +243,14 @@
             align-items: flex-end;
         }
 
-        .input-wrapper { flex: 1; position: relative; }
+        .input-wrapper { 
+            flex: 1; 
+            position: relative; 
+        }
 
         #userInput {
             width: 100%;
-            padding: 15px 120px 15px 20px;
+            padding: 15px 70px 15px 20px;
             border: 1px solid #3a3a3a;
             border-radius: 25px;
             font-size: 15px;
@@ -223,32 +266,66 @@
 
         .voice-btn {
             position: absolute;
-            right: 70px;
-            bottom: 12px;
-            background: #404040;
-            border: none;
+            right: 10px;
+            top: 10px;
+            background: #3a3a3a;
+            border: 2px solid #505050;
             cursor: pointer;
-            font-size: 20px;
-            padding: 10px;
+            padding: 0;
             border-radius: 50%;
             transition: all 0.3s;
-            width: 40px;
-            height: 40px;
+            width: 36px;
+            height: 36px;
             display: flex;
             align-items: center;
             justify-content: center;
+            position: relative;
         }
 
-        .voice-btn:hover { background: #505050; }
+        .voice-btn:hover { 
+            border-color: #606060;
+            transform: scale(1.05);
+        }
 
         .voice-btn.recording {
-            background: #dc3545;
-            animation: pulse 1.5s infinite;
+            border-color: #dc3545;
+            animation: pulse-border 1.5s infinite;
         }
 
-        @keyframes pulse { 
+        .voice-btn svg {
+            width: 16px;
+            height: 16px;
+            stroke: #909090;
+        }
+
+        .voice-btn.recording svg {
+            stroke: #dc3545;
+        }
+
+        .voice-btn .rec-dot {
+            position: absolute;
+            bottom: 2px;
+            right: 2px;
+            width: 8px;
+            height: 8px;
+            background: #dc3545;
+            border-radius: 50%;
+            opacity: 0;
+        }
+
+        .voice-btn.recording .rec-dot {
+            opacity: 1;
+            animation: pulse-dot 1.5s infinite;
+        }
+
+        @keyframes pulse-border { 
             0%, 100% { opacity: 1; transform: scale(1); } 
             50% { opacity: 0.8; transform: scale(1.05); } 
+        }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(0.9); }
         }
 
         #sendBtn {
@@ -306,25 +383,21 @@
             border-color: #505050;
             transform: translateY(-2px);
         }
-
-        .instructions {
-            margin-top: 20px;
-            padding: 15px;
-            background: #333;
-            border-radius: 8px;
-            font-size: 13px;
-            color: #b0b0b0;
-            text-align: left;
-        }
-
-        .instructions strong { color: #e0e0e0; }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>🏥 Flow Dictation</h1>
-            <p>AI-Powered Medical Transcription & Report Generation</p>
+            <p>AI-Powered Medical Transcription with Dictaphone Support</p>
+        </div>
+
+        <div class="dictaphone-setup" id="dictaphoneSetup">
+            <div class="setup-info">
+                <span id="setupIcon">🎤</span>
+                <span id="setupText">Connect your Philips dictaphone for hands-free recording</span>
+            </div>
+            <button class="setup-btn" id="setupBtn">Connect Dictaphone</button>
         </div>
 
         <div class="microphone-status">
@@ -344,14 +417,6 @@
                 <h2>Welcome to Flow Dictation! 👋</h2>
                 <p>Real-time medical transcription powered by AssemblyAI</p>
                 
-                <div class="instructions">
-                    <strong>📝 How to use:</strong><br>
-                    1. Click the 🎤 microphone button below to start recording<br>
-                    2. Dictate your findings using your Philips microphone<br>
-                    3. Click the 🎤 button again to stop and generate report<br>
-                    4. Copy the formatted report to your PACS system
-                </div>
-
                 <div class="example-prompts">
                     <div class="example-prompt" onclick="useExample(this)">
                         <strong>🫁 Chest X-Ray</strong>
@@ -371,8 +436,19 @@
 
         <div class="input-container">
             <div class="input-wrapper">
-                <textarea id="userInput" placeholder="Click microphone to dictate or type here..." rows="1"></textarea>
-                <button class="voice-btn" id="voiceBtn" title="Click to start/stop recording">🎤</button>
+                <textarea id="userInput" placeholder="Dictation appears here..." rows="1"></textarea>
+                <button class="voice-btn" id="voiceBtn" title="Click to record or use dictaphone button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                        <line x1="12" y1="19" x2="12" y2="23"></line>
+                        <line x1="8" y1="23" x2="16" y2="23"></line>
+                        <path d="M4 19c0 0 2-1 4-1s4 1 6 1s4-1 6-1" stroke-width="1.5"></path>
+                        <path d="M4 22c0 0 2-1 4-1s4 1 6 1s4-1 6-1" stroke-width="1.5"></path>
+                        <path d="M4 16c0 0 2-1 4-1s4 1 6 1s4-1 6-1" stroke-width="1.5"></path>
+                    </svg>
+                    <div class="rec-dot"></div>
+                </button>
             </div>
             <button id="sendBtn" title="Generate report">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -392,6 +468,10 @@
         const voiceBtn = document.getElementById('voiceBtn');
         const micIndicator = document.getElementById('micIndicator');
         const micStatus = document.getElementById('micStatus');
+        const setupBtn = document.getElementById('setupBtn');
+        const setupText = document.getElementById('setupText');
+        const setupIcon = document.getElementById('setupIcon');
+        const dictaphoneSetup = document.getElementById('dictaphoneSetup');
         
         let ws = null;
         let audioContext = null;
@@ -400,14 +480,70 @@
         let isRecording = false;
         let finalTranscript = '';
         let selectedMic = null;
+        let hidDevice = null;
+        let recordButton = null;
 
-        // Detect microphone on page load
+        const supportsHID = 'hid' in navigator;
+
+        if (!supportsHID) {
+            setupText.textContent = 'WebHID not supported - use Chrome/Edge or click mic button';
+            setupBtn.style.display = 'none';
+        }
+
+        setupBtn.addEventListener('click', async () => {
+            try {
+                const devices = await navigator.hid.requestDevice({
+                    filters: [
+                        { vendorId: 0x0911 },
+                        { vendorId: 0x095d }
+                    ]
+                });
+
+                if (devices.length === 0) {
+                    alert('No Philips dictaphone found. Make sure it\'s plugged in.');
+                    return;
+                }
+
+                hidDevice = devices[0];
+                await hidDevice.open();
+
+                setupText.textContent = `✓ Connected: ${hidDevice.productName}`;
+                setupIcon.textContent = '✅';
+                setupBtn.textContent = 'Connected';
+                setupBtn.classList.add('connected');
+                setupBtn.disabled = true;
+                dictaphoneSetup.classList.add('connected');
+
+                hidDevice.addEventListener('inputreport', handleDictaphoneButton);
+
+                console.log('Dictaphone connected:', hidDevice.productName);
+                micStatus.textContent = 'Press dictaphone button to record';
+
+            } catch (error) {
+                console.error('Error connecting dictaphone:', error);
+                alert('Failed to connect dictaphone: ' + error.message);
+            }
+        });
+
+        function handleDictaphoneButton(event) {
+            const { data } = event;
+            const value = data.getUint8(0);
+            
+            console.log('Dictaphone button event:', value);
+
+            if (value !== 0x00 && !isRecording) {
+                recordButton = value;
+                startRecording();
+            } else if (value === 0x00 && isRecording) {
+                stopRecording();
+            }
+        }
+
         async function detectMicrophone() {
             try {
                 const devices = await navigator.mediaDevices.enumerateDevices();
                 const audioDevices = devices.filter(device => device.kind === 'audioinput');
                 
-                // Prefer Philips microphone
                 selectedMic = audioDevices.find(device => 
                     device.label.toLowerCase().includes('philips') ||
                     device.label.toLowerCase().includes('speechmike') ||
@@ -416,13 +552,10 @@
 
                 if (selectedMic) {
                     micIndicator.classList.add('connected');
-                    micStatus.textContent = `✓ ${selectedMic.label} - Click 🎤 to record`;
-                } else {
-                    micStatus.textContent = '⚠️ No microphone detected';
+                    micStatus.textContent = `✓ ${selectedMic.label}`;
                 }
             } catch (error) {
                 console.error('Error detecting microphone:', error);
-                micStatus.textContent = '⚠️ Microphone access denied';
             }
         }
 
@@ -455,8 +588,6 @@
                 ws = new WebSocket(`${protocol}//${window.location.host}`);
                 
                 ws.onopen = async () => {
-                    console.log('WebSocket connected');
-                    
                     const constraints = {
                         audio: {
                             deviceId: selectedMic ? { exact: selectedMic.deviceId } : undefined,
@@ -503,9 +634,8 @@
                     
                     isRecording = true;
                     voiceBtn.classList.add('recording');
-                    voiceBtn.textContent = '⏹️';
                     micIndicator.classList.add('recording');
-                    micStatus.textContent = `🔴 Recording - Click 🎤 to stop`;
+                    micStatus.textContent = `🔴 Recording - Release to stop`;
                 };
                 
                 ws.onmessage = (event) => {
@@ -521,7 +651,6 @@
                         userInput.dispatchEvent(new Event('input'));
                     } else if (data.type === 'error') {
                         console.error('Transcription error:', data.message);
-                        alert('Transcription error: ' + data.message);
                         stopRecording();
                     }
                 };
@@ -540,29 +669,18 @@
         function stopRecording() {
             isRecording = false;
             voiceBtn.classList.remove('recording');
-            voiceBtn.textContent = '🎤';
             micIndicator.classList.remove('recording');
-            micStatus.textContent = `✓ ${selectedMic ? selectedMic.label : 'Microphone'} - Click 🎤 to record`;
+            micStatus.textContent = hidDevice ? 'Press dictaphone button to record' : 'Click mic to record';
             
-            if (audioWorkletNode) {
-                audioWorkletNode.disconnect();
-                audioWorkletNode = null;
-            }
+            if (audioWorkletNode) audioWorkletNode.disconnect();
+            if (audioContext) audioContext.close();
+            if (mediaStream) mediaStream.getTracks().forEach(track => track.stop());
+            if (ws) ws.close();
             
-            if (audioContext) {
-                audioContext.close();
-                audioContext = null;
-            }
-            
-            if (mediaStream) {
-                mediaStream.getTracks().forEach(track => track.stop());
-                mediaStream = null;
-            }
-            
-            if (ws) {
-                ws.close();
-                ws = null;
-            }
+            audioWorkletNode = null;
+            audioContext = null;
+            mediaStream = null;
+            ws = null;
         }
 
         function addMessage(text, isUser) {
@@ -683,8 +801,6 @@
                 sendMessage();
             }
         });
-
-        userInput.focus();
     </script>
 </body>
 </html>

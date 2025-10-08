@@ -90,6 +90,21 @@
             50% { opacity: 0.7; transform: scale(1.2); }
         }
 
+        .debug-panel {
+            padding: 10px 30px;
+            background: #1f1f1f;
+            border-bottom: 1px solid #3a3a3a;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            color: #00ff00;
+            max-height: 80px;
+            overflow-y: auto;
+        }
+
+        .debug-panel div {
+            padding: 2px 0;
+        }
+
         .specialty-selector {
             padding: 15px 30px;
             background: #242424;
@@ -232,14 +247,12 @@
             padding: 5px 10px;
             border-radius: 50%;
             transition: all 0.3s;
-            opacity: 0.5;
         }
 
         .voice-btn:hover { background: #3a3a3a; }
 
         .voice-btn.recording {
             color: #dc3545;
-            opacity: 1;
             animation: pulse 1.5s infinite;
         }
 
@@ -297,15 +310,6 @@
             border-color: #505050;
             transform: translateY(-2px);
         }
-
-        .button-help {
-            margin-top: 20px;
-            padding: 15px;
-            background: #333;
-            border-radius: 8px;
-            font-size: 13px;
-            color: #b0b0b0;
-        }
     </style>
 </head>
 <body>
@@ -317,7 +321,11 @@
 
         <div class="microphone-status">
             <div class="mic-indicator" id="micIndicator"></div>
-            <span id="micStatus">Detecting Philips dictaphone...</span>
+            <span id="micStatus">Detecting devices...</span>
+        </div>
+
+        <div class="debug-panel" id="debugPanel">
+            <div>🔍 Button Detection Active - Press your dictaphone button now...</div>
         </div>
 
         <div class="specialty-selector">
@@ -330,15 +338,9 @@
         <div class="chat-container" id="chatContainer">
             <div class="welcome-message">
                 <h2>Welcome to Flow Dictation! 👋</h2>
-                <p>Press and hold the record button on your Philips dictaphone to start transcribing.</p>
-                <p>Release to stop and generate report.</p>
+                <p><strong>Testing Mode: Press ANY button on your Philips dictaphone</strong></p>
+                <p>We'll detect what signal it sends and configure it automatically</p>
                 
-                <div class="button-help">
-                    <strong>🎤 Dictaphone Button Detection:</strong><br>
-                    Listening for: Record button, F4, F5, Spacebar, or Ctrl keys<br>
-                    <em>Press any supported button to activate recording</em>
-                </div>
-
                 <div class="example-prompts">
                     <div class="example-prompt" onclick="useExample(this)">
                         <strong>🫁 Chest X-Ray</strong>
@@ -359,7 +361,7 @@
         <div class="input-container">
             <div class="input-wrapper">
                 <textarea id="userInput" placeholder="Dictation appears here..." rows="1"></textarea>
-                <button class="voice-btn" id="voiceBtn" title="Dictaphone status">🎤</button>
+                <button class="voice-btn" id="voiceBtn" title="Manual record (click)" onclick="toggleRecording()">🎤</button>
             </div>
             <button id="sendBtn">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -379,6 +381,7 @@
         const voiceBtn = document.getElementById('voiceBtn');
         const micIndicator = document.getElementById('micIndicator');
         const micStatus = document.getElementById('micStatus');
+        const debugPanel = document.getElementById('debugPanel');
         
         let ws = null;
         let audioContext = null;
@@ -387,112 +390,122 @@
         let isRecording = false;
         let finalTranscript = '';
         let philipsMic = null;
-        let detectedKeys = new Set();
+        let detectedButton = null;
 
-        // Detect Philips microphone
-        async function detectPhilipsMicrophone() {
+        function addDebug(message) {
+            const div = document.createElement('div');
+            div.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            debugPanel.appendChild(div);
+            debugPanel.scrollTop = debugPanel.scrollHeight;
+            console.log(message);
+        }
+
+        // Detect ALL input devices
+        async function detectDevices() {
             try {
+                // Audio devices
                 const devices = await navigator.mediaDevices.enumerateDevices();
                 const audioDevices = devices.filter(device => device.kind === 'audioinput');
                 
-                // Look for Philips microphone
+                addDebug(`Found ${audioDevices.length} audio devices:`);
+                audioDevices.forEach((device, i) => {
+                    addDebug(`  ${i}: ${device.label || 'Unknown'}`);
+                });
+
                 philipsMic = audioDevices.find(device => 
                     device.label.toLowerCase().includes('philips') ||
                     device.label.toLowerCase().includes('speechmike') ||
                     device.label.toLowerCase().includes('precision') ||
                     device.label.toLowerCase().includes('dictaphone')
-                );
+                ) || audioDevices[0];
 
                 if (philipsMic) {
                     micIndicator.classList.add('connected');
-                    micStatus.textContent = `✓ ${philipsMic.label} - Press record button to start`;
-                    console.log('Philips microphone detected:', philipsMic.label);
-                } else {
-                    // Use default microphone
-                    const defaultMic = audioDevices.find(d => d.deviceId === 'default') || audioDevices[0];
-                    if (defaultMic) {
-                        philipsMic = defaultMic;
-                        micIndicator.classList.add('connected');
-                        micStatus.textContent = `Using: ${defaultMic.label} - Press record button to start`;
-                    } else {
-                        micStatus.textContent = '⚠️ No microphone detected';
-                    }
+                    micStatus.textContent = `✓ ${philipsMic.label}`;
+                    addDebug(`✓ Using: ${philipsMic.label}`);
                 }
-                
-                // Setup button listeners
-                setupDictaphoneButtonListeners();
+
+                // HID devices
+                if (navigator.hid) {
+                    const hidDevices = await navigator.hid.getDevices();
+                    addDebug(`Found ${hidDevices.length} HID devices`);
+                    hidDevices.forEach(device => {
+                        addDebug(`  HID: ${device.productName || 'Unknown'}`);
+                    });
+                }
+
+                // USB devices  
+                if (navigator.usb) {
+                    const usbDevices = await navigator.usb.getDevices();
+                    addDebug(`Found ${usbDevices.length} USB devices`);
+                }
+
+                setupAllListeners();
             } catch (error) {
-                console.error('Error detecting microphone:', error);
-                micStatus.textContent = '⚠️ Microphone access denied';
+                addDebug(`❌ Error: ${error.message}`);
             }
         }
 
-        // Setup comprehensive button listeners for Philips dictaphone
-        function setupDictaphoneButtonListeners() {
-            // Listen for ALL key events to detect what the dictaphone sends
-            window.addEventListener('keydown', (e) => {
-                // Log the key to help identify the dictaphone button
-                if (!detectedKeys.has(e.code)) {
-                    detectedKeys.add(e.code);
-                    console.log('Key detected:', e.key, 'Code:', e.code, 'KeyCode:', e.keyCode);
+        function setupAllListeners() {
+            // Keyboard events (catch EVERYTHING)
+            document.addEventListener('keydown', (e) => {
+                addDebug(`⌨️ KEY DOWN: key="${e.key}" code="${e.code}" keyCode=${e.keyCode} which=${e.which}`);
+                
+                if (!detectedButton && !isRecording) {
+                    detectedButton = e.code;
+                    addDebug(`✅ Detected dictaphone button: ${e.code}`);
+                    micStatus.textContent = `✓ Button configured: ${e.code}`;
                 }
 
-                // Common dictaphone buttons:
-                // F4, F5, F6 (function keys)
-                // Space (some models)
-                // Control keys (left/right)
-                // Media keys
-                const dictaphoneKeys = [
-                    'F4', 'F5', 'F6', 'F7', 'F8',
-                    'ControlLeft', 'ControlRight',
-                    'Space',
-                    'MediaRecord', 'MediaPlayPause'
-                ];
-
-                if (dictaphoneKeys.includes(e.code) || dictaphoneKeys.includes(e.key)) {
+                if (detectedButton === e.code || ['F4','F5','F6','F7','F8','ControlLeft','ControlRight','Space'].includes(e.code)) {
                     e.preventDefault();
-                    if (!isRecording) {
-                        console.log('Dictaphone button pressed:', e.code);
-                        startRecording();
-                    }
+                    if (!isRecording) startRecording();
                 }
             });
 
-            window.addEventListener('keyup', (e) => {
-                const dictaphoneKeys = [
-                    'F4', 'F5', 'F6', 'F7', 'F8',
-                    'ControlLeft', 'ControlRight',
-                    'Space',
-                    'MediaRecord', 'MediaPlayPause'
-                ];
-
-                if (dictaphoneKeys.includes(e.code) || dictaphoneKeys.includes(e.key)) {
+            document.addEventListener('keyup', (e) => {
+                addDebug(`⌨️ KEY UP: ${e.code}`);
+                if (detectedButton === e.code || ['F4','F5','F6','F7','F8','ControlLeft','ControlRight','Space'].includes(e.code)) {
                     e.preventDefault();
-                    if (isRecording) {
-                        console.log('Dictaphone button released:', e.code);
-                        stopRecording();
-                    }
+                    if (isRecording) stopRecording();
                 }
             });
 
-            // Also listen for gamepad/HID buttons (some Philips use this)
+            // Mouse events
+            document.addEventListener('mousedown', (e) => {
+                if (e.button !== 0) { // Not left click
+                    addDebug(`🖱️ MOUSE DOWN: button=${e.button}`);
+                }
+            });
+
+            // Gamepad/HID
             window.addEventListener('gamepadconnected', (e) => {
-                console.log('Gamepad/HID device connected:', e.gamepad.id);
+                addDebug(`🎮 Gamepad connected: ${e.gamepad.id}`);
                 pollGamepad();
             });
 
-            console.log('✓ Dictaphone button listeners activated');
-            console.log('Supported triggers: F4-F8, Ctrl, Space, Media keys');
+            // Try to request HID access
+            if (navigator.hid) {
+                document.addEventListener('click', async () => {
+                    try {
+                        const devices = await navigator.hid.requestDevice({ filters: [] });
+                        addDebug(`✓ HID device authorized`);
+                    } catch (e) {
+                        // User cancelled, that's ok
+                    }
+                }, { once: true });
+            }
+
+            addDebug('✓ All listeners active - Press dictaphone button!');
         }
 
-        // Poll for gamepad/HID button presses
         function pollGamepad() {
             const gamepads = navigator.getGamepads();
             for (let gamepad of gamepads) {
-                if (gamepad && gamepad.buttons) {
+                if (gamepad) {
                     gamepad.buttons.forEach((button, index) => {
                         if (button.pressed && !isRecording) {
-                            console.log('HID button pressed:', index);
+                            addDebug(`🎮 Button ${index} pressed`);
                             startRecording();
                         } else if (!button.pressed && isRecording) {
                             stopRecording();
@@ -500,13 +513,12 @@
                     });
                 }
             }
-            if (isRecording) {
+            if (isRecording || navigator.getGamepads().some(g => g)) {
                 requestAnimationFrame(pollGamepad);
             }
         }
 
-        // Detect microphone on page load
-        detectPhilipsMicrophone();
+        detectDevices();
 
         userInput.addEventListener('input', function() {
             this.style.height = 'auto';
@@ -517,16 +529,25 @@
             const text = element.querySelector('span').textContent.replace(/['"]/g, '');
             userInput.value = text;
             userInput.dispatchEvent(new Event('input'));
-            userInput.focus();
+        }
+
+        function toggleRecording() {
+            if (isRecording) {
+                stopRecording();
+            } else {
+                finalTranscript = userInput.value;
+                startRecording();
+            }
         }
 
         async function startRecording() {
             try {
+                addDebug('🔴 Starting recording...');
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 ws = new WebSocket(`${protocol}//${window.location.host}`);
                 
                 ws.onopen = async () => {
-                    console.log('WebSocket connected');
+                    addDebug('✓ WebSocket connected');
                     
                     const constraints = {
                         audio: {
@@ -540,6 +561,7 @@
                     };
 
                     mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+                    addDebug('✓ Audio stream acquired');
                     
                     audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
                     const source = audioContext.createMediaStreamSource(mediaStream);
@@ -576,7 +598,8 @@
                     voiceBtn.classList.add('recording');
                     voiceBtn.textContent = '🔴';
                     micIndicator.classList.add('recording');
-                    micStatus.textContent = `🔴 Recording - Release button to stop`;
+                    micStatus.textContent = `🔴 Recording`;
+                    addDebug('✓ Recording started');
                 };
                 
                 ws.onmessage = (event) => {
@@ -586,53 +609,45 @@
                         if (data.is_final) {
                             finalTranscript += (finalTranscript ? ' ' : '') + data.text;
                             userInput.value = finalTranscript;
+                            addDebug(`📝 Transcript: ${data.text}`);
                         } else {
                             userInput.value = finalTranscript + (finalTranscript ? ' ' : '') + data.text;
                         }
                         userInput.dispatchEvent(new Event('input'));
                     } else if (data.type === 'error') {
-                        console.error('Transcription error:', data.message);
-                        stopRecording();
+                        addDebug(`❌ Error: ${data.message}`);
                     }
                 };
                 
                 ws.onerror = (error) => {
-                    console.error('WebSocket error:', error);
+                    addDebug(`❌ WebSocket error`);
                     stopRecording();
                 };
                 
             } catch (error) {
-                console.error('Error starting recording:', error);
-                micStatus.textContent = '⚠️ Error: ' + error.message;
+                addDebug(`❌ Recording error: ${error.message}`);
             }
         }
 
         function stopRecording() {
+            addDebug('⏹️ Stopping recording...');
             isRecording = false;
             voiceBtn.classList.remove('recording');
             voiceBtn.textContent = '🎤';
             micIndicator.classList.remove('recording');
-            micStatus.textContent = `✓ ${philipsMic ? philipsMic.label : 'Microphone'} - Press record button`;
+            micStatus.textContent = `✓ ${philipsMic ? philipsMic.label : 'Ready'}`;
             
-            if (audioWorkletNode) {
-                audioWorkletNode.disconnect();
-                audioWorkletNode = null;
-            }
+            if (audioWorkletNode) audioWorkletNode.disconnect();
+            if (audioContext) audioContext.close();
+            if (mediaStream) mediaStream.getTracks().forEach(track => track.stop());
+            if (ws) ws.close();
             
-            if (audioContext) {
-                audioContext.close();
-                audioContext = null;
-            }
+            audioWorkletNode = null;
+            audioContext = null;
+            mediaStream = null;
+            ws = null;
             
-            if (mediaStream) {
-                mediaStream.getTracks().forEach(track => track.stop());
-                mediaStream = null;
-            }
-            
-            if (ws) {
-                ws.close();
-                ws = null;
-            }
+            addDebug('✓ Recording stopped');
         }
 
         function addMessage(text, isUser) {

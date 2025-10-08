@@ -90,21 +90,6 @@
             50% { opacity: 0.7; transform: scale(1.2); }
         }
 
-        .debug-panel {
-            padding: 10px 30px;
-            background: #1f1f1f;
-            border-bottom: 1px solid #3a3a3a;
-            font-family: 'Courier New', monospace;
-            font-size: 11px;
-            color: #00ff00;
-            max-height: 80px;
-            overflow-y: auto;
-        }
-
-        .debug-panel div {
-            padding: 2px 0;
-        }
-
         .specialty-selector {
             padding: 15px 30px;
             background: #242424;
@@ -240,23 +225,31 @@
             position: absolute;
             right: 70px;
             bottom: 12px;
-            background: none;
+            background: #404040;
             border: none;
             cursor: pointer;
             font-size: 20px;
-            padding: 5px 10px;
+            padding: 10px;
             border-radius: 50%;
             transition: all 0.3s;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
-        .voice-btn:hover { background: #3a3a3a; }
+        .voice-btn:hover { background: #505050; }
 
         .voice-btn.recording {
-            color: #dc3545;
+            background: #dc3545;
             animation: pulse 1.5s infinite;
         }
 
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        @keyframes pulse { 
+            0%, 100% { opacity: 1; transform: scale(1); } 
+            50% { opacity: 0.8; transform: scale(1.05); } 
+        }
 
         #sendBtn {
             background: #404040;
@@ -267,7 +260,10 @@
             cursor: pointer;
             width: 50px;
             height: 50px;
+            transition: all 0.3s;
         }
+
+        #sendBtn:hover { background: #505050; }
 
         .disclaimer {
             padding: 6px 30px;
@@ -310,22 +306,30 @@
             border-color: #505050;
             transform: translateY(-2px);
         }
+
+        .instructions {
+            margin-top: 20px;
+            padding: 15px;
+            background: #333;
+            border-radius: 8px;
+            font-size: 13px;
+            color: #b0b0b0;
+            text-align: left;
+        }
+
+        .instructions strong { color: #e0e0e0; }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>🏥 Flow Dictation</h1>
-            <p>Enterprise-Grade Medical Transcription with AssemblyAI</p>
+            <p>AI-Powered Medical Transcription & Report Generation</p>
         </div>
 
         <div class="microphone-status">
             <div class="mic-indicator" id="micIndicator"></div>
-            <span id="micStatus">Detecting devices...</span>
-        </div>
-
-        <div class="debug-panel" id="debugPanel">
-            <div>🔍 Button Detection Active - Press your dictaphone button now...</div>
+            <span id="micStatus">Click microphone button to start</span>
         </div>
 
         <div class="specialty-selector">
@@ -338,9 +342,16 @@
         <div class="chat-container" id="chatContainer">
             <div class="welcome-message">
                 <h2>Welcome to Flow Dictation! 👋</h2>
-                <p><strong>Testing Mode: Press ANY button on your Philips dictaphone</strong></p>
-                <p>We'll detect what signal it sends and configure it automatically</p>
+                <p>Real-time medical transcription powered by AssemblyAI</p>
                 
+                <div class="instructions">
+                    <strong>📝 How to use:</strong><br>
+                    1. Click the 🎤 microphone button below to start recording<br>
+                    2. Dictate your findings using your Philips microphone<br>
+                    3. Click the 🎤 button again to stop and generate report<br>
+                    4. Copy the formatted report to your PACS system
+                </div>
+
                 <div class="example-prompts">
                     <div class="example-prompt" onclick="useExample(this)">
                         <strong>🫁 Chest X-Ray</strong>
@@ -360,10 +371,10 @@
 
         <div class="input-container">
             <div class="input-wrapper">
-                <textarea id="userInput" placeholder="Dictation appears here..." rows="1"></textarea>
-                <button class="voice-btn" id="voiceBtn" title="Manual record (click)" onclick="toggleRecording()">🎤</button>
+                <textarea id="userInput" placeholder="Click microphone to dictate or type here..." rows="1"></textarea>
+                <button class="voice-btn" id="voiceBtn" title="Click to start/stop recording">🎤</button>
             </div>
-            <button id="sendBtn">
+            <button id="sendBtn" title="Generate report">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M12 19V5M5 12l7-7 7 7"/>
                 </svg>
@@ -381,7 +392,6 @@
         const voiceBtn = document.getElementById('voiceBtn');
         const micIndicator = document.getElementById('micIndicator');
         const micStatus = document.getElementById('micStatus');
-        const debugPanel = document.getElementById('debugPanel');
         
         let ws = null;
         let audioContext = null;
@@ -389,136 +399,34 @@
         let audioWorkletNode = null;
         let isRecording = false;
         let finalTranscript = '';
-        let philipsMic = null;
-        let detectedButton = null;
+        let selectedMic = null;
 
-        function addDebug(message) {
-            const div = document.createElement('div');
-            div.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
-            debugPanel.appendChild(div);
-            debugPanel.scrollTop = debugPanel.scrollHeight;
-            console.log(message);
-        }
-
-        // Detect ALL input devices
-        async function detectDevices() {
+        // Detect microphone on page load
+        async function detectMicrophone() {
             try {
-                // Audio devices
                 const devices = await navigator.mediaDevices.enumerateDevices();
                 const audioDevices = devices.filter(device => device.kind === 'audioinput');
                 
-                addDebug(`Found ${audioDevices.length} audio devices:`);
-                audioDevices.forEach((device, i) => {
-                    addDebug(`  ${i}: ${device.label || 'Unknown'}`);
-                });
-
-                philipsMic = audioDevices.find(device => 
+                // Prefer Philips microphone
+                selectedMic = audioDevices.find(device => 
                     device.label.toLowerCase().includes('philips') ||
                     device.label.toLowerCase().includes('speechmike') ||
-                    device.label.toLowerCase().includes('precision') ||
-                    device.label.toLowerCase().includes('dictaphone')
+                    device.label.toLowerCase().includes('precision')
                 ) || audioDevices[0];
 
-                if (philipsMic) {
+                if (selectedMic) {
                     micIndicator.classList.add('connected');
-                    micStatus.textContent = `✓ ${philipsMic.label}`;
-                    addDebug(`✓ Using: ${philipsMic.label}`);
+                    micStatus.textContent = `✓ ${selectedMic.label} - Click 🎤 to record`;
+                } else {
+                    micStatus.textContent = '⚠️ No microphone detected';
                 }
-
-                // HID devices
-                if (navigator.hid) {
-                    const hidDevices = await navigator.hid.getDevices();
-                    addDebug(`Found ${hidDevices.length} HID devices`);
-                    hidDevices.forEach(device => {
-                        addDebug(`  HID: ${device.productName || 'Unknown'}`);
-                    });
-                }
-
-                // USB devices  
-                if (navigator.usb) {
-                    const usbDevices = await navigator.usb.getDevices();
-                    addDebug(`Found ${usbDevices.length} USB devices`);
-                }
-
-                setupAllListeners();
             } catch (error) {
-                addDebug(`❌ Error: ${error.message}`);
+                console.error('Error detecting microphone:', error);
+                micStatus.textContent = '⚠️ Microphone access denied';
             }
         }
 
-        function setupAllListeners() {
-            // Keyboard events (catch EVERYTHING)
-            document.addEventListener('keydown', (e) => {
-                addDebug(`⌨️ KEY DOWN: key="${e.key}" code="${e.code}" keyCode=${e.keyCode} which=${e.which}`);
-                
-                if (!detectedButton && !isRecording) {
-                    detectedButton = e.code;
-                    addDebug(`✅ Detected dictaphone button: ${e.code}`);
-                    micStatus.textContent = `✓ Button configured: ${e.code}`;
-                }
-
-                if (detectedButton === e.code || ['F4','F5','F6','F7','F8','ControlLeft','ControlRight','Space'].includes(e.code)) {
-                    e.preventDefault();
-                    if (!isRecording) startRecording();
-                }
-            });
-
-            document.addEventListener('keyup', (e) => {
-                addDebug(`⌨️ KEY UP: ${e.code}`);
-                if (detectedButton === e.code || ['F4','F5','F6','F7','F8','ControlLeft','ControlRight','Space'].includes(e.code)) {
-                    e.preventDefault();
-                    if (isRecording) stopRecording();
-                }
-            });
-
-            // Mouse events
-            document.addEventListener('mousedown', (e) => {
-                if (e.button !== 0) { // Not left click
-                    addDebug(`🖱️ MOUSE DOWN: button=${e.button}`);
-                }
-            });
-
-            // Gamepad/HID
-            window.addEventListener('gamepadconnected', (e) => {
-                addDebug(`🎮 Gamepad connected: ${e.gamepad.id}`);
-                pollGamepad();
-            });
-
-            // Try to request HID access
-            if (navigator.hid) {
-                document.addEventListener('click', async () => {
-                    try {
-                        const devices = await navigator.hid.requestDevice({ filters: [] });
-                        addDebug(`✓ HID device authorized`);
-                    } catch (e) {
-                        // User cancelled, that's ok
-                    }
-                }, { once: true });
-            }
-
-            addDebug('✓ All listeners active - Press dictaphone button!');
-        }
-
-        function pollGamepad() {
-            const gamepads = navigator.getGamepads();
-            for (let gamepad of gamepads) {
-                if (gamepad) {
-                    gamepad.buttons.forEach((button, index) => {
-                        if (button.pressed && !isRecording) {
-                            addDebug(`🎮 Button ${index} pressed`);
-                            startRecording();
-                        } else if (!button.pressed && isRecording) {
-                            stopRecording();
-                        }
-                    });
-                }
-            }
-            if (isRecording || navigator.getGamepads().some(g => g)) {
-                requestAnimationFrame(pollGamepad);
-            }
-        }
-
-        detectDevices();
+        detectMicrophone();
 
         userInput.addEventListener('input', function() {
             this.style.height = 'auto';
@@ -529,29 +437,29 @@
             const text = element.querySelector('span').textContent.replace(/['"]/g, '');
             userInput.value = text;
             userInput.dispatchEvent(new Event('input'));
+            userInput.focus();
         }
 
-        function toggleRecording() {
+        voiceBtn.addEventListener('click', () => {
             if (isRecording) {
                 stopRecording();
             } else {
                 finalTranscript = userInput.value;
                 startRecording();
             }
-        }
+        });
 
         async function startRecording() {
             try {
-                addDebug('🔴 Starting recording...');
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 ws = new WebSocket(`${protocol}//${window.location.host}`);
                 
                 ws.onopen = async () => {
-                    addDebug('✓ WebSocket connected');
+                    console.log('WebSocket connected');
                     
                     const constraints = {
                         audio: {
-                            deviceId: philipsMic ? { exact: philipsMic.deviceId } : undefined,
+                            deviceId: selectedMic ? { exact: selectedMic.deviceId } : undefined,
                             channelCount: 1,
                             sampleRate: 16000,
                             echoCancellation: true,
@@ -561,7 +469,6 @@
                     };
 
                     mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-                    addDebug('✓ Audio stream acquired');
                     
                     audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
                     const source = audioContext.createMediaStreamSource(mediaStream);
@@ -596,10 +503,9 @@
                     
                     isRecording = true;
                     voiceBtn.classList.add('recording');
-                    voiceBtn.textContent = '🔴';
+                    voiceBtn.textContent = '⏹️';
                     micIndicator.classList.add('recording');
-                    micStatus.textContent = `🔴 Recording`;
-                    addDebug('✓ Recording started');
+                    micStatus.textContent = `🔴 Recording - Click 🎤 to stop`;
                 };
                 
                 ws.onmessage = (event) => {
@@ -609,45 +515,54 @@
                         if (data.is_final) {
                             finalTranscript += (finalTranscript ? ' ' : '') + data.text;
                             userInput.value = finalTranscript;
-                            addDebug(`📝 Transcript: ${data.text}`);
                         } else {
                             userInput.value = finalTranscript + (finalTranscript ? ' ' : '') + data.text;
                         }
                         userInput.dispatchEvent(new Event('input'));
                     } else if (data.type === 'error') {
-                        addDebug(`❌ Error: ${data.message}`);
+                        console.error('Transcription error:', data.message);
+                        alert('Transcription error: ' + data.message);
+                        stopRecording();
                     }
                 };
                 
                 ws.onerror = (error) => {
-                    addDebug(`❌ WebSocket error`);
+                    console.error('WebSocket error:', error);
                     stopRecording();
                 };
                 
             } catch (error) {
-                addDebug(`❌ Recording error: ${error.message}`);
+                console.error('Error starting recording:', error);
+                alert('Could not start recording: ' + error.message);
             }
         }
 
         function stopRecording() {
-            addDebug('⏹️ Stopping recording...');
             isRecording = false;
             voiceBtn.classList.remove('recording');
             voiceBtn.textContent = '🎤';
             micIndicator.classList.remove('recording');
-            micStatus.textContent = `✓ ${philipsMic ? philipsMic.label : 'Ready'}`;
+            micStatus.textContent = `✓ ${selectedMic ? selectedMic.label : 'Microphone'} - Click 🎤 to record`;
             
-            if (audioWorkletNode) audioWorkletNode.disconnect();
-            if (audioContext) audioContext.close();
-            if (mediaStream) mediaStream.getTracks().forEach(track => track.stop());
-            if (ws) ws.close();
+            if (audioWorkletNode) {
+                audioWorkletNode.disconnect();
+                audioWorkletNode = null;
+            }
             
-            audioWorkletNode = null;
-            audioContext = null;
-            mediaStream = null;
-            ws = null;
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
             
-            addDebug('✓ Recording stopped');
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+            }
+            
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
         }
 
         function addMessage(text, isUser) {
@@ -757,6 +672,7 @@
                 
                 addMessage(report, false);
                 sendBtn.disabled = false;
+                userInput.focus();
             });
         }
 
@@ -767,6 +683,8 @@
                 sendMessage();
             }
         });
+
+        userInput.focus();
     </script>
 </body>
 </html>

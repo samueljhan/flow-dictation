@@ -75,9 +75,19 @@
             animation: pulse-green 2s infinite;
         }
 
+        .mic-indicator.recording {
+            background: #dc3545;
+            animation: pulse-red 1s infinite;
+        }
+
         @keyframes pulse-green {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
+        }
+
+        @keyframes pulse-red {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(1.2); }
         }
 
         .specialty-selector {
@@ -222,12 +232,14 @@
             padding: 5px 10px;
             border-radius: 50%;
             transition: all 0.3s;
+            opacity: 0.5;
         }
 
         .voice-btn:hover { background: #3a3a3a; }
 
         .voice-btn.recording {
             color: #dc3545;
+            opacity: 1;
             animation: pulse 1.5s infinite;
         }
 
@@ -285,6 +297,15 @@
             border-color: #505050;
             transform: translateY(-2px);
         }
+
+        .button-help {
+            margin-top: 20px;
+            padding: 15px;
+            background: #333;
+            border-radius: 8px;
+            font-size: 13px;
+            color: #b0b0b0;
+        }
     </style>
 </head>
 <body>
@@ -296,7 +317,7 @@
 
         <div class="microphone-status">
             <div class="mic-indicator" id="micIndicator"></div>
-            <span id="micStatus">Detecting microphone...</span>
+            <span id="micStatus">Detecting Philips dictaphone...</span>
         </div>
 
         <div class="specialty-selector">
@@ -309,8 +330,15 @@
         <div class="chat-container" id="chatContainer">
             <div class="welcome-message">
                 <h2>Welcome to Flow Dictation! 👋</h2>
-                <p>Press the record button on your Philips dictaphone to start transcribing.</p>
+                <p>Press and hold the record button on your Philips dictaphone to start transcribing.</p>
+                <p>Release to stop and generate report.</p>
                 
+                <div class="button-help">
+                    <strong>🎤 Dictaphone Button Detection:</strong><br>
+                    Listening for: Record button, F4, F5, Spacebar, or Ctrl keys<br>
+                    <em>Press any supported button to activate recording</em>
+                </div>
+
                 <div class="example-prompts">
                     <div class="example-prompt" onclick="useExample(this)">
                         <strong>🫁 Chest X-Ray</strong>
@@ -330,8 +358,8 @@
 
         <div class="input-container">
             <div class="input-wrapper">
-                <textarea id="userInput" placeholder="Type or dictate your findings..." rows="1"></textarea>
-                <button class="voice-btn" id="voiceBtn" title="Start dictation">🎤</button>
+                <textarea id="userInput" placeholder="Dictation appears here..." rows="1"></textarea>
+                <button class="voice-btn" id="voiceBtn" title="Dictaphone status">🎤</button>
             </div>
             <button id="sendBtn">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -359,6 +387,7 @@
         let isRecording = false;
         let finalTranscript = '';
         let philipsMic = null;
+        let detectedKeys = new Set();
 
         // Detect Philips microphone
         async function detectPhilipsMicrophone() {
@@ -366,60 +395,114 @@
                 const devices = await navigator.mediaDevices.enumerateDevices();
                 const audioDevices = devices.filter(device => device.kind === 'audioinput');
                 
-                // Look for Philips microphone (adjust the name match as needed)
+                // Look for Philips microphone
                 philipsMic = audioDevices.find(device => 
                     device.label.toLowerCase().includes('philips') ||
                     device.label.toLowerCase().includes('speechmike') ||
-                    device.label.toLowerCase().includes('precision')
+                    device.label.toLowerCase().includes('precision') ||
+                    device.label.toLowerCase().includes('dictaphone')
                 );
 
                 if (philipsMic) {
                     micIndicator.classList.add('connected');
-                    micStatus.textContent = `✓ ${philipsMic.label}`;
+                    micStatus.textContent = `✓ ${philipsMic.label} - Press record button to start`;
                     console.log('Philips microphone detected:', philipsMic.label);
-                    
-                    // Listen for keyboard events from dictaphone button
-                    setupDictaphoneListener();
                 } else {
                     // Use default microphone
                     const defaultMic = audioDevices.find(d => d.deviceId === 'default') || audioDevices[0];
                     if (defaultMic) {
                         philipsMic = defaultMic;
                         micIndicator.classList.add('connected');
-                        micStatus.textContent = `Using: ${defaultMic.label}`;
+                        micStatus.textContent = `Using: ${defaultMic.label} - Press record button to start`;
                     } else {
                         micStatus.textContent = '⚠️ No microphone detected';
                     }
                 }
+                
+                // Setup button listeners
+                setupDictaphoneButtonListeners();
             } catch (error) {
                 console.error('Error detecting microphone:', error);
                 micStatus.textContent = '⚠️ Microphone access denied';
             }
         }
 
-        // Setup listener for dictaphone button (usually sends keyboard event)
-        function setupDictaphoneListener() {
-            // Philips dictaphones typically send F4 or other function keys
-            document.addEventListener('keydown', (e) => {
-                // F4, F5, or custom dictaphone key
-                if (e.key === 'F4' || e.key === 'F5' || e.code === 'MediaRecord') {
+        // Setup comprehensive button listeners for Philips dictaphone
+        function setupDictaphoneButtonListeners() {
+            // Listen for ALL key events to detect what the dictaphone sends
+            window.addEventListener('keydown', (e) => {
+                // Log the key to help identify the dictaphone button
+                if (!detectedKeys.has(e.code)) {
+                    detectedKeys.add(e.code);
+                    console.log('Key detected:', e.key, 'Code:', e.code, 'KeyCode:', e.keyCode);
+                }
+
+                // Common dictaphone buttons:
+                // F4, F5, F6 (function keys)
+                // Space (some models)
+                // Control keys (left/right)
+                // Media keys
+                const dictaphoneKeys = [
+                    'F4', 'F5', 'F6', 'F7', 'F8',
+                    'ControlLeft', 'ControlRight',
+                    'Space',
+                    'MediaRecord', 'MediaPlayPause'
+                ];
+
+                if (dictaphoneKeys.includes(e.code) || dictaphoneKeys.includes(e.key)) {
                     e.preventDefault();
                     if (!isRecording) {
+                        console.log('Dictaphone button pressed:', e.code);
                         startRecording();
                     }
                 }
             });
 
-            document.addEventListener('keyup', (e) => {
-                if (e.key === 'F4' || e.key === 'F5' || e.code === 'MediaRecord') {
+            window.addEventListener('keyup', (e) => {
+                const dictaphoneKeys = [
+                    'F4', 'F5', 'F6', 'F7', 'F8',
+                    'ControlLeft', 'ControlRight',
+                    'Space',
+                    'MediaRecord', 'MediaPlayPause'
+                ];
+
+                if (dictaphoneKeys.includes(e.code) || dictaphoneKeys.includes(e.key)) {
                     e.preventDefault();
                     if (isRecording) {
+                        console.log('Dictaphone button released:', e.code);
                         stopRecording();
                     }
                 }
             });
 
-            console.log('Dictaphone button listener activated (F4/F5)');
+            // Also listen for gamepad/HID buttons (some Philips use this)
+            window.addEventListener('gamepadconnected', (e) => {
+                console.log('Gamepad/HID device connected:', e.gamepad.id);
+                pollGamepad();
+            });
+
+            console.log('✓ Dictaphone button listeners activated');
+            console.log('Supported triggers: F4-F8, Ctrl, Space, Media keys');
+        }
+
+        // Poll for gamepad/HID button presses
+        function pollGamepad() {
+            const gamepads = navigator.getGamepads();
+            for (let gamepad of gamepads) {
+                if (gamepad && gamepad.buttons) {
+                    gamepad.buttons.forEach((button, index) => {
+                        if (button.pressed && !isRecording) {
+                            console.log('HID button pressed:', index);
+                            startRecording();
+                        } else if (!button.pressed && isRecording) {
+                            stopRecording();
+                        }
+                    });
+                }
+            }
+            if (isRecording) {
+                requestAnimationFrame(pollGamepad);
+            }
         }
 
         // Detect microphone on page load
@@ -445,7 +528,6 @@
                 ws.onopen = async () => {
                     console.log('WebSocket connected');
                     
-                    // Use the detected Philips microphone
                     const constraints = {
                         audio: {
                             deviceId: philipsMic ? { exact: philipsMic.deviceId } : undefined,
@@ -493,7 +575,8 @@
                     isRecording = true;
                     voiceBtn.classList.add('recording');
                     voiceBtn.textContent = '🔴';
-                    micStatus.textContent = `🔴 Recording with ${philipsMic.label}`;
+                    micIndicator.classList.add('recording');
+                    micStatus.textContent = `🔴 Recording - Release button to stop`;
                 };
                 
                 ws.onmessage = (event) => {
@@ -509,7 +592,6 @@
                         userInput.dispatchEvent(new Event('input'));
                     } else if (data.type === 'error') {
                         console.error('Transcription error:', data.message);
-                        alert('Transcription error: ' + data.message);
                         stopRecording();
                     }
                 };
@@ -521,7 +603,7 @@
                 
             } catch (error) {
                 console.error('Error starting recording:', error);
-                alert('Could not start recording: ' + error.message);
+                micStatus.textContent = '⚠️ Error: ' + error.message;
             }
         }
 
@@ -529,7 +611,8 @@
             isRecording = false;
             voiceBtn.classList.remove('recording');
             voiceBtn.textContent = '🎤';
-            micStatus.textContent = `✓ ${philipsMic ? philipsMic.label : 'Microphone ready'}`;
+            micIndicator.classList.remove('recording');
+            micStatus.textContent = `✓ ${philipsMic ? philipsMic.label : 'Microphone'} - Press record button`;
             
             if (audioWorkletNode) {
                 audioWorkletNode.disconnect();
@@ -551,15 +634,6 @@
                 ws = null;
             }
         }
-
-        voiceBtn.addEventListener('click', () => {
-            if (isRecording) {
-                stopRecording();
-            } else {
-                finalTranscript = userInput.value;
-                startRecording();
-            }
-        });
 
         function addMessage(text, isUser) {
             const welcomeMsg = chatContainer.querySelector('.welcome-message');
@@ -668,7 +742,6 @@
                 
                 addMessage(report, false);
                 sendBtn.disabled = false;
-                userInput.focus();
             });
         }
 
@@ -679,8 +752,6 @@
                 sendMessage();
             }
         });
-
-        userInput.focus();
     </script>
 </body>
 </html>

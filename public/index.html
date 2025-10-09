@@ -268,11 +268,10 @@
         #userInput:focus { outline: none; border-color: #505050; }
 
         .voice-btn {
-            background: #3a3a3a;
-            border: 2px solid #505050;
+            background: transparent;
+            border: none;
             cursor: pointer;
             padding: 0;
-            border-radius: 50%;
             transition: all 0.3s;
             width: 50px;
             height: 50px;
@@ -284,33 +283,46 @@
         }
 
         .voice-btn:hover { 
-            border-color: #606060;
             transform: scale(1.05);
         }
 
         .voice-btn.recording {
-            border-color: #dc3545;
             animation: pulse-border 1.5s infinite;
         }
 
         .voice-btn svg {
-            width: 26px;
-            height: 26px;
+            width: 50px;
+            height: 50px;
         }
 
-        .voice-btn.recording svg circle {
+        .voice-btn .outer-circle {
+            fill: #6B6B6B;
+        }
+
+        .voice-btn .inner-circle {
+            fill: #2C2C2C;
+        }
+
+        .voice-btn .mic-elements {
+            fill: #808080;
+        }
+
+        .voice-btn.recording .outer-circle {
+            fill: #dc3545;
+        }
+
+        .voice-btn.recording .inner-circle {
             fill: #1a1a1a;
         }
 
-        .voice-btn.recording svg path,
-        .voice-btn.recording svg line {
+        .voice-btn.recording .mic-elements {
             fill: #dc3545;
         }
 
         .voice-btn .rec-dot {
             position: absolute;
-            bottom: -2px;
-            right: -2px;
+            bottom: 2px;
+            right: 2px;
             width: 10px;
             height: 10px;
             background: #dc3545;
@@ -448,15 +460,34 @@
             <div class="input-wrapper">
                 <textarea id="userInput" placeholder="Dictation appears here..." rows="1"></textarea>
                 <button class="voice-btn" id="voiceBtn" title="Click to record or use dictaphone button">
-                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                        <circle cx="12" cy="12" r="11" fill="#2a2a2a" stroke="#505050" stroke-width="1"/>
-                        <path d="M12 4a2.5 2.5 0 0 0-2.5 2.5v4a2.5 2.5 0 0 0 5 0v-4A2.5 2.5 0 0 0 12 4z" fill="#909090"/>
-                        <path d="M8 10v0.5a4 4 0 0 0 8 0V10" fill="none" stroke="#909090" stroke-width="1.5" stroke-linecap="round"/>
-                        <line x1="12" y1="14.5" x2="12" y2="17" stroke="#909090" stroke-width="1.5" stroke-linecap="round"/>
-                        <line x1="10" y1="17" x2="14" y2="17" stroke="#909090" stroke-width="1.5" stroke-linecap="round"/>
-                        <path d="M6 18.5 Q9 17.5 12 17.5 T18 18.5" fill="none" stroke="#909090" stroke-width="1.2" stroke-linecap="round"/>
-                        <path d="M6 20 Q9 19 12 19 T18 20" fill="none" stroke="#909090" stroke-width="1.2" stroke-linecap="round"/>
-                        <path d="M6 21.5 Q9 20.5 12 20.5 T18 21.5" fill="none" stroke="#909090" stroke-width="1.2" stroke-linecap="round"/>
+                    <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                        <!-- Outer gray ring -->
+                        <circle cx="50" cy="50" r="48" class="outer-circle" stroke="#6B6B6B" stroke-width="4"/>
+                        
+                        <!-- Inner dark circle background -->
+                        <circle cx="50" cy="50" r="44" class="inner-circle"/>
+                        
+                        <!-- Microphone capsule -->
+                        <path class="mic-elements" d="M50 25 C50 25 50 25 50 25 C43 25 37 30 37 37 L37 47 C37 54 43 60 50 60 C57 60 63 54 63 47 L63 37 C63 30 57 25 50 25 Z"/>
+                        
+                        <!-- Microphone capsule inner -->
+                        <ellipse cx="50" cy="40" rx="8" ry="12" class="mic-elements" opacity="0.5"/>
+                        
+                        <!-- Side handles -->
+                        <ellipse cx="32" cy="45" rx="3" ry="5" class="mic-elements"/>
+                        <ellipse cx="68" cy="45" rx="3" ry="5" class="mic-elements"/>
+                        
+                        <!-- Curved lines for sound indicator (arc shape) -->
+                        <path class="mic-elements" d="M30 42 C30 42 30 47 30 47 C30 58 38 67 50 67 C62 67 70 58 70 47 L70 42" fill="none" stroke="#808080" stroke-width="3" stroke-linecap="round"/>
+                        
+                        <!-- Microphone stand -->
+                        <line x1="50" y1="67" x2="50" y2="77" class="mic-elements" stroke="#808080" stroke-width="3" stroke-linecap="round"/>
+                        <line x1="42" y1="77" x2="58" y2="77" class="mic-elements" stroke="#808080" stroke-width="3" stroke-linecap="round"/>
+                        
+                        <!-- Wave lines at bottom -->
+                        <path class="mic-elements" d="M20 80 Q35 75 50 75 T80 80" fill="none" stroke="#808080" stroke-width="2.5" stroke-linecap="round"/>
+                        <path class="mic-elements" d="M20 85 Q35 80 50 80 T80 85" fill="none" stroke="#808080" stroke-width="2.5" stroke-linecap="round"/>
+                        <path class="mic-elements" d="M20 90 Q35 85 50 85 T80 90" fill="none" stroke="#808080" stroke-width="2.5" stroke-linecap="round"/>
                     </svg>
                     <div class="rec-dot"></div>
                 </button>

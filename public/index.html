@@ -280,7 +280,6 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            position: absolute;
         }
 
         .voice-btn:hover { 
@@ -294,13 +293,15 @@
         }
 
         .voice-btn svg {
-            width: 24px;
-            height: 24px;
-            fill: #909090;
+            width: 20px;
+            height: 20px;
+            stroke: #909090;
+            fill: none;
+            stroke-width: 2;
         }
 
         .voice-btn.recording svg {
-            fill: #dc3545;
+            stroke: #dc3545;
         }
 
         .voice-btn .rec-dot {
@@ -340,6 +341,7 @@
             width: 50px;
             height: 50px;
             transition: all 0.3s;
+            flex-shrink: 0;
         }
 
         #sendBtn:hover { background: #505050; }
@@ -440,15 +442,14 @@
             <div class="input-wrapper">
                 <textarea id="userInput" placeholder="Dictation appears here..." rows="1"></textarea>
                 <button class="voice-btn" id="voiceBtn" title="Click to record or use dictaphone button">
-                    <svg viewBox="0 0 24 24" fill="none">
-                        <circle cx="12" cy="12" r="11" stroke="none"/>
-                        <path d="M12 2C12 2 12 2 12 2C12.8 2.2 13.5 2.6 14 3.2C14.5 3.8 14.8 4.5 14.9 5.3C15 6.1 14.9 6.9 14.6 7.6C14.3 8.3 13.8 8.9 13.2 9.3L13.2 9.3C12.8 9.6 12.4 9.7 12 9.7C11.6 9.7 11.2 9.6 10.8 9.3C10.2 8.9 9.7 8.3 9.4 7.6C9.1 6.9 9 6.1 9.1 5.3C9.2 4.5 9.5 3.8 10 3.2C10.5 2.6 11.2 2.2 12 2Z"/>
-                        <path d="M7 10C7 10 7 10 7 10C7 11 7.2 12 7.6 12.8C8 13.6 8.6 14.3 9.3 14.8C10 15.3 10.9 15.6 11.8 15.7C12.7 15.8 13.6 15.6 14.4 15.2"/>
-                        <line x1="12" y1="16" x2="12" y2="20" stroke-width="1.5"/>
-                        <line x1="9" y1="20" x2="15" y2="20" stroke-width="1.5"/>
-                        <path d="M6 16C6 16 7.5 15 9 15C10.5 15 12 16 13.5 16C15 16 16.5 15 18 15" stroke-width="1.2" stroke-linecap="round"/>
-                        <path d="M6 19C6 19 7.5 18 9 18C10.5 18 12 19 13.5 19C15 19 16.5 18 18 18" stroke-width="1.2" stroke-linecap="round"/>
-                        <path d="M6 13C6 13 7.5 12 9 12C10.5 12 12 13 13.5 13C15 13 16.5 12 18 12" stroke-width="1.2" stroke-linecap="round"/>
+                    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 2 C12 2 12 2 12 2 C12.8 2.2 13.5 2.6 14 3.2 C14.5 3.8 14.8 4.5 14.9 5.3 C15 6.1 14.9 6.9 14.6 7.6 C14.3 8.3 13.8 8.9 13.2 9.3 L13.2 9.3 C12.8 9.6 12.4 9.7 12 9.7 C11.6 9.7 11.2 9.6 10.8 9.3 C10.2 8.9 9.7 8.3 9.4 7.6 C9.1 6.9 9 6.1 9.1 5.3 C9.2 4.5 9.5 3.8 10 3.2 C10.5 2.6 11.2 2.2 12 2 Z" stroke-linejoin="round" stroke-linecap="round"/>
+                        <path d="M7 10 C7 10 7 10 7 10 C7 11 7.2 12 7.6 12.8 C8 13.6 8.6 14.3 9.3 14.8 C10 15.3 10.9 15.6 11.8 15.7 C12.7 15.8 13.6 15.6 14.4 15.2" stroke-linecap="round"/>
+                        <line x1="12" y1="16" x2="12" y2="20" stroke-linecap="round"/>
+                        <line x1="9" y1="20" x2="15" y2="20" stroke-linecap="round"/>
+                        <path d="M6 16 C6 16 7.5 15 9 15 C10.5 15 12 16 13.5 16 C15 16 16.5 15 18 15" stroke-linecap="round"/>
+                        <path d="M6 19 C6 19 7.5 18 9 18 C10.5 18 12 19 13.5 19 C15 19 16.5 18 18 18" stroke-linecap="round"/>
+                        <path d="M6 13 C6 13 7.5 12 9 12 C10.5 12 12 13 13.5 13 C15 13 16.5 12 18 12" stroke-linecap="round"/>
                     </svg>
                     <div class="rec-dot"></div>
                 </button>
@@ -503,14 +504,14 @@
                 });
 
                 if (devices.length === 0) {
-                    alert('No Philips dictaphone found. Make sure it\'s plugged in.');
+                    alert('No Philips dictaphone found. Make sure it is plugged in.');
                     return;
                 }
 
                 hidDevice = devices[0];
                 await hidDevice.open();
 
-                setupText.textContent = \`✓ Connected: \${hidDevice.productName}\`;
+                setupText.textContent = 'Connected: ' + hidDevice.productName;
                 setupIcon.textContent = '✅';
                 setupBtn.textContent = 'Connected';
                 setupBtn.classList.add('connected');
@@ -555,7 +556,7 @@
 
                 if (selectedMic) {
                     micIndicator.classList.add('connected');
-                    micStatus.textContent = \`✓ \${selectedMic.label}\`;
+                    micStatus.textContent = '✓ ' + selectedMic.label;
                 }
             } catch (error) {
                 console.error('Error detecting microphone:', error);
@@ -588,7 +589,7 @@
         async function startRecording() {
             try {
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                ws = new WebSocket(\`\${protocol}//\${window.location.host}\`);
+                ws = new WebSocket(protocol + '//' + window.location.host);
                 
                 ws.onopen = async () => {
                     const constraints = {
@@ -607,23 +608,9 @@
                     audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
                     const source = audioContext.createMediaStreamSource(mediaStream);
                     
-                    await audioContext.audioWorklet.addModule('data:text/javascript,' + encodeURIComponent(\`
-                        class AudioProcessor extends AudioWorkletProcessor {
-                            process(inputs) {
-                                const input = inputs[0];
-                                if (input.length > 0) {
-                                    const samples = input[0];
-                                    const pcm = new Int16Array(samples.length);
-                                    for (let i = 0; i < samples.length; i++) {
-                                        pcm[i] = Math.max(-32768, Math.min(32767, samples[i] * 32768));
-                                    }
-                                    this.port.postMessage(pcm.buffer);
-                                }
-                                return true;
-                            }
-                        }
-                        registerProcessor('audio-processor', AudioProcessor);
-                    \`));
+                    const processorCode = 'class AudioProcessor extends AudioWorkletProcessor { process(inputs) { const input = inputs[0]; if (input.length > 0) { const samples = input[0]; const pcm = new Int16Array(samples.length); for (let i = 0; i < samples.length; i++) { pcm[i] = Math.max(-32768, Math.min(32767, samples[i] * 32768)); } this.port.postMessage(pcm.buffer); } return true; } } registerProcessor("audio-processor", AudioProcessor);';
+                    
+                    await audioContext.audioWorklet.addModule('data:text/javascript,' + encodeURIComponent(processorCode));
                     
                     audioWorkletNode = new AudioWorkletNode(audioContext, 'audio-processor');
                     audioWorkletNode.port.onmessage = (event) => {
@@ -638,7 +625,7 @@
                     isRecording = true;
                     voiceBtn.classList.add('recording');
                     micIndicator.classList.add('recording');
-                    micStatus.textContent = \`🔴 Recording - Release to stop\`;
+                    micStatus.textContent = '🔴 Recording - Release to stop';
                 };
                 
                 ws.onmessage = (event) => {
@@ -691,7 +678,7 @@
             if (welcomeMsg) welcomeMsg.remove();
 
             const messageDiv = document.createElement('div');
-            messageDiv.className = \`message \${isUser ? 'user' : 'assistant'}\`;
+            messageDiv.className = 'message ' + (isUser ? 'user' : 'assistant');
             
             const avatar = document.createElement('div');
             avatar.className = 'avatar';
@@ -712,35 +699,32 @@
                 const response = await fetch('/api/generate-report', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ findings, specialty: 'radiology' })
+                    body: JSON.stringify({ findings: findings, specialty: 'radiology' })
                 });
 
-                if (!response.ok) throw new Error(\`HTTP error! status: \${response.status}\`);
+                if (!response.ok) throw new Error('HTTP error! status: ' + response.status);
                 const data = await response.json();
                 return formatReportHTML(data.report);
                 
             } catch (error) {
                 console.error('Error:', error);
-                return \`<p style="color: #ff6b6b;">⚠️ Error generating report.</p>\`;
+                return '<p style="color: #ff6b6b;">⚠️ Error generating report.</p>';
             }
         }
 
         function formatReportHTML(reportText) {
-            const sections = reportText.split('\\n\\n');
+            const sections = reportText.split('\n\n');
             let html = '';
             
             sections.forEach(section => {
-                const lines = section.split('\\n');
+                const lines = section.split('\n');
                 const heading = lines[0];
-                const content = lines.slice(1).join('\\n');
+                const content = lines.slice(1).join('\n');
                 
-                if (heading.match(/^[A-Z\\s]+:?$/)) {
-                    html += \`<div class="report-section">
-                        <h3>\${heading.replace(':', '')}</h3>
-                        <p>\${content.trim()}</p>
-                    </div>\`;
+                if (heading.match(/^[A-Z\s]+:?$/)) {
+                    html += '<div class="report-section"><h3>' + heading.replace(':', '') + '</h3><p>' + content.trim() + '</p></div>';
                 } else {
-                    html += \`<div class="report-section"><p>\${section}</p></div>\`;
+                    html += '<div class="report-section"><p>' + section + '</p></div>';
                 }
             });
             
@@ -754,13 +738,13 @@
             let textToCopy = '';
             
             sections.forEach(section => {
-                const heading = section.querySelector('h3')?.textContent || '';
-                const paragraphs = Array.from(section.querySelectorAll('p'))
-                    .map(p => p.textContent).join('\\n');
-                if (heading) {
-                    textToCopy += \`\${heading}:\\n\${paragraphs}\\n\\n\`;
+                const heading = section.querySelector('h3');
+                const headingText = heading ? heading.textContent : '';
+                const paragraphs = Array.from(section.querySelectorAll('p')).map(p => p.textContent).join('\n');
+                if (headingText) {
+                    textToCopy += headingText + ':\n' + paragraphs + '\n\n';
                 } else {
-                    textToCopy += \`\${paragraphs}\\n\\n\`;
+                    textToCopy += paragraphs + '\n\n';
                 }
             });
 

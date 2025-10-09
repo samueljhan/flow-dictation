@@ -240,51 +240,52 @@
             border-top: 1px solid #3a3a3a;
             display: flex;
             gap: 15px;
-            align-items: flex-end;
+            align-items: center;
         }
 
         .input-wrapper { 
             flex: 1; 
-            position: relative; 
+            display: flex;
+            align-items: center;
+            gap: 15px;
         }
 
         #userInput {
-            width: 100%;
-            padding: 15px 110px 15px 20px;
+            flex: 1;
+            padding: 0 20px;
             border: 1px solid #3a3a3a;
             border-radius: 25px;
             font-size: 15px;
             resize: none;
             font-family: inherit;
-            min-height: 50px;
-            max-height: 150px;
+            height: 50px;
+            line-height: 50px;
             background: #2a2a2a;
             color: #e0e0e0;
+            overflow: hidden;
         }
 
         #userInput:focus { outline: none; border-color: #505050; }
 
         .voice-btn {
-            position: absolute;
-            right: 60px;
-            top: 50%;
-            transform: translateY(-50%);
             background: #3a3a3a;
             border: 2px solid #505050;
             cursor: pointer;
             padding: 0;
             border-radius: 50%;
             transition: all 0.3s;
-            width: 40px;
-            height: 40px;
+            width: 50px;
+            height: 50px;
             display: flex;
             align-items: center;
             justify-content: center;
+            flex-shrink: 0;
+            position: relative;
         }
 
         .voice-btn:hover { 
             border-color: #606060;
-            transform: translateY(-50%) scale(1.05);
+            transform: scale(1.05);
         }
 
         .voice-btn.recording {
@@ -293,15 +294,17 @@
         }
 
         .voice-btn svg {
-            width: 20px;
-            height: 20px;
-            stroke: #909090;
-            fill: none;
-            stroke-width: 2;
+            width: 26px;
+            height: 26px;
         }
 
-        .voice-btn.recording svg {
-            stroke: #dc3545;
+        .voice-btn.recording svg circle {
+            fill: #1a1a1a;
+        }
+
+        .voice-btn.recording svg path,
+        .voice-btn.recording svg line {
+            fill: #dc3545;
         }
 
         .voice-btn .rec-dot {
@@ -313,7 +316,7 @@
             background: #dc3545;
             border-radius: 50%;
             opacity: 0;
-            border: 2px solid #2a2a2a;
+            border: 2px solid #242424;
         }
 
         .voice-btn.recording .rec-dot {
@@ -322,8 +325,8 @@
         }
 
         @keyframes pulse-border { 
-            0%, 100% { opacity: 1; transform: translateY(-50%) scale(1); } 
-            50% { opacity: 0.8; transform: translateY(-50%) scale(1.05); } 
+            0%, 100% { opacity: 1; transform: scale(1); } 
+            50% { opacity: 0.8; transform: scale(1.05); } 
         }
 
         @keyframes pulse-dot {
@@ -335,13 +338,16 @@
             background: #404040;
             color: #e0e0e0;
             border: none;
-            padding: 15px;
+            padding: 0;
             border-radius: 50%;
             cursor: pointer;
             width: 50px;
             height: 50px;
             transition: all 0.3s;
             flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
 
         #sendBtn:hover { background: #505050; }
@@ -443,13 +449,14 @@
                 <textarea id="userInput" placeholder="Dictation appears here..." rows="1"></textarea>
                 <button class="voice-btn" id="voiceBtn" title="Click to record or use dictaphone button">
                     <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                        <path d="M12 2 C12 2 12 2 12 2 C12.8 2.2 13.5 2.6 14 3.2 C14.5 3.8 14.8 4.5 14.9 5.3 C15 6.1 14.9 6.9 14.6 7.6 C14.3 8.3 13.8 8.9 13.2 9.3 L13.2 9.3 C12.8 9.6 12.4 9.7 12 9.7 C11.6 9.7 11.2 9.6 10.8 9.3 C10.2 8.9 9.7 8.3 9.4 7.6 C9.1 6.9 9 6.1 9.1 5.3 C9.2 4.5 9.5 3.8 10 3.2 C10.5 2.6 11.2 2.2 12 2 Z" stroke-linejoin="round" stroke-linecap="round"/>
-                        <path d="M7 10 C7 10 7 10 7 10 C7 11 7.2 12 7.6 12.8 C8 13.6 8.6 14.3 9.3 14.8 C10 15.3 10.9 15.6 11.8 15.7 C12.7 15.8 13.6 15.6 14.4 15.2" stroke-linecap="round"/>
-                        <line x1="12" y1="16" x2="12" y2="20" stroke-linecap="round"/>
-                        <line x1="9" y1="20" x2="15" y2="20" stroke-linecap="round"/>
-                        <path d="M6 16 C6 16 7.5 15 9 15 C10.5 15 12 16 13.5 16 C15 16 16.5 15 18 15" stroke-linecap="round"/>
-                        <path d="M6 19 C6 19 7.5 18 9 18 C10.5 18 12 19 13.5 19 C15 19 16.5 18 18 18" stroke-linecap="round"/>
-                        <path d="M6 13 C6 13 7.5 12 9 12 C10.5 12 12 13 13.5 13 C15 13 16.5 12 18 12" stroke-linecap="round"/>
+                        <circle cx="12" cy="12" r="11" fill="#2a2a2a" stroke="#505050" stroke-width="1"/>
+                        <path d="M12 4a2.5 2.5 0 0 0-2.5 2.5v4a2.5 2.5 0 0 0 5 0v-4A2.5 2.5 0 0 0 12 4z" fill="#909090"/>
+                        <path d="M8 10v0.5a4 4 0 0 0 8 0V10" fill="none" stroke="#909090" stroke-width="1.5" stroke-linecap="round"/>
+                        <line x1="12" y1="14.5" x2="12" y2="17" stroke="#909090" stroke-width="1.5" stroke-linecap="round"/>
+                        <line x1="10" y1="17" x2="14" y2="17" stroke="#909090" stroke-width="1.5" stroke-linecap="round"/>
+                        <path d="M6 18.5 Q9 17.5 12 17.5 T18 18.5" fill="none" stroke="#909090" stroke-width="1.2" stroke-linecap="round"/>
+                        <path d="M6 20 Q9 19 12 19 T18 20" fill="none" stroke="#909090" stroke-width="1.2" stroke-linecap="round"/>
+                        <path d="M6 21.5 Q9 20.5 12 20.5 T18 21.5" fill="none" stroke="#909090" stroke-width="1.2" stroke-linecap="round"/>
                     </svg>
                     <div class="rec-dot"></div>
                 </button>
@@ -566,14 +573,12 @@
         detectMicrophone();
 
         userInput.addEventListener('input', function() {
-            this.style.height = 'auto';
-            this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+            this.style.height = '50px';
         });
 
         function useExample(element) {
             const text = element.querySelector('span').textContent.replace(/['"]/g, '');
             userInput.value = text;
-            userInput.dispatchEvent(new Event('input'));
             userInput.focus();
         }
 
@@ -638,7 +643,6 @@
                         } else {
                             userInput.value = finalTranscript + (finalTranscript ? ' ' : '') + data.text;
                         }
-                        userInput.dispatchEvent(new Event('input'));
                     } else if (data.type === 'error') {
                         console.error('Transcription error:', data.message);
                         stopRecording();
@@ -766,7 +770,6 @@
             
             userInput.value = '';
             finalTranscript = '';
-            userInput.style.height = 'auto';
             sendBtn.disabled = true;
 
             addMessage('Generating report...', false);

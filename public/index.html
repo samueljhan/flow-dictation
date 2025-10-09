@@ -250,7 +250,7 @@
 
         #userInput {
             width: 100%;
-            padding: 15px 70px 15px 20px;
+            padding: 15px 110px 15px 20px;
             border: 1px solid #3a3a3a;
             border-radius: 25px;
             font-size: 15px;
@@ -266,25 +266,26 @@
 
         .voice-btn {
             position: absolute;
-            right: 10px;
-            top: 10px;
+            right: 60px;
+            top: 50%;
+            transform: translateY(-50%);
             background: #3a3a3a;
             border: 2px solid #505050;
             cursor: pointer;
             padding: 0;
             border-radius: 50%;
             transition: all 0.3s;
-            width: 36px;
-            height: 36px;
+            width: 40px;
+            height: 40px;
             display: flex;
             align-items: center;
             justify-content: center;
-            position: relative;
+            position: absolute;
         }
 
         .voice-btn:hover { 
             border-color: #606060;
-            transform: scale(1.05);
+            transform: translateY(-50%) scale(1.05);
         }
 
         .voice-btn.recording {
@@ -293,24 +294,25 @@
         }
 
         .voice-btn svg {
-            width: 16px;
-            height: 16px;
-            stroke: #909090;
+            width: 24px;
+            height: 24px;
+            fill: #909090;
         }
 
         .voice-btn.recording svg {
-            stroke: #dc3545;
+            fill: #dc3545;
         }
 
         .voice-btn .rec-dot {
             position: absolute;
-            bottom: 2px;
-            right: 2px;
-            width: 8px;
-            height: 8px;
+            bottom: -2px;
+            right: -2px;
+            width: 10px;
+            height: 10px;
             background: #dc3545;
             border-radius: 50%;
             opacity: 0;
+            border: 2px solid #2a2a2a;
         }
 
         .voice-btn.recording .rec-dot {
@@ -319,8 +321,8 @@
         }
 
         @keyframes pulse-border { 
-            0%, 100% { opacity: 1; transform: scale(1); } 
-            50% { opacity: 0.8; transform: scale(1.05); } 
+            0%, 100% { opacity: 1; transform: translateY(-50%) scale(1); } 
+            50% { opacity: 0.8; transform: translateY(-50%) scale(1.05); } 
         }
 
         @keyframes pulse-dot {
@@ -438,14 +440,15 @@
             <div class="input-wrapper">
                 <textarea id="userInput" placeholder="Dictation appears here..." rows="1"></textarea>
                 <button class="voice-btn" id="voiceBtn" title="Click to record or use dictaphone button">
-                    <svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
-                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
-                        <line x1="12" y1="19" x2="12" y2="23"></line>
-                        <line x1="8" y1="23" x2="16" y2="23"></line>
-                        <path d="M4 19c0 0 2-1 4-1s4 1 6 1s4-1 6-1" stroke-width="1.5"></path>
-                        <path d="M4 22c0 0 2-1 4-1s4 1 6 1s4-1 6-1" stroke-width="1.5"></path>
-                        <path d="M4 16c0 0 2-1 4-1s4 1 6 1s4-1 6-1" stroke-width="1.5"></path>
+                    <svg viewBox="0 0 24 24" fill="none">
+                        <circle cx="12" cy="12" r="11" stroke="none"/>
+                        <path d="M12 2C12 2 12 2 12 2C12.8 2.2 13.5 2.6 14 3.2C14.5 3.8 14.8 4.5 14.9 5.3C15 6.1 14.9 6.9 14.6 7.6C14.3 8.3 13.8 8.9 13.2 9.3L13.2 9.3C12.8 9.6 12.4 9.7 12 9.7C11.6 9.7 11.2 9.6 10.8 9.3C10.2 8.9 9.7 8.3 9.4 7.6C9.1 6.9 9 6.1 9.1 5.3C9.2 4.5 9.5 3.8 10 3.2C10.5 2.6 11.2 2.2 12 2Z"/>
+                        <path d="M7 10C7 10 7 10 7 10C7 11 7.2 12 7.6 12.8C8 13.6 8.6 14.3 9.3 14.8C10 15.3 10.9 15.6 11.8 15.7C12.7 15.8 13.6 15.6 14.4 15.2"/>
+                        <line x1="12" y1="16" x2="12" y2="20" stroke-width="1.5"/>
+                        <line x1="9" y1="20" x2="15" y2="20" stroke-width="1.5"/>
+                        <path d="M6 16C6 16 7.5 15 9 15C10.5 15 12 16 13.5 16C15 16 16.5 15 18 15" stroke-width="1.2" stroke-linecap="round"/>
+                        <path d="M6 19C6 19 7.5 18 9 18C10.5 18 12 19 13.5 19C15 19 16.5 18 18 18" stroke-width="1.2" stroke-linecap="round"/>
+                        <path d="M6 13C6 13 7.5 12 9 12C10.5 12 12 13 13.5 13C15 13 16.5 12 18 12" stroke-width="1.2" stroke-linecap="round"/>
                     </svg>
                     <div class="rec-dot"></div>
                 </button>
@@ -507,7 +510,7 @@
                 hidDevice = devices[0];
                 await hidDevice.open();
 
-                setupText.textContent = `✓ Connected: ${hidDevice.productName}`;
+                setupText.textContent = \`✓ Connected: \${hidDevice.productName}\`;
                 setupIcon.textContent = '✅';
                 setupBtn.textContent = 'Connected';
                 setupBtn.classList.add('connected');
@@ -552,7 +555,7 @@
 
                 if (selectedMic) {
                     micIndicator.classList.add('connected');
-                    micStatus.textContent = `✓ ${selectedMic.label}`;
+                    micStatus.textContent = \`✓ \${selectedMic.label}\`;
                 }
             } catch (error) {
                 console.error('Error detecting microphone:', error);
@@ -585,7 +588,7 @@
         async function startRecording() {
             try {
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                ws = new WebSocket(`${protocol}//${window.location.host}`);
+                ws = new WebSocket(\`\${protocol}//\${window.location.host}\`);
                 
                 ws.onopen = async () => {
                     const constraints = {
@@ -604,7 +607,7 @@
                     audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
                     const source = audioContext.createMediaStreamSource(mediaStream);
                     
-                    await audioContext.audioWorklet.addModule('data:text/javascript,' + encodeURIComponent(`
+                    await audioContext.audioWorklet.addModule('data:text/javascript,' + encodeURIComponent(\`
                         class AudioProcessor extends AudioWorkletProcessor {
                             process(inputs) {
                                 const input = inputs[0];
@@ -620,7 +623,7 @@
                             }
                         }
                         registerProcessor('audio-processor', AudioProcessor);
-                    `));
+                    \`));
                     
                     audioWorkletNode = new AudioWorkletNode(audioContext, 'audio-processor');
                     audioWorkletNode.port.onmessage = (event) => {
@@ -635,7 +638,7 @@
                     isRecording = true;
                     voiceBtn.classList.add('recording');
                     micIndicator.classList.add('recording');
-                    micStatus.textContent = `🔴 Recording - Release to stop`;
+                    micStatus.textContent = \`🔴 Recording - Release to stop\`;
                 };
                 
                 ws.onmessage = (event) => {
@@ -688,7 +691,7 @@
             if (welcomeMsg) welcomeMsg.remove();
 
             const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${isUser ? 'user' : 'assistant'}`;
+            messageDiv.className = \`message \${isUser ? 'user' : 'assistant'}\`;
             
             const avatar = document.createElement('div');
             avatar.className = 'avatar';
@@ -712,32 +715,32 @@
                     body: JSON.stringify({ findings, specialty: 'radiology' })
                 });
 
-                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                if (!response.ok) throw new Error(\`HTTP error! status: \${response.status}\`);
                 const data = await response.json();
                 return formatReportHTML(data.report);
                 
             } catch (error) {
                 console.error('Error:', error);
-                return `<p style="color: #ff6b6b;">⚠️ Error generating report.</p>`;
+                return \`<p style="color: #ff6b6b;">⚠️ Error generating report.</p>\`;
             }
         }
 
         function formatReportHTML(reportText) {
-            const sections = reportText.split('\n\n');
+            const sections = reportText.split('\\n\\n');
             let html = '';
             
             sections.forEach(section => {
-                const lines = section.split('\n');
+                const lines = section.split('\\n');
                 const heading = lines[0];
-                const content = lines.slice(1).join('\n');
+                const content = lines.slice(1).join('\\n');
                 
-                if (heading.match(/^[A-Z\s]+:?$/)) {
-                    html += `<div class="report-section">
-                        <h3>${heading.replace(':', '')}</h3>
-                        <p>${content.trim()}</p>
-                    </div>`;
+                if (heading.match(/^[A-Z\\s]+:?$/)) {
+                    html += \`<div class="report-section">
+                        <h3>\${heading.replace(':', '')}</h3>
+                        <p>\${content.trim()}</p>
+                    </div>\`;
                 } else {
-                    html += `<div class="report-section"><p>${section}</p></div>`;
+                    html += \`<div class="report-section"><p>\${section}</p></div>\`;
                 }
             });
             
@@ -753,11 +756,11 @@
             sections.forEach(section => {
                 const heading = section.querySelector('h3')?.textContent || '';
                 const paragraphs = Array.from(section.querySelectorAll('p'))
-                    .map(p => p.textContent).join('\n');
+                    .map(p => p.textContent).join('\\n');
                 if (heading) {
-                    textToCopy += `${heading}:\n${paragraphs}\n\n`;
+                    textToCopy += \`\${heading}:\\n\${paragraphs}\\n\\n\`;
                 } else {
-                    textToCopy += `${paragraphs}\n\n`;
+                    textToCopy += \`\${paragraphs}\\n\\n\`;
                 }
             });
 

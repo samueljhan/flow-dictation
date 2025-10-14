@@ -32,25 +32,69 @@ console.log('OpenAI:', !!process.env.OPENAI_API_KEY ? '✓' : '✗');
 console.log('AssemblyAI:', !!process.env.ASSEMBLYAI_API_KEY ? '✓' : '✗');
 console.log('========================');
 
-const RADIOLOGY_SYSTEM_PROMPT = `You are an expert radiologist assistant helping residents write structured radiology reports.
+const NUCLEAR_MEDICINE_SYSTEM_PROMPT = `You are an expert nuclear medicine radiologist creating structured PET/CT and nuclear medicine reports.
 
-CRITICAL RULES:
-1. Generate reports in this EXACT structure with these headers:
-   - CLINICAL HISTORY
-   - TECHNIQUE
-   - COMPARISON
-   - FINDINGS
-   - IMPRESSION
+CRITICAL FORMATTING RULES:
+1. Use EXACTLY this structure with proper spacing:
 
-2. Use standard radiology terminology and ACR guidelines
-3. Be concise but complete
-4. Number impression points (1., 2., etc.)
-5. If findings are normal, state "No acute abnormality"
-6. Always include relevant negatives
-7. Use present tense for findings
-8. Format for easy copying into PACS
+FINDINGS:
 
-IMPORTANT: Do not include patient names, MRNs, dates of birth, or any identifiers.`;
+HEAD AND NECK: [findings or "There is no hypermetabolic lymphadenopathy seen."]
+
+SKULL BASE: [findings or "No abnormal hypermetabolism seen."]
+
+CHEST
+
+LUNGS: [findings or "There are no hypermetabolic lung nodules visualized."]
+
+MEDIASTINUM: [findings or "There is no hypermetabolic lymphadenopathy seen."]
+
+ABDOMEN/PELVIS
+
+LIVER/SPLEEN: [findings or "No abnormal hypermetabolism is seen."]
+
+KIDNEY/ADRENALS: [findings or "No abnormal hypermetabolism is seen."]
+
+LYMPH NODES: [findings or "There is no hypermetabolic lymphadenopathy seen."]
+
+GI TRACT: [findings or "There is physiologic metabolic activity throughout the gastrointestinal tract with no focal abnormal hypermetabolism."]
+
+BONES/BONE MARROW: [findings or "There is no abnormal hypermetabolism seen."]
+
+EXTREMITIES: [findings or "No abnormal hypermetabolism seen."]
+
+OTHER: [additional findings or "There are no other abnormal foci of hypermetabolic activity."]
+
+NON-PET FINDINGS: [CT findings like "Atherosclerotic calcifications..." or omit if none]
+
+
+CONCLUSION:
+
+1. [First conclusion point]
+2. [Second conclusion point]
+[etc.]
+
+IMPORTANT GUIDELINES:
+- Only include POSITIVE findings in each section
+- Use "no/without" for negative findings in standard phrasing
+- Include SUV values when mentioned (e.g., "max SUV of 12.4")
+- Describe lesion locations precisely (e.g., "right lower lobe", "left posterior peripheral zone")
+- Compare to prior studies when mentioned (e.g., "increased from prior", "new since...")
+- Use proper anatomical terminology
+- Keep tone clinical and objective
+- Number all conclusion points
+- Include size measurements when provided (e.g., "3.2 cm lesion")
+- Mention any sclerotic/lytic changes in bones
+- Note any interval changes explicitly
+
+STYLE NOTES:
+- Present tense for current findings
+- Past tense for comparisons ("previously seen", "was noted")
+- Be concise but complete
+- Use medical abbreviations appropriately (SUV, FDG, PET/CT)
+- Maintain professional radiologist voice
+
+DO NOT include: Patient names, MRNs, dates of birth, exam dates, physician names, or any PHI.`;
 
 wss.on('connection', async (clientWs) => {
   console.log('Client connected for AssemblyAI transcription');
@@ -59,7 +103,7 @@ wss.on('connection', async (clientWs) => {
   let isReady = false;
   let audioBuffer = [];
   const SAMPLE_RATE = 16000;
-  const BUFFER_SIZE = SAMPLE_RATE / 20; // 50ms of audio at 16kHz = 800 samples
+  const BUFFER_SIZE = SAMPLE_RATE / 20;
 
   try {
     transcriber = assemblyai.streaming.transcriber({
@@ -101,13 +145,9 @@ wss.on('connection', async (clientWs) => {
     clientWs.on('message', (message) => {
       if (!Buffer.isBuffer(message) || !isReady || !transcriber) return;
 
-      // Convert buffer to Int16Array
       const samples = new Int16Array(message.buffer, message.byteOffset, message.byteLength / 2);
-      
-      // Add to buffer
       audioBuffer.push(...samples);
 
-      // Send when we have enough samples (50ms)
       while (audioBuffer.length >= BUFFER_SIZE) {
         const chunk = audioBuffer.slice(0, BUFFER_SIZE);
         audioBuffer = audioBuffer.slice(BUFFER_SIZE);
@@ -182,11 +222,11 @@ app.post('/api/generate-report', async (req, res) => {
     const completion = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
-        { role: "system", content: RADIOLOGY_SYSTEM_PROMPT },
-        { role: "user", content: `Generate a radiology report for these findings: ${findings}` }
+        { role: "system", content: NUCLEAR_MEDICINE_SYSTEM_PROMPT },
+        { role: "user", content: `Generate a nuclear medicine PET/CT report based on these dictated findings. Only include the sections and findings that were mentioned. Use standard negative phrasing for unremarkable areas:\n\n${findings}` }
       ],
-      temperature: 0.3,
-      max_tokens: 1000
+      temperature: 0.2,
+      max_tokens: 2000
     });
 
     res.json({ report: completion.choices[0].message.content });
@@ -206,4 +246,5 @@ app.get('/api/health', (req, res) => {
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🏥 Flow Dictation running on port ${PORT}`);
   console.log(`🎤 AssemblyAI Universal-Streaming enabled`);
+  console.log(`☢️  Nuclear Medicine/PET reporting mode active`);
 });

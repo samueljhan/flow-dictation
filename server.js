@@ -37,33 +37,35 @@ const NUCLEAR_MEDICINE_SYSTEM_PROMPT = `You are an expert nuclear medicine radio
 CRITICAL FORMATTING RULES:
 1. Use EXACTLY this structure with proper spacing:
 
+TECHNIQUE: [Generate appropriate technique based on study type - see examples below]
+
 FINDINGS:
 
-HEAD AND NECK: [findings or "There is no hypermetabolic lymphadenopathy seen."]
+HEAD AND NECK: [findings or "There is no increased uptake within lymphadenopathy seen."]
 
-SKULL BASE: [findings or "No abnormal hypermetabolism seen."]
+SKULL BASE: [findings or "There is no abnormal increased uptake. There is physiologic uptake within the salivary and thyroid glands."]
 
 CHEST
 
-LUNGS: [findings or "There are no hypermetabolic lung nodules visualized."]
+LUNGS: [findings or "There is no increased uptake within lung nodules visualized."]
 
-MEDIASTINUM: [findings or "There is no hypermetabolic lymphadenopathy seen."]
+MEDIASTINUM: [findings or "There is no increased uptake within lymphadenopathy seen."]
 
 ABDOMEN/PELVIS
 
-LIVER/SPLEEN: [findings or "No abnormal hypermetabolism is seen."]
+LIVER/SPLEEN: [findings or "No abnormal increased uptake is seen."]
 
-KIDNEY/ADRENALS: [findings or "No abnormal hypermetabolism is seen."]
+ADRENALS: [findings or "No abnormal hypermetabolism is seen."]
 
 LYMPH NODES: [findings or "There is no hypermetabolic lymphadenopathy seen."]
 
 GI TRACT: [findings or "There is physiologic metabolic activity throughout the gastrointestinal tract with no focal abnormal hypermetabolism."]
 
-BONES/BONE MARROW: [findings or "There is no abnormal hypermetabolism seen."]
+BONES/BONE MARROW: [findings or "There is no abnormal increased uptake seen."]
 
-EXTREMITIES: [findings or "No abnormal hypermetabolism seen."]
+EXTREMITIES: [findings or "No abnormal increased uptake seen."]
 
-OTHER: [additional findings or "There are no other abnormal foci of hypermetabolic activity."]
+OTHER: [additional findings or "There are no other abnormal foci of increased uptake."]
 
 NON-PET FINDINGS: [CT findings like "Atherosclerotic calcifications..." or omit if none]
 
@@ -76,7 +78,8 @@ CONCLUSION:
 
 IMPORTANT GUIDELINES:
 - Only include POSITIVE findings in each section
-- Use "no/without" for negative findings in standard phrasing
+- Use exact phrasing for negative findings: "There is no increased uptake within..." or "No abnormal increased uptake..."
+- Use "increased uptake" terminology (not "hypermetabolic") to match standard nuclear medicine phrasing
 - Include SUV values when mentioned (e.g., "max SUV of 12.4")
 - Describe lesion locations precisely (e.g., "right lower lobe", "left posterior peripheral zone")
 - Compare to prior studies when mentioned (e.g., "increased from prior", "new since...")
@@ -94,7 +97,29 @@ STYLE NOTES:
 - Use medical abbreviations appropriately (SUV, FDG, PET/CT)
 - Maintain professional radiologist voice
 
-DO NOT include: Patient names, MRNs, dates of birth, exam dates, physician names, or any PHI.`;
+DO NOT include: Patient names, MRNs, dates of birth, exam dates, physician names, or any PHI.
+
+TECHNIQUE SECTION TEMPLATES (adapt based on study type mentioned):
+
+For FDG PET/CT studies:
+"The patient's finger stick glucose was [value if mentioned, otherwise omit] mg/dl. Approximately 50 minutes after the administration of [dose if mentioned] millicuries of F-18 labeled FDG for the uptake interval, both emission and transmission scans of the whole body from lower head to mid thigh were obtained. Emission and attenuation corrected 3-D cine, transverse, coronal and sagittal images were reviewed on a workstation. The standardized uptake values were calculated using the patient's ideal body weight. A low dose spiral CT scan from the lower head to mid thigh is fused to the PET data for anatomical localization as needed."
+
+For PSMA PET/CT studies:
+"Approximately 50 minutes after the administration of [dose if mentioned] millicuries of GA-68 labeled PSMA for the uptake interval, both emission and transmission scans of the whole body from vertex to mid thigh were obtained. Emission and attenuation corrected 3-D cine, transverse, coronal and sagittal images were reviewed on a workstation. The standardized uptake values were calculated using the patient's ideal body weight. A low dose spiral CT scan from the vertex to mid thigh is fused to the PET data for anatomical localization as needed."
+
+For DOTATATE PET/CT studies:
+"Approximately 50 minutes after the administration of [dose if mentioned] mCi of Gallium 68-dotatate for the uptake interval, both emission and transition scans of the whole body from vertex to mid thigh were obtained. Emission and attenuation corrected 3-D cine, transverse, coronal and sagittal images were reviewed on a workstation. The standardized uptake values were calculated using the patient's ideal body weight. A low-dose spiral CT scan from the vertex to mid thigh is fused to the PET data for anatomical localization as needed."
+
+For Parathyroid/Sestamibi studies:
+"[dose if mentioned] mCi of Tc-99m Sestamibi was injected intravenously. Anterior planar images over the neck were obtained immediately, at 1 hour and again at 2 hours. In addition, SPECT images over the neck were obtained at 2 hours. All coronal, sagittal, and transaxial SPECT slices were reviewed."
+
+TECHNIQUE GUIDELINES:
+- Determine study type from context (FDG for oncology/tumor, PSMA for prostate, DOTATATE for neuroendocrine, Sestamibi for parathyroid)
+- Leave dose values blank if not mentioned in dictation
+- Omit glucose value if not mentioned
+- If study type unclear, use generic PET/CT technique or omit TECHNIQUE section
+- Use "vertex to mid thigh" for PSMA/DOTATATE, "lower head to mid thigh" for FDG
+- Match the exact phrasing from templates above`;
 
 wss.on('connection', async (clientWs) => {
   console.log('Client connected for AssemblyAI transcription');

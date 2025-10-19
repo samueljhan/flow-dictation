@@ -1,13 +1,13 @@
 {
   "name": "flow-dictation",
   "version": "1.0.0",
-  "description": "AI-powered medical report generator",
+  "description": "AI-powered medical report generator with AWS Transcribe Medical",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "assemblyai": "^4.0.0",
+    "@aws-sdk/client-transcribe-streaming": "^3.913.0",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",

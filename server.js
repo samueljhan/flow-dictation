@@ -3,9 +3,11 @@ const OpenAI = require('openai');
 const cors = require('cors');
 const multer = require('multer');
 const fs = require('fs');
-const { AssemblyAI } = require('assemblyai');
 const http = require('http');
 const WebSocket = require('ws');
+const crypto = require('crypto');
+const { TranscribeStreamingClient, StartMedicalStreamTranscriptionCommand } = require("@aws-sdk/client-transcribe-streaming");
+const { PassThrough } = require('stream');
 require('dotenv').config();
 
 const app = express();
@@ -23,13 +25,20 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-const assemblyai = new AssemblyAI({
-  apiKey: process.env.ASSEMBLYAI_API_KEY
+// AWS Transcribe Medical configuration
+const transcribeClient = new TranscribeStreamingClient({
+  region: process.env.AWS_REGION || 'us-east-1',
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+  }
 });
 
 console.log('=== Environment Check ===');
 console.log('OpenAI:', !!process.env.OPENAI_API_KEY ? '✓' : '✗');
-console.log('AssemblyAI:', !!process.env.ASSEMBLYAI_API_KEY ? '✓' : '✗');
+console.log('AWS Access Key:', !!process.env.AWS_ACCESS_KEY_ID ? '✓' : '✗');
+console.log('AWS Secret Key:', !!process.env.AWS_SECRET_ACCESS_KEY ? '✓' : '✗');
+console.log('AWS Region:', process.env.AWS_REGION || 'us-east-1');
 console.log('========================');
 
 const NUCLEAR_MEDICINE_SYSTEM_PROMPT = `You are an expert nuclear medicine radiologist creating structured PET/CT and nuclear medicine reports.
@@ -97,143 +106,124 @@ STYLE NOTES:
 - Use medical abbreviations appropriately (SUV, FDG, PET/CT)
 - Maintain professional radiologist voice
 
-DO NOT include: Patient names, MRNs, dates of birth, exam dates, physician names, or any PHI.
-
-TECHNIQUE SECTION TEMPLATES (adapt based on study type mentioned):
-
-For FDG PET/CT studies:
-"The patient's finger stick glucose was [value if mentioned, otherwise omit] mg/dl. Approximately 50 minutes after the administration of [dose if mentioned] millicuries of F-18 labeled FDG for the uptake interval, both emission and transmission scans of the whole body from lower head to mid thigh were obtained. Emission and attenuation corrected 3-D cine, transverse, coronal and sagittal images were reviewed on a workstation. The standardized uptake values were calculated using the patient's ideal body weight. A low dose spiral CT scan from the lower head to mid thigh is fused to the PET data for anatomical localization as needed."
-
-For PSMA PET/CT studies:
-"Approximately 50 minutes after the administration of [dose if mentioned] millicuries of GA-68 labeled PSMA for the uptake interval, both emission and transmission scans of the whole body from vertex to mid thigh were obtained. Emission and attenuation corrected 3-D cine, transverse, coronal and sagittal images were reviewed on a workstation. The standardized uptake values were calculated using the patient's ideal body weight. A low dose spiral CT scan from the vertex to mid thigh is fused to the PET data for anatomical localization as needed."
-
-For DOTATATE PET/CT studies:
-"Approximately 50 minutes after the administration of [dose if mentioned] mCi of Gallium 68-dotatate for the uptake interval, both emission and transition scans of the whole body from vertex to mid thigh were obtained. Emission and attenuation corrected 3-D cine, transverse, coronal and sagittal images were reviewed on a workstation. The standardized uptake values were calculated using the patient's ideal body weight. A low-dose spiral CT scan from the vertex to mid thigh is fused to the PET data for anatomical localization as needed."
-
-For Parathyroid/Sestamibi studies:
-"[dose if mentioned] mCi of Tc-99m Sestamibi was injected intravenously. Anterior planar images over the neck were obtained immediately, at 1 hour and again at 2 hours. In addition, SPECT images over the neck were obtained at 2 hours. All coronal, sagittal, and transaxial SPECT slices were reviewed."
-
-TECHNIQUE GUIDELINES:
-- Determine study type from context (FDG for oncology/tumor, PSMA for prostate, DOTATATE for neuroendocrine, Sestamibi for parathyroid)
-- Leave dose values blank if not mentioned in dictation
-- Omit glucose value if not mentioned
-- If study type unclear, use generic PET/CT technique or omit TECHNIQUE section
-- Use "vertex to mid thigh" for PSMA/DOTATATE, "lower head to mid thigh" for FDG
-- Match the exact phrasing from templates above`;
+DO NOT include: Patient names, MRNs, dates of birth, exam dates, physician names, or any PHI.`;
 
 wss.on('connection', async (clientWs) => {
-  console.log('Client connected for AssemblyAI transcription');
+  console.log('Client connected for AWS Transcribe Medical');
   
-  let transcriber = null;
-  let isReady = false;
-  let audioBuffer = [];
-  const SAMPLE_RATE = 16000;
-  const BUFFER_SIZE = SAMPLE_RATE / 20;
+  let transcribeStream = null;
+  let audioStream = null;
+  let isTranscribing = false;
 
-  try {
-    transcriber = assemblyai.streaming.transcriber({
-      sampleRate: SAMPLE_RATE,
-    });
+  clientWs.on('message', async (message) => {
+    if (!Buffer.isBuffer(message)) return;
 
-    transcriber.on('open', ({ sessionId }) => {
-      console.log('✅ AssemblyAI session opened:', sessionId);
-      isReady = true;
-    });
-
-    transcriber.on('turn', (turn) => {
-      console.log('Transcript:', turn.transcript);
-      
-      clientWs.send(JSON.stringify({
-        type: 'transcript',
-        text: turn.transcript,
-        is_final: turn.end_of_turn
-      }));
-    });
-
-    transcriber.on('error', (error) => {
-      console.error('AssemblyAI error:', error);
-      isReady = false;
-      clientWs.send(JSON.stringify({
-        type: 'error',
-        message: error.message
-      }));
-    });
-
-    transcriber.on('close', (code, reason) => {
-      console.log('AssemblyAI closed:', code, reason);
-      isReady = false;
-    });
-
-    await transcriber.connect();
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    clientWs.on('message', (message) => {
-      if (!Buffer.isBuffer(message) || !isReady || !transcriber) return;
-
-      const samples = new Int16Array(message.buffer, message.byteOffset, message.byteLength / 2);
-      audioBuffer.push(...samples);
-
-      while (audioBuffer.length >= BUFFER_SIZE) {
-        const chunk = audioBuffer.slice(0, BUFFER_SIZE);
-        audioBuffer = audioBuffer.slice(BUFFER_SIZE);
+    // First audio message - start transcription
+    if (!isTranscribing) {
+      try {
+        audioStream = new PassThrough();
         
-        const buffer = Buffer.from(new Int16Array(chunk).buffer);
+        const sessionId = crypto.randomBytes(16).toString('hex');
         
-        try {
-          transcriber.sendAudio(buffer);
-        } catch (err) {
-          console.error('Error sending audio:', err.message);
+        const command = new StartMedicalStreamTranscriptionCommand({
+          LanguageCode: 'en-US',
+          MediaSampleRateHertz: 16000,
+          MediaEncoding: 'pcm',
+          Specialty: 'RADIOLOGY', // Can be RADIOLOGY, CARDIOLOGY, NEUROLOGY, ONCOLOGY, PRIMARYCARE, UROLOGY
+          Type: 'DICTATION', // DICTATION for single speaker, CONVERSATION for multiple
+          EnableChannelIdentification: false,
+          NumberOfChannels: 1,
+          AudioStream: (async function* () {
+            for await (const chunk of audioStream) {
+              yield { AudioEvent: { AudioChunk: chunk } };
+            }
+          })()
+        });
+
+        const response = await transcribeClient.send(command);
+        transcribeStream = response.TranscriptResultStream;
+        isTranscribing = true;
+        
+        console.log('✅ AWS Transcribe Medical session started:', sessionId);
+
+        // Process transcription results
+        for await (const event of transcribeStream) {
+          if (event.TranscriptEvent) {
+            const results = event.TranscriptEvent.Transcript.Results;
+            
+            for (const result of results) {
+              if (!result.IsPartial) {
+                // Final transcription
+                const transcript = result.Alternatives[0].Transcript;
+                
+                if (transcript && transcript.trim()) {
+                  console.log('Final transcript:', transcript);
+                  
+                  clientWs.send(JSON.stringify({
+                    type: 'transcript',
+                    text: transcript,
+                    is_final: true,
+                    confidence: result.Alternatives[0].Items?.[0]?.Confidence
+                  }));
+                }
+              } else {
+                // Partial transcription
+                const transcript = result.Alternatives[0].Transcript;
+                
+                if (transcript && transcript.trim()) {
+                  clientWs.send(JSON.stringify({
+                    type: 'transcript',
+                    text: transcript,
+                    is_final: false
+                  }));
+                }
+              }
+            }
+          }
         }
+      } catch (error) {
+        console.error('Error starting AWS Transcribe Medical:', error);
+        clientWs.send(JSON.stringify({
+          type: 'error',
+          message: 'Transcription error: ' + error.message
+        }));
+        isTranscribing = false;
       }
-    });
-
-    clientWs.on('close', async () => {
-      console.log('Client disconnected');
-      isReady = false;
-      audioBuffer = [];
-      if (transcriber) {
-        await transcriber.close();
-      }
-    });
-
-  } catch (error) {
-    console.error('Error setting up AssemblyAI:', error);
-    clientWs.send(JSON.stringify({
-      type: 'error',
-      message: 'Failed to initialize: ' + error.message
-    }));
-  }
-});
-
-app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'Audio file is required' });
     }
 
-    const webmPath = req.file.path + '.webm';
-    fs.renameSync(req.file.path, webmPath);
-    
-    const transcript = await assemblyai.transcripts.transcribe({
-      audio: webmPath
-    });
-
-    fs.unlinkSync(webmPath);
-    
-    res.json({ 
-      text: transcript.text,
-      confidence: transcript.confidence
-    });
-    
-  } catch (error) {
-    console.error('Transcription error:', error);
-    if (req.file) {
-      const webmPath = req.file.path + '.webm';
-      if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-      if (fs.existsSync(webmPath)) fs.unlinkSync(webmPath);
+    // Send audio to AWS Transcribe
+    if (audioStream && isTranscribing) {
+      try {
+        // Convert Int16Array to Buffer if needed
+        const audioBuffer = Buffer.isBuffer(message) ? message : Buffer.from(message);
+        audioStream.write(audioBuffer);
+      } catch (error) {
+        console.error('Error sending audio to AWS:', error);
+      }
     }
-    res.status(500).json({ error: 'Transcription failed', details: error.message });
-  }
+  });
+
+  clientWs.on('close', () => {
+    console.log('Client disconnected');
+    isTranscribing = false;
+    
+    if (audioStream) {
+      audioStream.end();
+      audioStream = null;
+    }
+    
+    transcribeStream = null;
+  });
+
+  clientWs.on('error', (error) => {
+    console.error('WebSocket error:', error);
+    isTranscribing = false;
+    
+    if (audioStream) {
+      audioStream.end();
+      audioStream = null;
+    }
+  });
 });
 
 app.post('/api/generate-report', async (req, res) => {
@@ -264,12 +254,14 @@ app.post('/api/generate-report', async (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok', 
-    service: 'Flow Dictation API'
+    service: 'Flow Dictation API',
+    transcription: 'AWS Transcribe Medical'
   });
 });
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🏥 Flow Dictation running on port ${PORT}`);
-  console.log(`🎤 AssemblyAI Universal-Streaming enabled`);
+  console.log(`🩺 AWS Transcribe Medical enabled`);
   console.log(`☢️  Nuclear Medicine/PET reporting mode active`);
+  console.log(`📍 Region: ${process.env.AWS_REGION || 'us-east-1'}`);
 });

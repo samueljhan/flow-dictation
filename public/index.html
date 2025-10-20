@@ -661,7 +661,8 @@
         }
 
         function stopRecording() {
-            isRecording = false;
+    // Clean up any lingering sessions
+    if (ws) { ws.close(); ws = null; }            isRecording = false;
             voiceBtn.classList.remove('recording');
             micIndicator.classList.remove('recording');
             micStatus.textContent = hidDevice ? 'Press dictaphone button to record' : 'Click mic to record';

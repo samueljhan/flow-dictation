@@ -114,12 +114,13 @@ wss.on('connection', async (clientWs) => {
   let transcribeStream = null;
   let audioStream = null;
   let isTranscribing = false;
-
+  let sessionCount = 0;
   clientWs.on('message', async (message) => {
     if (!Buffer.isBuffer(message)) return;
 
     // First audio message - start transcription
-    if (!isTranscribing) {
+    // Prevent multiple simultaneous sessions
+    if (isTranscribing) return;    if (!isTranscribing) {
       try {
         audioStream = new PassThrough();
         // Fix the MaxListenersExceeded warning

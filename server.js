@@ -122,6 +122,8 @@ wss.on('connection', async (clientWs) => {
     if (!isTranscribing) {
       try {
         audioStream = new PassThrough();
+        // Fix the MaxListenersExceeded warning
+        audioStream.setMaxListeners(0);
         
         const sessionId = crypto.randomBytes(16).toString('hex');
         
@@ -131,8 +133,8 @@ wss.on('connection', async (clientWs) => {
           MediaEncoding: 'pcm',
           Specialty: 'RADIOLOGY', // Can be RADIOLOGY, CARDIOLOGY, NEUROLOGY, ONCOLOGY, PRIMARYCARE, UROLOGY
           Type: 'DICTATION', // DICTATION for single speaker, CONVERSATION for multiple
-          EnableChannelIdentification: false,
-          NumberOfChannels: 1,
+          // REMOVED EnableChannelIdentification - not needed for DICTATION
+          // REMOVED NumberOfChannels - let AWS default handle it
           AudioStream: (async function* () {
             for await (const chunk of audioStream) {
               yield { AudioEvent: { AudioChunk: chunk } };

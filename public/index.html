@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Flow Dictation - Medical Report Generator</title>
     <style>
-        .header h1 { display: flex; align-items: center; gap: 8px; }
         * {
             margin: 0;
             padding: 0;
@@ -42,15 +41,26 @@
             border-bottom: 1px solid #3a3a3a;
         }
 
-        .header h1 { color: #b0b0b0; color: #b0b0b0;
+        .header h1 { 
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: #b0b0b0;
             font-size: 28px;
             font-weight: 700;
             margin-bottom: 8px;
         }
 
+        .header-logo {
+            width: 36px;
+            height: 36px;
+            object-fit: contain;
+        }
+
         .header p {
             opacity: 0.7;
             font-size: 14px;
+            margin-left: 48px;
         }
 
         .dictaphone-setup {
@@ -269,7 +279,7 @@
         #userInput:focus { outline: none; border-color: #505050; }
 
         .voice-btn {
-            background: transparent;
+            background: #dc3545;
             border: none;
             cursor: pointer;
             padding: 0;
@@ -281,65 +291,38 @@
             justify-content: center;
             flex-shrink: 0;
             position: relative;
+            border-radius: 50%;
         }
 
         .voice-btn:hover { 
-            transform: scale(1.05);
-            filter: brightness(1.1);
+            transform: scale(1.1);
+            background: #c82333;
         }
 
         .voice-btn.recording {
-            animation: pulse-border 1.5s infinite;
-        }
-
-        .dictaphone-img {
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
-            transition: all 0.3s;
-        }
-
-        .voice-btn.recording .dictaphone-img {
-            filter: brightness(1.3) drop-shadow(0 0 10px rgba(220, 53, 69, 0.6));
-        }
-
-        .voice-btn .rec-dot {
-            position: absolute;
-            bottom: 4px;
-            right: 4px;
-            width: 10px;
-            height: 10px;
+            animation: pulse-recording 1.5s infinite;
             background: #dc3545;
-            border-radius: 50%;
-            opacity: 0;
-            border: 2px solid #242424;
-            box-shadow: 0 0 6px rgba(220, 53, 69, 0.8);
         }
 
-        .voice-btn.recording .rec-dot {
-            opacity: 1;
-            animation: pulse-dot 1.5s infinite;
+        .voice-btn .mic-icon {
+            width: 24px;
+            height: 24px;
+            fill: white;
         }
 
-        @keyframes pulse-border { 
-            0%, 100% { 
-                opacity: 1; 
-                transform: scale(1); 
-            } 
-            50% { 
-                opacity: 0.85; 
-                transform: scale(1.05); 
-            } 
+        .voice-btn.recording .mic-icon {
+            animation: none;
         }
 
-        @keyframes pulse-dot {
-            0%, 100% { 
-                opacity: 1; 
-                transform: scale(1); 
+        @keyframes pulse-recording { 
+            0% { 
+                box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.7);
             }
-            50% { 
-                opacity: 0.6; 
-                transform: scale(0.9); 
+            70% { 
+                box-shadow: 0 0 0 10px rgba(220, 53, 69, 0);
+            }
+            100% { 
+                box-shadow: 0 0 0 0 rgba(220, 53, 69, 0);
             }
         }
 
@@ -407,8 +390,11 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>Flow Dictation</h1>
-            <p>AI-Powered Medical Transcription with Dictaphone Support</p>
+            <h1>
+                <img src="/images/dictaphone-button.png" alt="Logo" class="header-logo">
+                Flow Dictation
+            </h1>
+            <p>AI-Powered Medical Transcription with AWS Transcribe Medical</p>
         </div>
 
         <div class="dictaphone-setup" id="dictaphoneSetup">
@@ -427,27 +413,27 @@
         <div class="specialty-selector">
             <label for="specialty">Specialty:</label>
             <select id="specialty">
-                <option value="radiology">Radiology</option>
+                <option value="radiology">Nuclear Medicine</option>
             </select>
         </div>
 
         <div class="chat-container" id="chatContainer">
             <div class="welcome-message">
                 <h2>Welcome to Flow Dictation! 👋</h2>
-                <p>Real-time medical transcription powered by AssemblyAI</p>
+                <p>Real-time medical transcription powered by AWS Transcribe Medical</p>
                 
                 <div class="example-prompts">
                     <div class="example-prompt" onclick="useExample(this)">
-                        <strong>🫁 Chest X-Ray</strong>
-                        <span>"Chest x-ray shows right lower lobe infiltrate with small pleural effusion"</span>
+                        <strong>☢️ PET/CT Oncology</strong>
+                        <span>"PET CT shows hypermetabolic right lower lobe mass with max SUV of 12.4"</span>
                     </div>
                     <div class="example-prompt" onclick="useExample(this)">
-                        <strong>🧠 Head CT</strong>
-                        <span>"Head CT without contrast, 65 year old with headache, no acute findings"</span>
+                        <strong>🧠 Brain PET</strong>
+                        <span>"FDG PET brain shows decreased uptake in bilateral parietal lobes consistent with Alzheimer's"</span>
                     </div>
                     <div class="example-prompt" onclick="useExample(this)">
-                        <strong>🦴 Fracture Study</strong>
-                        <span>"AP and lateral wrist showing distal radius fracture with dorsal angulation"</span>
+                        <strong>🦴 Bone Scan</strong>
+                        <span>"Bone scan demonstrates increased uptake at L3 vertebra suspicious for metastatic disease"</span>
                     </div>
                 </div>
             </div>
@@ -457,8 +443,10 @@
             <div class="input-wrapper">
                 <textarea id="userInput" placeholder="Dictation appears here..." rows="1"></textarea>
                 <button class="voice-btn" id="voiceBtn" title="Click to record or use dictaphone button">
-                    <img src="/images/dictaphone-button.png" alt="Dictaphone" class="dictaphone-img">
-                    <div class="rec-dot"></div>
+                    <svg class="mic-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                        <path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3z"/>
+                        <path d="M17 11a5 5 0 0 1-10 0M12 19v-2m-4 2h8"/>
+                    </svg>
                 </button>
             </div>
             <button id="sendBtn" title="Generate report">
@@ -630,7 +618,7 @@
                     isRecording = true;
                     voiceBtn.classList.add('recording');
                     micIndicator.classList.add('recording');
-                    micStatus.textContent = '🔴 Recording - Release to stop';
+                    micStatus.textContent = '🔴 Recording - Click again to stop';
                 };
                 
                 ws.onmessage = (event) => {
@@ -661,8 +649,7 @@
         }
 
         function stopRecording() {
-    // Clean up any lingering sessions
-    if (ws) { ws.close(); ws = null; }            isRecording = false;
+            isRecording = false;
             voiceBtn.classList.remove('recording');
             micIndicator.classList.remove('recording');
             micStatus.textContent = hidDevice ? 'Press dictaphone button to record' : 'Click mic to record';

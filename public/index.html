@@ -312,36 +312,34 @@
         }
 
         .voice-btn {
-            background: none;
+            background: #404040;
             border: none;
             cursor: pointer;
-            padding: 8px;
+            padding: 0;
+            width: 36px;
+            height: 36px;
             display: flex;
             align-items: center;
             justify-content: center;
             border-radius: 50%;
-            transition: background 0.2s;
+            transition: all 0.3s;
             flex-shrink: 0;
         }
-
         .voice-btn:hover {
-            background: #4a4a4a;
+            background: #505050;
         }
-
         .voice-btn svg {
-            width: 20px;
-            height: 20px;
+            width: 18px;
+            height: 18px;
             fill: none;
-            stroke: #909090;
+            stroke: #e0e0e0;
             stroke-width: 2;
             stroke-linecap: round;
             stroke-linejoin: round;
         }
-
         .voice-btn.recording {
             background: #dc3545;
         }
-
         .voice-btn.recording:hover {
             background: #c82333;
         }
@@ -357,37 +355,30 @@
         }
 
         #sendBtn {
-            background: none;
+            background: #404040;
+            color: #e0e0e0;
             border: none;
             cursor: pointer;
-            padding: 8px;
+            padding: 0;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            transition: all 0.3s;
+            flex-shrink: 0;
             display: flex;
             align-items: center;
             justify-content: center;
-            border-radius: 50%;
-            transition: background 0.2s;
-            flex-shrink: 0;
         }
-
-        #sendBtn:hover:not(:disabled) {
-            background: #4a4a4a;
-        }
-
-        #sendBtn:disabled {
-            cursor: not-allowed;
-            opacity: 0.4;
+        #sendBtn:hover {
+            background: #505050;
         }
 
         #sendBtn svg {
-            width: 20px;
-            height: 20px;
-            stroke: #909090;
+            width: 18px;
+            height: 18px;
+            stroke: #e0e0e0;
             stroke-width: 2;
             fill: none;
-        }
-
-        #sendBtn:not(:disabled) svg {
-            stroke: #e0e0e0;
         }
 
         .disclaimer {
@@ -587,9 +578,9 @@
 
         // Enable/disable send button based on input
         userInput.addEventListener('input', function() {
-            sendBtn.disabled = !this.value.trim();
+            // sendBtn.disabled = !this.value.trim();
         });
-        sendBtn.disabled = true;
+        sendBtn.disabled = false;
 
         setupBtn.addEventListener('click', async () => {
             try {
@@ -863,7 +854,7 @@
             userInput.value = '';
             userInput.style.height = 'auto';
             finalTranscript = '';
-            sendBtn.disabled = true;
+            sendBtn.disabled = false;
 
             addMessage('Generating report...', false);
 

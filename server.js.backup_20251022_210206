@@ -115,33 +115,27 @@ wss.on('connection', async (clientWs) => {
   let audioStream = null;
   let isTranscribing = false;
   let sessionCount = 0;
-  
   clientWs.on('message', async (message) => {
     if (!Buffer.isBuffer(message)) return;
 
-    // Start transcription on first audio message
-    if (!isTranscribing && !transcribeStream) {
+    // First audio message - start transcription
+    // Prevent multiple simultaneous sessions
+    if (isTranscribing) return;    if (!isTranscribing) {
       try {
-        isTranscribing = true;
-        sessionCount++;
-        console.log(`Starting session #${sessionCount}`);
-        
-        // Create audio stream first
         audioStream = new PassThrough();
+        // Fix the MaxListenersExceeded warning
         audioStream.setMaxListeners(0);
         
         const sessionId = crypto.randomBytes(16).toString('hex');
-        
-        // Start sending audio immediately
-        const audioBuffer = Buffer.isBuffer(message) ? message : Buffer.from(message);
-        audioStream.write(audioBuffer);
         
         const command = new StartMedicalStreamTranscriptionCommand({
           LanguageCode: 'en-US',
           MediaSampleRateHertz: 16000,
           MediaEncoding: 'pcm',
-          Specialty: 'RADIOLOGY',
-          Type: 'DICTATION',
+          Specialty: 'RADIOLOGY', // Can be RADIOLOGY, CARDIOLOGY, NEUROLOGY, ONCOLOGY, PRIMARYCARE, UROLOGY
+          Type: 'DICTATION', // DICTATION for single speaker, CONVERSATION for multiple
+          // REMOVED EnableChannelIdentification - not needed for DICTATION
+          // REMOVED NumberOfChannels - let AWS default handle it
           AudioStream: (async function* () {
             for await (const chunk of audioStream) {
               yield { AudioEvent: { AudioChunk: chunk } };
@@ -151,76 +145,59 @@ wss.on('connection', async (clientWs) => {
 
         const response = await transcribeClient.send(command);
         transcribeStream = response.TranscriptResultStream;
+        isTranscribing = true;
         
         console.log('✅ AWS Transcribe Medical session started:', sessionId);
 
-        // Process transcription results in background
-        (async () => {
-          try {
-            for await (const event of transcribeStream) {
-              if (event.TranscriptEvent) {
-                const results = event.TranscriptEvent.Transcript.Results;
+        // Process transcription results
+        for await (const event of transcribeStream) {
+          if (event.TranscriptEvent) {
+            const results = event.TranscriptEvent.Transcript.Results;
+            
+            for (const result of results) {
+              if (!result.IsPartial) {
+                // Final transcription
+                const transcript = result.Alternatives[0].Transcript;
                 
-                for (const result of results) {
-                  if (!result.IsPartial) {
-                    // Final transcription
-                    const transcript = result.Alternatives[0].Transcript;
-                    
-                    if (transcript && transcript.trim()) {
-                      console.log('Final transcript:', transcript);
-                      
-                      if (clientWs.readyState === WebSocket.OPEN) {
-                        clientWs.send(JSON.stringify({
-                          type: 'transcript',
-                          text: transcript,
-                          is_final: true,
-                          confidence: result.Alternatives[0].Items?.[0]?.Confidence
-                        }));
-                      }
-                    }
-                  } else {
-                    // Partial transcription
-                    const transcript = result.Alternatives[0].Transcript;
-                    
-                    if (transcript && transcript.trim()) {
-                      if (clientWs.readyState === WebSocket.OPEN) {
-                        clientWs.send(JSON.stringify({
-                          type: 'transcript',
-                          text: transcript,
-                          is_final: false
-                        }));
-                      }
-                    }
-                  }
+                if (transcript && transcript.trim()) {
+                  console.log('Final transcript:', transcript);
+                  
+                  clientWs.send(JSON.stringify({
+                    type: 'transcript',
+                    text: transcript,
+                    is_final: true,
+                    confidence: result.Alternatives[0].Items?.[0]?.Confidence
+                  }));
+                }
+              } else {
+                // Partial transcription
+                const transcript = result.Alternatives[0].Transcript;
+                
+                if (transcript && transcript.trim()) {
+                  clientWs.send(JSON.stringify({
+                    type: 'transcript',
+                    text: transcript,
+                    is_final: false
+                  }));
                 }
               }
             }
-          } catch (error) {
-            if (error.name !== 'AbortError') {
-              console.error('Transcription stream error:', error.message);
-            }
-          } finally {
-            console.log('Transcription stream ended');
-            isTranscribing = false;
-            transcribeStream = null;
           }
-        })();
-        
+        }
       } catch (error) {
         console.error('Error starting AWS Transcribe Medical:', error);
+        clientWs.send(JSON.stringify({
+          type: 'error',
+          message: 'Transcription error: ' + error.message
+        }));
         isTranscribing = false;
-        transcribeStream = null;
-        
-        if (clientWs.readyState === WebSocket.OPEN) {
-          clientWs.send(JSON.stringify({
-            type: 'error',
-            message: 'Transcription error: ' + error.message
-          }));
-        }
       }
-    } else if (audioStream && isTranscribing) {
-      // Continue sending audio
+    }
+
+    // Send audio to AWS Transcribe
+    if (audioStream && isTranscribing) {
       try {
+        // Convert Int16Array to Buffer if needed
         const audioBuffer = Buffer.isBuffer(message) ? message : Buffer.from(message);
         audioStream.write(audioBuffer);
       } catch (error) {
@@ -249,11 +226,8 @@ wss.on('connection', async (clientWs) => {
       audioStream.end();
       audioStream = null;
     }
-    
-    transcribeStream = null;
   });
 });
-
 
 app.post('/api/generate-report', async (req, res) => {
   try {

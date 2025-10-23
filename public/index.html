@@ -312,8 +312,8 @@
         }
 
         .voice-btn {
-            background: #404040;
-            border: none;
+            background: #333333;
+            border: 1px solid #404040;
             cursor: pointer;
             padding: 0;
             width: 36px;
@@ -326,13 +326,14 @@
             flex-shrink: 0;
         }
         .voice-btn:hover {
-            background: #505050;
+            background: #3a3a3a;
+            border-color: #505050;
         }
         .voice-btn svg {
-            width: 18px;
-            height: 18px;
+            width: 20px;
+            height: 20px;
             fill: none;
-            stroke: #e0e0e0;
+            stroke: #d0d0d0;
             stroke-width: 2;
             stroke-linecap: round;
             stroke-linejoin: round;
@@ -355,9 +356,9 @@
         }
 
         #sendBtn {
-            background: #404040;
-            color: #e0e0e0;
-            border: none;
+            background: #333333;
+            border: 1px solid #404040;
+            color: #d0d0d0;
             cursor: pointer;
             padding: 0;
             width: 36px;
@@ -370,14 +371,15 @@
             justify-content: center;
         }
         #sendBtn:hover {
-            background: #505050;
+            background: #3a3a3a;
+            border-color: #505050;
         }
 
         #sendBtn svg {
-            width: 18px;
-            height: 18px;
-            stroke: #e0e0e0;
-            stroke-width: 2;
+            width: 20px;
+            height: 20px;
+            stroke: #d0d0d0;
+            stroke-width: 2.5;
             fill: none;
         }
 
@@ -531,7 +533,8 @@
                 </button>
                 <button id="sendBtn" title="Generate report">
                     <svg viewBox="0 0 24 24">
-                        <path d="M7 11l5-5m0 0l5 5m-5-5v12"/>
+                        <path d="M7 14l5-5 5 5" fill="none"/>
+                        <path d="M12 9v10" fill="none"/>
                     </svg>
                 </button>
             </div>

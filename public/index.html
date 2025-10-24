@@ -45,8 +45,8 @@
         }
         
         .header-logo {
-            width: 42px;
-            height: 42px;
+            width: 45px;
+            height: 45px;
             object-fit: contain;
             flex-shrink: 0;
         }
@@ -62,7 +62,7 @@
             font-size: 26px;
             font-weight: 600;
             margin: 0;
-            line-height: 1.2;
+            line-height: 1.1;
         }
 
         .header p {
@@ -484,13 +484,19 @@
         
         /* Mobile responsive styles */
         @media (max-width: 768px) {
+            border-radius: 0;
+                padding: 15px 20px;
+                flex-shrink: 0;
+                display: flex;
+                align-items: center;
+                gap: 8px;
             .header {
                 border-radius: 0;
                 padding: 15px 20px;
                 flex-shrink: 0;
                 display: flex;
                 align-items: center;
-                gap: 10px;
+                gap: 8px;
             }
             
             .header-logo {

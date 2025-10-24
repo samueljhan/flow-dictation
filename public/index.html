@@ -904,7 +904,51 @@
             }
         });
 
-        async function startRecording() {
+                // Function to replace spoken punctuation with actual marks
+        function replacePunctuation(text) {
+            if (!text) return text;
+            
+            // Common medical dictation punctuation replacements
+            const replacements = [
+                [/ period/gi, '.'],
+                [/ comma/gi, ','],
+                [/ colon/gi, ':'],
+                [/ semicolon/gi, ';'],
+                [/ question mark/gi, '?'],
+                [/ exclamation mark/gi, '!'],
+                [/ exclamation point/gi, '!'],
+                [/ new line/gi, '\n'],
+                [/ new paragraph/gi, '\n\n'],
+                [/ open quote/gi, '"'],
+                [/ close quote/gi, '"'],
+                [/ open paren/gi, '('],
+                [/ close paren/gi, ')'],
+                [/ open parenthesis/gi, '('],
+                [/ close parenthesis/gi, ')'],
+                [/ dash/gi, '-'],
+                [/ hyphen/gi, '-'],
+                [/ slash/gi, '/'],
+                [/ backslash/gi, '\\']
+            ];
+            
+            // Replace each punctuation phrase
+            let processedText = text;
+            replacements.forEach(([pattern, replacement]) => {
+                processedText = processedText.replace(pattern, replacement);
+            });
+            
+            // Clean up spaces around punctuation
+            processedText = processedText
+                .replace(/\s+([.,;:!?])/g, '$1')
+                .replace(/([.,;:!?])(?!\s|$)/g, '$1 ')
+                .replace(/\s+/g, ' ')
+                .trim();
+            
+            return processedText;
+        }
+
+
+async function startRecording() {
             try {
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 ws = new WebSocket(protocol + '//' + window.location.host);
@@ -956,7 +1000,7 @@
                         
                         if (data.is_final) {
                             // Final transcript - clean up any preview text
-                            const newText = (data.text || '').trim();
+                            const newText = replacePunctuation((data.text || '').trim());
                             if (newText) {
                                 // Remove any bracketed preview text first
                                 let currentValue = userInput.value.replace(/\[.*?\]/g, '');

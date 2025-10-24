@@ -910,68 +910,66 @@
         // Function to clean up AWS Transcribe Medical output
         // Function to clean up AWS Transcribe Medical output
         // Function to clean up AWS Transcribe Medical output
+        // Function to clean up AWS Transcribe Medical output
         function replacePunctuation(text) {
             if (!text) return text;
             
-            // Debug logging
             console.log('Raw input:', text);
             
             // Fix decimal numbers first (protect these)
-            text = text.replace(/(\d+)\.\s+(\d+)/g, '$1DECIMALDOT$2');
-            text = text.replace(/(\d+)\s+point\s+(\d+)/gi, '$1DECIMALDOT$2');
+            text = text.replace(/(\d+)\.\s+(\d+)/g, '$1.DECIMAL.$2');
+            text = text.replace(/(\d+)\s+point\s+(\d+)/gi, '$1.DECIMAL.$2');
             
-            // Protect valid abbreviations with periods
+            // Handle the various ways AWS might transcribe "period"
+            // Sometimes it's already ".", sometimes " .", sometimes "period", sometimes "P"
             text = text
-                .replace(/\bDr\./gi, 'DrDOT')
-                .replace(/\bMr\./gi, 'MrDOT')
-                .replace(/\bMs\./gi, 'MsDOT')
-                .replace(/\bMrs\./gi, 'MrsDOT');
+                // Fix space before period
+                .replace(/\s+\./g, '.')
+                // Replace standalone P at end of phrases (likely mistranscription of "period")
+                .replace(/\s+P\b(?=\s|$)/g, '.')
+                // Replace "period" word with actual period
+                .replace(/\bperiod\b/gi, '.')
+                // Clean up double periods that might result
+                .replace(/\.+/g, '.');
             
-            // Remove ALL other periods first (aggressive approach)
-            // This removes AWS's auto-inserted periods from pauses
-            text = text.replace(/\./g, '');
-            
-            // Now restore protected periods
+            // Handle parentheses - all variations
             text = text
-                .replace(/DECIMALDOT/g, '.')
-                .replace(/DrDOT/g, 'Dr.')
-                .replace(/MrDOT/g, 'Mr.')
-                .replace(/MsDOT/g, 'Ms.')
-                .replace(/MrsDOT/g, 'Mrs.');
+                .replace(/\b(open|opening|left)\s+(paren|parenthesis|parentheses)\b/gi, '(')
+                .replace(/\b(close|closing|right)\s+(paren|parenthesis|parentheses)\b/gi, ')');
             
-            // Handle parentheses variations
+            // Handle other punctuation
             text = text
-                .replace(/\bopen\s+paren\b/gi, '(')
-                .replace(/\bclose\s+paren\b/gi, ')')
-                .replace(/\bopen\s+parenthesis\b/gi, '(')
-                .replace(/\bclose\s+parenthesis\b/gi, ')')
-                .replace(/\bopen\s+parentheses\b/gi, '(')
-                .replace(/\bclose\s+parentheses\b/gi, ')')
-                .replace(/\bleft\s+paren\b/gi, '(')
-                .replace(/\bright\s+paren\b/gi, ')')
-                .replace(/\bopening\s+paren\b/gi, '(')
-                .replace(/\bclosing\s+paren\b/gi, ')');
-            
-            // Handle spoken punctuation
-            text = text
+                // Comma handling - AWS sometimes outputs " ,"
+                .replace(/\s+,/g, ',')
                 .replace(/\bcomma\b/gi, ',')
-                .replace(/\bperiod\b/gi, '.')  // Add periods only when explicitly spoken
-                .replace(/\bfull\s+stop\b/gi, '.')
+                // Colon and semicolon
+                .replace(/\s+:/g, ':')
                 .replace(/\bcolon\b/gi, ':')
+                .replace(/\s+;/g, ';')
                 .replace(/\bsemicolon\b/gi, ';')
-                .replace(/\bquestion\s+mark\b/gi, '?')
-                .replace(/\bexclamation\s+mark\b/gi, '!')
-                .replace(/\bexclamation\s+point\b/gi, '!')
-                .replace(/\bdash\b/gi, '-')
-                .replace(/\bhyphen\b/gi, '-')
+                // Other punctuation
+                .replace(/\b(question\s+mark|questionmark)\b/gi, '?')
+                .replace(/\b(exclamation\s+mark|exclamation\s+point)\b/gi, '!')
+                .replace(/\b(dash|hyphen)\b/gi, '-')
                 .replace(/\bslash\b/gi, '/')
-                .replace(/\bnew\s+line\b/gi, '\n')
-                .replace(/\bnew\s+paragraph\b/gi, '\n\n');
+                .replace(/\b(new\s+line|newline)\b/gi, '\n')
+                .replace(/\b(new\s+paragraph|newparagraph)\b/gi, '\n\n');
             
-            // Clean up spacing
+            // Restore protected decimals
+            text = text.replace(/\.DECIMAL\./g, '.');
+            
+            // Clean up any double/mixed punctuation
             text = text
-                .replace(/\s+([,;:!?])/g, '$1')
-                .replace(/([,;:!?])(?!\s|$|\d)/g, '$1 ')
+                // Remove duplicate punctuation
+                .replace(/([.,;:!?])\s*\1+/g, '$1')
+                // Fix mixed punctuation (e.g., ", ." becomes ",")
+                .replace(/,\s*\./g, ',')
+                .replace(/\.\s*,/g, '.')
+                .replace(/;\s*[.,]/g, ';')
+                .replace(/:\s*[.,]/g, ':')
+                // Clean spacing
+                .replace(/\s+([.,;:!?])/g, '$1')
+                .replace(/([.,;:!?])(?![\s\d]|$)/g, '$1 ')
                 .replace(/\(\s+/g, '(')
                 .replace(/\s+\)/g, ')')
                 .replace(/\s+/g, ' ')
@@ -981,6 +979,7 @@
             
             return text;
         }
+
 
 
 

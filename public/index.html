@@ -909,26 +909,37 @@
         // Function to fix formatting issues from AWS Transcribe Medical
         // Function to clean up AWS Transcribe Medical output
         // Function to clean up AWS Transcribe Medical output
+        // Function to clean up AWS Transcribe Medical output
         function replacePunctuation(text) {
             if (!text) return text;
             
-            // Debug: log the raw input to see what AWS is sending
-            console.log('Raw transcription input:', text);
+            // Debug logging
+            console.log('Raw input:', text);
             
-            // Fix decimal numbers first
-            text = text.replace(/(\d+)\.\s+(\d+)/g, '$1.$2');
-            text = text.replace(/(\d+)\s+point\s+(\d+)/gi, '$1.$2');
+            // Fix decimal numbers first (protect these)
+            text = text.replace(/(\d+)\.\s+(\d+)/g, '$1DECIMALDOT$2');
+            text = text.replace(/(\d+)\s+point\s+(\d+)/gi, '$1DECIMALDOT$2');
             
-            // Remove unwanted periods from medical abbreviations
+            // Protect valid abbreviations with periods
             text = text
-                .replace(/\bmg\.\s/gi, 'mg ')
-                .replace(/\bml\.\s/gi, 'ml ')
-                .replace(/\bcc\.\s/gi, 'cc ')
-                .replace(/\bcm\.\s/gi, 'cm ')
-                .replace(/\bmm\.\s/gi, 'mm ');
+                .replace(/\bDr\./gi, 'DrDOT')
+                .replace(/\bMr\./gi, 'MrDOT')
+                .replace(/\bMs\./gi, 'MsDOT')
+                .replace(/\bMrs\./gi, 'MrsDOT');
             
-            // Handle parentheses - multiple possible formats from AWS
-            // AWS might send: "open paren", "Open paren", "open parentheses", etc.
+            // Remove ALL other periods first (aggressive approach)
+            // This removes AWS's auto-inserted periods from pauses
+            text = text.replace(/\./g, '');
+            
+            // Now restore protected periods
+            text = text
+                .replace(/DECIMALDOT/g, '.')
+                .replace(/DrDOT/g, 'Dr.')
+                .replace(/MrDOT/g, 'Mr.')
+                .replace(/MsDOT/g, 'Ms.')
+                .replace(/MrsDOT/g, 'Mrs.');
+            
+            // Handle parentheses variations
             text = text
                 .replace(/\bopen\s+paren\b/gi, '(')
                 .replace(/\bclose\s+paren\b/gi, ')')
@@ -938,13 +949,14 @@
                 .replace(/\bclose\s+parentheses\b/gi, ')')
                 .replace(/\bleft\s+paren\b/gi, '(')
                 .replace(/\bright\s+paren\b/gi, ')')
-                .replace(/\bleft\s+parenthesis\b/gi, '(')
-                .replace(/\bright\s+parenthesis\b/gi, ')');
+                .replace(/\bopening\s+paren\b/gi, '(')
+                .replace(/\bclosing\s+paren\b/gi, ')');
             
-            // Handle other punctuation
+            // Handle spoken punctuation
             text = text
                 .replace(/\bcomma\b/gi, ',')
-                .replace(/\bperiod\b/gi, '.')
+                .replace(/\bperiod\b/gi, '.')  // Add periods only when explicitly spoken
+                .replace(/\bfull\s+stop\b/gi, '.')
                 .replace(/\bcolon\b/gi, ':')
                 .replace(/\bsemicolon\b/gi, ';')
                 .replace(/\bquestion\s+mark\b/gi, '?')
@@ -956,22 +968,20 @@
                 .replace(/\bnew\s+line\b/gi, '\n')
                 .replace(/\bnew\s+paragraph\b/gi, '\n\n');
             
-            // Clean up any double punctuation
+            // Clean up spacing
             text = text
-                .replace(/([.,;:!?])\s*([.,;:!?])/g, '$2')
-                .replace(/([.,;:!?]){2,}/g, '$1')
-                .replace(/\s+([.,;:!?])/g, '$1')
-                .replace(/([.,;:!?])(?!\s|$|\d)/g, '$1 ')
+                .replace(/\s+([,;:!?])/g, '$1')
+                .replace(/([,;:!?])(?!\s|$|\d)/g, '$1 ')
                 .replace(/\(\s+/g, '(')
                 .replace(/\s+\)/g, ')')
                 .replace(/\s+/g, ' ')
                 .trim();
             
-            // Debug: log the output
-            console.log('Processed transcription:', text);
+            console.log('Processed:', text);
             
             return text;
         }
+
 
 
 

@@ -18,7 +18,7 @@
             display: flex;
             justify-content: center;
             align-items: center;
-            padding: 20px;
+            padding: 0;
         }
 
         .container {
@@ -484,6 +484,56 @@
         
         /* Mobile responsive styles */
         @media (max-width: 768px) {
+            html, body {
+                margin: 0;
+                padding: 0;
+                overflow: hidden;
+                position: fixed;
+                width: 100%;
+                height: 100%;
+                background: #1a1a1a;  /* Force dark background */
+                -webkit-overflow-scrolling: touch;
+            }
+            
+            body {
+                background: #1a1a1a !important;  /* Override any other background */
+            }
+            
+            .container {
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                border-radius: 0 !important;  /* Force no rounded corners */
+                border: none !important;  /* Remove any border */
+                height: 100vh;
+                height: 100dvh;
+                max-width: 100%;
+                width: 100%;
+                box-shadow: none;
+                display: flex;
+                flex-direction: column;
+                overflow: hidden;
+                background: #2a2a2a;  /* Ensure container fills screen */
+            }
+            
+            .header {
+                border-radius: 0 !important;  /* Force no rounded corners */
+                padding: 15px 20px;
+                flex-shrink: 0;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                background: #1f1f1f;  /* Ensure header has dark background */
+            }
+            
+            .header-logo {
+                width: 42px !important;  /* Force 42px */
+                height: 42px !important;
+                object-fit: contain;
+                flex-shrink: 0;
+            } {
             border-radius: 0;
                 padding: 15px 20px;
                 flex-shrink: 0;

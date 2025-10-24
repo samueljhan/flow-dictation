@@ -911,6 +911,7 @@
         // Function to clean up AWS Transcribe Medical output
         // Function to clean up AWS Transcribe Medical output
         // Function to clean up AWS Transcribe Medical output
+        // Function to clean up AWS Transcribe Medical output
         function replacePunctuation(text) {
             if (!text) return text;
             
@@ -920,26 +921,33 @@
             text = text.replace(/(\d+)\.\s+(\d+)/g, '$1.DECIMAL.$2');
             text = text.replace(/(\d+)\s+point\s+(\d+)/gi, '$1.DECIMAL.$2');
             
-            // Handle the various ways AWS might transcribe "period"
-            // Sometimes it's already ".", sometimes " .", sometimes "period", sometimes "P"
+            // Handle all the ways AWS might transcribe "period"
+            // AWS might output: "P.", "P", "Per", ",", "period", " ."
             text = text
+                // "P." becomes "."
+                .replace(/\bP\./g, '.')
+                // Standalone "P" at end of phrase becomes "."
+                .replace(/\bP\b(?=[\s,;:!?]|$)/g, '.')
+                // "Per" at end of phrase (likely mistranscription of "period")
+                .replace(/\bPer\b(?=[\s,;:!?]|$)/g, '.')
                 // Fix space before period
                 .replace(/\s+\./g, '.')
-                // Replace standalone P at end of phrases (likely mistranscription of "period")
-                .replace(/\s+P\b(?=\s|$)/g, '.')
-                // Replace "period" word with actual period
+                // Replace "period" word
                 .replace(/\bperiod\b/gi, '.')
-                // Clean up double periods that might result
-                .replace(/\.+/g, '.');
+                // Sometimes AWS outputs comma instead of period - this is tricky
+                // Only convert comma to period if followed by capital letter (new sentence)
+                .replace(/,(\s+[A-Z])/g, '.$1')
+                // Clean up multiple periods
+                .replace(/\.{2,}/g, '.');
             
-            // Handle parentheses - all variations
+            // Handle parentheses
             text = text
                 .replace(/\b(open|opening|left)\s+(paren|parenthesis|parentheses)\b/gi, '(')
                 .replace(/\b(close|closing|right)\s+(paren|parenthesis|parentheses)\b/gi, ')');
             
             // Handle other punctuation
             text = text
-                // Comma handling - AWS sometimes outputs " ,"
+                // Comma (but don't replace commas that should be periods)
                 .replace(/\s+,/g, ',')
                 .replace(/\bcomma\b/gi, ',')
                 // Colon and semicolon
@@ -947,11 +955,13 @@
                 .replace(/\bcolon\b/gi, ':')
                 .replace(/\s+;/g, ';')
                 .replace(/\bsemicolon\b/gi, ';')
-                // Other punctuation
+                // Questions and exclamations
                 .replace(/\b(question\s+mark|questionmark)\b/gi, '?')
                 .replace(/\b(exclamation\s+mark|exclamation\s+point)\b/gi, '!')
+                // Dashes and slashes
                 .replace(/\b(dash|hyphen)\b/gi, '-')
                 .replace(/\bslash\b/gi, '/')
+                // Line breaks
                 .replace(/\b(new\s+line|newline)\b/gi, '\n')
                 .replace(/\b(new\s+paragraph|newparagraph)\b/gi, '\n\n');
             
@@ -960,14 +970,14 @@
             
             // Clean up any double/mixed punctuation
             text = text
-                // Remove duplicate punctuation
+                // Remove duplicate same punctuation
                 .replace(/([.,;:!?])\s*\1+/g, '$1')
-                // Fix mixed punctuation (e.g., ", ." becomes ",")
-                .replace(/,\s*\./g, ',')
+                // Fix common mixed punctuation
+                .replace(/,\s*\./g, '.')
                 .replace(/\.\s*,/g, '.')
                 .replace(/;\s*[.,]/g, ';')
                 .replace(/:\s*[.,]/g, ':')
-                // Clean spacing
+                // Fix spacing
                 .replace(/\s+([.,;:!?])/g, '$1')
                 .replace(/([.,;:!?])(?![\s\d]|$)/g, '$1 ')
                 .replace(/\(\s+/g, '(')
@@ -979,6 +989,7 @@
             
             return text;
         }
+
 
 
 

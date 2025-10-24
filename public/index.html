@@ -906,57 +906,66 @@
 
                 // Function to replace spoken punctuation with actual marks
         // Function to replace spoken punctuation and fix formatting
+        // Function to fix formatting issues from AWS Transcribe Medical
         function replacePunctuation(text) {
             if (!text) return text;
             
             // First, fix decimal numbers (remove space after decimal point in numbers)
             text = text.replace(/(\d+)\.\s+(\d+)/g, '$1.$2');
             
-            // Fix "point" when used in numbers
+            // Fix "point" when used in numbers (only if not already a decimal)
             text = text.replace(/(\d+)\s+point\s+(\d+)/gi, '$1.$2');
             
-            // Common medical dictation punctuation replacements
-            // Use word boundaries to avoid partial matches
-            const replacements = [
-                [/\bperiod\b/gi, '.'],
-                [/\bcomma\b/gi, ','],
-                [/\bcolon\b/gi, ':'],
-                [/\bsemicolon\b/gi, ';'],
-                [/\bquestion mark\b/gi, '?'],
-                [/\bexclamation mark\b/gi, '!'],
-                [/\bexclamation point\b/gi, '!'],
-                [/\bnew line\b/gi, '\n'],
-                [/\bnew paragraph\b/gi, '\n\n'],
-                [/\bopen quote\b/gi, '"'],
-                [/\bclose quote\b/gi, '"'],
+            // Fix common AWS Transcribe Medical issues
+            // AWS sometimes outputs ", ," or ": ," - clean these up
+            text = text
+                .replace(/,\s*,/g, ',')  // Fix double commas
+                .replace(/:\s*,/g, ':')  // Fix colon followed by comma
+                .replace(/;\s*,/g, ';')  // Fix semicolon followed by comma
+                .replace(/,\s*;/g, ';')  // Fix comma followed by semicolon
+                .replace(/,\s*:/g, ':')  // Fix comma followed by colon
+                .replace(/,\s*\./g, '.')  // Fix comma followed by period
+                .replace(/\.\s*,/g, '.')  // Fix period followed by comma
+                .replace(/([.,;:!?])\s*\1+/g, '$1');  // Remove duplicate punctuation
+            
+            // Only replace punctuation words if they haven't been converted already
+            // Check if the word is NOT preceded by punctuation
+            const smartReplacements = [
+                // Only replace if not preceded by punctuation
+                [/(?<![.,;:!?])\s*\bperiod\b/gi, '.'],
+                [/(?<![.,;:!?])\s*\bcomma\b/gi, ','],
+                [/(?<![.,;:!?])\s*\bcolon\b/gi, ':'],
+                [/(?<![.,;:!?])\s*\bsemicolon\b/gi, ';'],
+                [/(?<![.,;:!?])\s*\bquestion mark\b/gi, '?'],
+                [/(?<![.,;:!?])\s*\bexclamation mark\b/gi, '!'],
+                // Parentheses patterns
                 [/\bopen paren\b/gi, '('],
                 [/\bclose paren\b/gi, ')'],
                 [/\bopen parenthesis\b/gi, '('],
                 [/\bclose parenthesis\b/gi, ')'],
-                [/\bdash\b/gi, '-'],
-                [/\bhyphen\b/gi, '-'],
-                [/\bslash\b/gi, '/'],
-                [/\bbackslash\b/gi, '\\']
+                [/\bleft paren\b/gi, '('],
+                [/\bright paren\b/gi, ')'],
+                [/\bleft parenthesis\b/gi, '('],
+                [/\bright parenthesis\b/gi, ')']
             ];
             
-            // Replace each punctuation phrase
-            let processedText = text;
-            replacements.forEach(([pattern, replacement]) => {
-                processedText = processedText.replace(pattern, replacement);
+            // Apply smart replacements
+            smartReplacements.forEach(([pattern, replacement]) => {
+                text = text.replace(pattern, replacement);
             });
             
-            // Fix double punctuation (e.g., ", ." becomes ",")
-            processedText = processedText
-                .replace(/,\s*\./g, ',')  // Fix comma followed by period
-                .replace(/\.\s*,/g, '.')  // Fix period followed by comma
-                .replace(/([.,;:!?])\s*\1+/g, '$1')  // Remove duplicate punctuation
+            // Final cleanup
+            text = text
                 .replace(/\s+([.,;:!?])/g, '$1')  // Remove space before punctuation
                 .replace(/([.,;:!?])(?!\s|$|\d)/g, '$1 ')  // Add space after (except before numbers)
+                .replace(/\(\s+/g, '(')  // Remove space after opening paren
+                .replace(/\s+\)/g, ')')  // Remove space before closing paren
                 .replace(/\s+/g, ' ')  // Clean up multiple spaces
                 .trim();
             
-            return processedText;
+            return text;
         }
+
 
 
 

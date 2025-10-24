@@ -908,78 +908,71 @@
         // Function to replace spoken punctuation and fix formatting
         // Function to fix formatting issues from AWS Transcribe Medical
         // Function to clean up AWS Transcribe Medical output
+        // Function to clean up AWS Transcribe Medical output
         function replacePunctuation(text) {
             if (!text) return text;
             
-            // Remove periods that AWS adds after common medical terms/phrases that shouldn't end sentences
-            // These are often false sentence endings
+            // Debug: log the raw input to see what AWS is sending
+            console.log('Raw transcription input:', text);
+            
+            // Fix decimal numbers first
+            text = text.replace(/(\d+)\.\s+(\d+)/g, '$1.$2');
+            text = text.replace(/(\d+)\s+point\s+(\d+)/gi, '$1.$2');
+            
+            // Remove unwanted periods from medical abbreviations
             text = text
-                .replace(/(\d+)\.\s+(\d+)/g, '$1.$2')  // Fix decimals: "3. 0" -> "3.0"
-                .replace(/(\d+)\s+point\s+(\d+)/gi, '$1.$2')  // "3 point 0" -> "3.0"
-                .replace(/\bmg\.\s/gi, 'mg ')  // "mg. " -> "mg "
-                .replace(/\bml\.\s/gi, 'ml ')  // "ml. " -> "ml "
-                .replace(/\bDr\.\s/gi, 'Dr. ')  // Keep Dr. period
-                .replace(/\bMr\.\s/gi, 'Mr. ')  // Keep Mr. period
-                .replace(/\bMs\.\s/gi, 'Ms. ')  // Keep Ms. period
-                .replace(/\bMrs\.\s/gi, 'Mrs. ');  // Keep Mrs. period
+                .replace(/\bmg\.\s/gi, 'mg ')
+                .replace(/\bml\.\s/gi, 'ml ')
+                .replace(/\bcc\.\s/gi, 'cc ')
+                .replace(/\bcm\.\s/gi, 'cm ')
+                .replace(/\bmm\.\s/gi, 'mm ');
             
-            // Remove stray periods before punctuation words
-            // AWS might output ". comma" which becomes ". ," 
+            // Handle parentheses - multiple possible formats from AWS
+            // AWS might send: "open paren", "Open paren", "open parentheses", etc.
             text = text
-                .replace(/\.\s+(comma|colon|semicolon|period)/gi, ' $1')  // Remove period before punctuation words
-                .replace(/,\s+(comma|period)/gi, ' $1')  // Remove comma before punctuation words
-                .replace(/:\s+(colon|comma)/gi, ' $1')  // Remove colon before punctuation words
-                .replace(/;\s+(semicolon|comma)/gi, ' $1');  // Remove semicolon before punctuation words
+                .replace(/\bopen\s+paren\b/gi, '(')
+                .replace(/\bclose\s+paren\b/gi, ')')
+                .replace(/\bopen\s+parenthesis\b/gi, '(')
+                .replace(/\bclose\s+parenthesis\b/gi, ')')
+                .replace(/\bopen\s+parentheses\b/gi, '(')
+                .replace(/\bclose\s+parentheses\b/gi, ')')
+                .replace(/\bleft\s+paren\b/gi, '(')
+                .replace(/\bright\s+paren\b/gi, ')')
+                .replace(/\bleft\s+parenthesis\b/gi, '(')
+                .replace(/\bright\s+parenthesis\b/gi, ')');
             
-            // Now handle spoken punctuation (only if not already punctuated)
-            // This prevents double conversion
-            const punctuationWords = {
-                'comma': ',',
-                'period': '.',
-                'colon': ':',
-                'semicolon': ';',
-                'question mark': '?',
-                'exclamation mark': '!',
-                'exclamation point': '!',
-                'open paren': '(',
-                'close paren': ')',
-                'open parenthesis': '(',
-                'close parenthesis': ')',
-                'left paren': '(',
-                'right paren': ')',
-                'open bracket': '[',
-                'close bracket': ']',
-                'dash': '-',
-                'hyphen': '-',
-                'slash': '/',
-                'new line': '\n',
-                'new paragraph': '\n\n'
-            };
-            
-            // Replace punctuation words with actual punctuation
-            Object.keys(punctuationWords).forEach(word => {
-                const regex = new RegExp('\\b' + word + '\\b', 'gi');
-                text = text.replace(regex, punctuationWords[word]);
-            });
-            
-            // Clean up any resulting double/mixed punctuation
+            // Handle other punctuation
             text = text
-                .replace(/([.,;:!?])\s*([.,;:!?])/g, '$2')  // Remove first of double punctuation
-                .replace(/([.,;:!?]){2,}/g, '$1')  // Remove duplicate same punctuation
-                .replace(/\s+([.,;:!?])/g, '$1')  // Remove space before punctuation
-                .replace(/([.,;:!?])(?!\s|$|\d)/g, '$1 ')  // Add space after (except before numbers)
-                .replace(/\(\s+/g, '(')  // Remove space after opening paren
-                .replace(/\s+\)/g, ')')  // Remove space before closing paren
-                .replace(/\s+/g, ' ')  // Clean up multiple spaces
+                .replace(/\bcomma\b/gi, ',')
+                .replace(/\bperiod\b/gi, '.')
+                .replace(/\bcolon\b/gi, ':')
+                .replace(/\bsemicolon\b/gi, ';')
+                .replace(/\bquestion\s+mark\b/gi, '?')
+                .replace(/\bexclamation\s+mark\b/gi, '!')
+                .replace(/\bexclamation\s+point\b/gi, '!')
+                .replace(/\bdash\b/gi, '-')
+                .replace(/\bhyphen\b/gi, '-')
+                .replace(/\bslash\b/gi, '/')
+                .replace(/\bnew\s+line\b/gi, '\n')
+                .replace(/\bnew\s+paragraph\b/gi, '\n\n');
+            
+            // Clean up any double punctuation
+            text = text
+                .replace(/([.,;:!?])\s*([.,;:!?])/g, '$2')
+                .replace(/([.,;:!?]){2,}/g, '$1')
+                .replace(/\s+([.,;:!?])/g, '$1')
+                .replace(/([.,;:!?])(?!\s|$|\d)/g, '$1 ')
+                .replace(/\(\s+/g, '(')
+                .replace(/\s+\)/g, ')')
+                .replace(/\s+/g, ' ')
                 .trim();
             
-            // Final check: remove isolated periods (period with spaces on both sides in middle of text)
-            if (text.length > 2) {
-                text = text.replace(/\s\.\s/g, ' ');
-            }
+            // Debug: log the output
+            console.log('Processed transcription:', text);
             
             return text;
         }
+
 
 
 

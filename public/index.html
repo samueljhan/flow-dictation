@@ -1259,14 +1259,16 @@ async function startRecording() {
 
         // Show only one random example on mobile
         function setupMobileExamples() {
-            if (window.innerWidth <= 768) {
-                const examples = document.querySelectorAll('.example-prompt');
-                if (examples.length > 0) {
-                    // Hide all examples first
+            const examples = document.querySelectorAll('.example-prompt');
+            if (examples.length > 0) {
+                if (window.innerWidth <= 768) {
+                    // Mobile: hide all then show one random
                     examples.forEach(ex => ex.style.display = 'none');
-                    // Show one random example
                     const randomIndex = Math.floor(Math.random() * examples.length);
                     examples[randomIndex].style.display = 'block';
+                } else {
+                    // Desktop: show all examples
+                    examples.forEach(ex => ex.style.display = 'block');
                 }
             }
         }

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Flow Dictation - Medical Report Generator</title>
     <style>
         * {
@@ -464,155 +464,237 @@
             display: block;
         }
 
+        
+        /* Prevent body scroll */
+        html, body {
+            overflow: hidden;
+            position: fixed;
+            width: 100%;
+            height: 100%;
+        }
+        
         /* Mobile responsive styles */
         @media (max-width: 768px) {
-            body {
-                padding: 0;
+            html, body {
                 margin: 0;
+                padding: 0;
+                overflow: hidden;
+                position: fixed;
+                width: 100%;
+                height: 100%;
+                -webkit-overflow-scrolling: touch;
             }
             
             .container {
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
                 border-radius: 0;
                 height: 100vh;
-                height: 100dvh; /* Dynamic viewport height for mobile */
+                height: 100dvh;
                 max-width: 100%;
                 width: 100%;
                 box-shadow: none;
+                display: flex;
+                flex-direction: column;
+                overflow: hidden;
             }
             
             .header {
                 border-radius: 0;
-                padding: 15px 20px;
+                padding: 12px 15px;
+                flex-shrink: 0;
             }
             
             .header h1 {
-                font-size: 22px;
+                font-size: 20px;
             }
             
             .header p {
-                font-size: 12px;
-                margin-left: 38px;
+                font-size: 11px;
+                margin-left: 32px;
             }
             
             .header-logo {
-                width: 26px;
-                height: 26px;
+                width: 24px;
+                height: 24px;
             }
             
             .dictaphone-setup {
-                padding: 10px 20px;
+                padding: 8px 15px;
+                flex-shrink: 0;
+                font-size: 12px;
+            }
+            
+            .setup-btn {
+                padding: 5px 10px;
+                font-size: 11px;
             }
             
             .microphone-status {
-                padding: 6px 20px;
+                padding: 5px 15px;
+                flex-shrink: 0;
+                font-size: 11px;
             }
             
             .specialty-selector {
-                padding: 8px 20px;
+                padding: 6px 15px;
+                flex-shrink: 0;
+                font-size: 11px;
             }
             
             .chat-container {
-                padding: 20px 15px 15px;
+                flex: 1;
+                min-height: 0; /* Important for flex child scrolling */
+                overflow-y: auto;
+                -webkit-overflow-scrolling: touch;
+                padding: 15px;
             }
             
             .welcome-message {
-                padding: 30px 15px;
+                padding: 20px 10px;
             }
             
             .welcome-message h2 {
-                font-size: 20px;
-                margin-bottom: 10px;
+                font-size: 18px;
+                margin-bottom: 8px;
             }
             
             .welcome-message p {
-                font-size: 13px;
+                font-size: 12px;
             }
             
             .example-prompts {
-                margin-top: 20px;
-                gap: 10px;
+                margin-top: 15px;
+                gap: 8px;
             }
             
             .example-prompt {
-                padding: 12px;
+                padding: 10px;
+                font-size: 11px;
+            }
+            
+            .example-prompt strong {
+                font-size: 12px;
+                margin-bottom: 4px;
             }
             
             .input-container {
-                padding: 15px 20px 20px;
+                padding: 12px 15px 15px;
+                flex-shrink: 0;
+            }
+            
+            .input-wrapper {
+                padding: 6px 12px;
+            }
+            
+            #userInput {
+                font-size: 14px;
+                min-height: 20px;
+                max-height: 80px;
+            }
+            
+            .voice-btn,
+            #sendBtn {
+                width: 32px;
+                height: 32px;
+            }
+            
+            .voice-btn svg,
+            #sendBtn svg {
+                width: 16px;
+                height: 16px;
             }
             
             .disclaimer {
-                padding: 6px 20px;
-                font-size: 10px;
+                padding: 4px 15px;
+                font-size: 9px;
             }
             
             .message-content {
                 max-width: 85%;
                 font-size: 13px;
-                padding: 10px 14px;
+                padding: 8px 12px;
             }
             
             .avatar {
-                width: 32px;
-                height: 32px;
-                font-size: 12px;
+                width: 28px;
+                height: 28px;
+                font-size: 11px;
             }
             
-            /* Hide setup section on very small screens */
-            @media (max-height: 600px) {
+            .report-section {
+                margin: 10px 0;
+            }
+            
+            .report-section h3 {
+                font-size: 11px;
+            }
+            
+            .report-section p {
+                font-size: 12px;
+                line-height: 1.4;
+            }
+            
+            .copy-btn {
+                padding: 5px 10px;
+                font-size: 11px;
+            }
+            
+            /* Hide dictaphone on very small phones */
+            @media (max-height: 550px) {
                 .dictaphone-setup {
                     display: none;
                 }
             }
             
-            /* Adjust for very small screens */
-            @media (max-height: 700px) {
-                .header {
-                    padding: 12px 20px;
-                }
-                
-                .welcome-message {
-                    padding: 20px 15px;
-                }
-                
+            /* Adjust for small phones */
+            @media (max-height: 650px) {
                 .example-prompts {
-                    display: none; /* Hide examples on very small screens */
+                    display: none;
+                }
+                
+                .header {
+                    padding: 10px 15px;
                 }
                 
                 .chat-container {
-                    padding: 15px 10px 10px;
+                    padding: 10px;
                 }
             }
         }
         
-        /* Landscape orientation adjustments */
+        /* Landscape orientation */
         @media (max-width: 768px) and (orientation: landscape) {
             .header {
-                padding: 10px 20px;
+                padding: 8px 15px;
             }
             
             .header h1 {
-                font-size: 20px;
+                font-size: 18px;
             }
             
-            .dictaphone-setup {
-                padding: 8px 20px;
-            }
-            
+            .dictaphone-setup,
             .microphone-status,
             .specialty-selector {
-                padding: 5px 20px;
+                padding: 4px 15px;
+                font-size: 10px;
             }
             
             .chat-container {
-                padding: 10px 15px;
+                padding: 8px 10px;
             }
             
             .input-container {
-                padding: 10px 20px 15px;
+                padding: 8px 15px 10px;
             }
-        }
-    </style>
+            
+            .example-prompts {
+                display: none;
+            }
+        }</style>
     </style>
 </head>
 <body>

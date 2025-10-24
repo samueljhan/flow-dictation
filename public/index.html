@@ -1145,6 +1145,11 @@
         }
 
         function sendMessage() {
+            // Stop recording if active
+            if (isRecording) {
+                stopRecording();
+            }
+            
             const message = userInput.value.trim();
             if (!message) return;
 
@@ -1153,7 +1158,6 @@
             userInput.value = '';
             userInput.style.height = 'auto';
             finalTranscript = '';
-            sendBtn.disabled = false;
 
             addMessage('Generating report...', false);
 

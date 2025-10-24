@@ -896,7 +896,10 @@
             if (isRecording) {
                 stopRecording();
             } else {
+                // Store current state but don't reset
                 finalTranscript = userInput.value;
+                // Keep focus on input for editing
+                userInput.focus();
                 startRecording();
             }
         });
@@ -977,7 +980,10 @@
             isRecording = false;
             voiceBtn.classList.remove('recording');
             micIndicator.classList.remove('recording');
-            micStatus.textContent = hidDevice ? 'Press dictaphone button' : 'Click to record';
+            micStatus.textContent = hidDevice ? 'Press dictaphone button to record' : 'Click mic to record';
+            
+            // Preserve the current text
+            finalTranscript = userInput.value;
             
             if (audioWorkletNode) audioWorkletNode.disconnect();
             if (audioContext) audioContext.close();

@@ -463,6 +463,156 @@
         .dictate-btn.visible {
             display: block;
         }
+
+        /* Mobile responsive styles */
+        @media (max-width: 768px) {
+            body {
+                padding: 0;
+                margin: 0;
+            }
+            
+            .container {
+                border-radius: 0;
+                height: 100vh;
+                height: 100dvh; /* Dynamic viewport height for mobile */
+                max-width: 100%;
+                width: 100%;
+                box-shadow: none;
+            }
+            
+            .header {
+                border-radius: 0;
+                padding: 15px 20px;
+            }
+            
+            .header h1 {
+                font-size: 22px;
+            }
+            
+            .header p {
+                font-size: 12px;
+                margin-left: 38px;
+            }
+            
+            .header-logo {
+                width: 26px;
+                height: 26px;
+            }
+            
+            .dictaphone-setup {
+                padding: 10px 20px;
+            }
+            
+            .microphone-status {
+                padding: 6px 20px;
+            }
+            
+            .specialty-selector {
+                padding: 8px 20px;
+            }
+            
+            .chat-container {
+                padding: 20px 15px 15px;
+            }
+            
+            .welcome-message {
+                padding: 30px 15px;
+            }
+            
+            .welcome-message h2 {
+                font-size: 20px;
+                margin-bottom: 10px;
+            }
+            
+            .welcome-message p {
+                font-size: 13px;
+            }
+            
+            .example-prompts {
+                margin-top: 20px;
+                gap: 10px;
+            }
+            
+            .example-prompt {
+                padding: 12px;
+            }
+            
+            .input-container {
+                padding: 15px 20px 20px;
+            }
+            
+            .disclaimer {
+                padding: 6px 20px;
+                font-size: 10px;
+            }
+            
+            .message-content {
+                max-width: 85%;
+                font-size: 13px;
+                padding: 10px 14px;
+            }
+            
+            .avatar {
+                width: 32px;
+                height: 32px;
+                font-size: 12px;
+            }
+            
+            /* Hide setup section on very small screens */
+            @media (max-height: 600px) {
+                .dictaphone-setup {
+                    display: none;
+                }
+            }
+            
+            /* Adjust for very small screens */
+            @media (max-height: 700px) {
+                .header {
+                    padding: 12px 20px;
+                }
+                
+                .welcome-message {
+                    padding: 20px 15px;
+                }
+                
+                .example-prompts {
+                    display: none; /* Hide examples on very small screens */
+                }
+                
+                .chat-container {
+                    padding: 15px 10px 10px;
+                }
+            }
+        }
+        
+        /* Landscape orientation adjustments */
+        @media (max-width: 768px) and (orientation: landscape) {
+            .header {
+                padding: 10px 20px;
+            }
+            
+            .header h1 {
+                font-size: 20px;
+            }
+            
+            .dictaphone-setup {
+                padding: 8px 20px;
+            }
+            
+            .microphone-status,
+            .specialty-selector {
+                padding: 5px 20px;
+            }
+            
+            .chat-container {
+                padding: 10px 15px;
+            }
+            
+            .input-container {
+                padding: 10px 20px 15px;
+            }
+        }
+    </style>
     </style>
 </head>
 <body>

@@ -905,30 +905,38 @@
         });
 
                 // Function to replace spoken punctuation with actual marks
+        // Function to replace spoken punctuation and fix formatting
         function replacePunctuation(text) {
             if (!text) return text;
             
+            // First, fix decimal numbers (remove space after decimal point in numbers)
+            text = text.replace(/(\d+)\.\s+(\d+)/g, '$1.$2');
+            
+            // Fix "point" when used in numbers
+            text = text.replace(/(\d+)\s+point\s+(\d+)/gi, '$1.$2');
+            
             // Common medical dictation punctuation replacements
+            // Use word boundaries to avoid partial matches
             const replacements = [
-                [/ period/gi, '.'],
-                [/ comma/gi, ','],
-                [/ colon/gi, ':'],
-                [/ semicolon/gi, ';'],
-                [/ question mark/gi, '?'],
-                [/ exclamation mark/gi, '!'],
-                [/ exclamation point/gi, '!'],
-                [/ new line/gi, '\n'],
-                [/ new paragraph/gi, '\n\n'],
-                [/ open quote/gi, '"'],
-                [/ close quote/gi, '"'],
-                [/ open paren/gi, '('],
-                [/ close paren/gi, ')'],
-                [/ open parenthesis/gi, '('],
-                [/ close parenthesis/gi, ')'],
-                [/ dash/gi, '-'],
-                [/ hyphen/gi, '-'],
-                [/ slash/gi, '/'],
-                [/ backslash/gi, '\\']
+                [/\bperiod\b/gi, '.'],
+                [/\bcomma\b/gi, ','],
+                [/\bcolon\b/gi, ':'],
+                [/\bsemicolon\b/gi, ';'],
+                [/\bquestion mark\b/gi, '?'],
+                [/\bexclamation mark\b/gi, '!'],
+                [/\bexclamation point\b/gi, '!'],
+                [/\bnew line\b/gi, '\n'],
+                [/\bnew paragraph\b/gi, '\n\n'],
+                [/\bopen quote\b/gi, '"'],
+                [/\bclose quote\b/gi, '"'],
+                [/\bopen paren\b/gi, '('],
+                [/\bclose paren\b/gi, ')'],
+                [/\bopen parenthesis\b/gi, '('],
+                [/\bclose parenthesis\b/gi, ')'],
+                [/\bdash\b/gi, '-'],
+                [/\bhyphen\b/gi, '-'],
+                [/\bslash\b/gi, '/'],
+                [/\bbackslash\b/gi, '\\']
             ];
             
             // Replace each punctuation phrase
@@ -937,15 +945,19 @@
                 processedText = processedText.replace(pattern, replacement);
             });
             
-            // Clean up spaces around punctuation
+            // Fix double punctuation (e.g., ", ." becomes ",")
             processedText = processedText
-                .replace(/\s+([.,;:!?])/g, '$1')
-                .replace(/([.,;:!?])(?!\s|$)/g, '$1 ')
-                .replace(/\s+/g, ' ')
+                .replace(/,\s*\./g, ',')  // Fix comma followed by period
+                .replace(/\.\s*,/g, '.')  // Fix period followed by comma
+                .replace(/([.,;:!?])\s*\1+/g, '$1')  // Remove duplicate punctuation
+                .replace(/\s+([.,;:!?])/g, '$1')  // Remove space before punctuation
+                .replace(/([.,;:!?])(?!\s|$|\d)/g, '$1 ')  // Add space after (except before numbers)
+                .replace(/\s+/g, ' ')  // Clean up multiple spaces
                 .trim();
             
             return processedText;
         }
+
 
 
 async function startRecording() {

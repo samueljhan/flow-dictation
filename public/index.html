@@ -896,11 +896,11 @@
             if (isRecording) {
                 stopRecording();
             } else {
-                // Store current state but don't reset
-                finalTranscript = userInput.value;
-                // Keep focus on input for editing
-                userInput.focus();
+                // Save current state before recording
+                finalTranscript = userInput.value || '';
                 startRecording();
+                // Keep focus on input
+                setTimeout(() => userInput.focus(), 100);
             }
         });
 
@@ -950,15 +950,75 @@
                     const data = JSON.parse(event.data);
                     
                     if (data.type === 'transcript') {
+                        // Get current cursor position and selection
+                        const selectionStart = userInput.selectionStart;
+                        const selectionEnd = userInput.selectionEnd;
+                        const hasSelection = selectionStart !== selectionEnd;
+                        
                         if (data.is_final) {
-                            finalTranscript += (finalTranscript ? ' ' : '') + data.text;
-                            userInput.value = finalTranscript;
+                            // Final transcript
+                            const newText = (data.text || '').trim();
+                            if (newText) {
+                                const currentValue = userInput.value;
+                                let updatedValue;
+                                let newCursorPos;
+                                
+                                if (hasSelection) {
+                                    // Replace selected text
+                                    updatedValue = currentValue.substring(0, selectionStart) + 
+                                                  newText + ' ' +
+                                                  currentValue.substring(selectionEnd);
+                                    newCursorPos = selectionStart + newText.length + 1;
+                                } else {
+                                    // Insert at cursor position
+                                    if (finalTranscript.length === 0 || selectionStart === currentValue.length) {
+                                        // At end or empty, just append
+                                        updatedValue = currentValue + (currentValue ? ' ' : '') + newText;
+                                        newCursorPos = updatedValue.length;
+                                    } else {
+                                        // Insert at cursor
+                                        updatedValue = currentValue.substring(0, selectionStart) + 
+                                                      newText + ' ' +
+                                                      currentValue.substring(selectionStart);
+                                        newCursorPos = selectionStart + newText.length + 1;
+                                    }
+                                }
+                                
+                                userInput.value = updatedValue;
+                                finalTranscript = updatedValue;
+                                
+                                // Restore cursor position
+                                userInput.setSelectionRange(newCursorPos, newCursorPos);
+                                userInput.focus();
+                            }
                         } else {
-                            userInput.value = finalTranscript + (finalTranscript ? ' ' : '') + data.text;
+                            // Partial transcript - show as preview
+                            const partialText = data.text || '';
+                            if (partialText) {
+                                const baseText = finalTranscript || userInput.value;
+                                let previewText;
+                                
+                                if (hasSelection) {
+                                    // Preview replacing selection
+                                    previewText = baseText.substring(0, selectionStart) + 
+                                                 '[' + partialText + ']' + 
+                                                 baseText.substring(selectionEnd);
+                                } else {
+                                    // Preview at cursor
+                                    previewText = baseText.substring(0, selectionStart) + 
+                                                 '[' + partialText + ']' + 
+                                                 baseText.substring(selectionStart);
+                                }
+                                
+                                userInput.value = previewText;
+                                // Keep original selection
+                                userInput.setSelectionRange(selectionStart, selectionStart);
+                            }
                         }
+                        
+                        // Auto-resize textarea
                         userInput.style.height = 'auto';
-                        userInput.style.height = userInput.scrollHeight + 'px';
-                        sendBtn.disabled = !userInput.value.trim();
+                        userInput.style.height = Math.min(userInput.scrollHeight, 120) + 'px';
                     } else if (data.type === 'error') {
                         console.error('Transcription error:', data.message);
                         stopRecording();
@@ -983,7 +1043,10 @@
             micStatus.textContent = hidDevice ? 'Press dictaphone button to record' : 'Click mic to record';
             
             // Preserve the current text
-            finalTranscript = userInput.value;
+            // Store current text
+                finalTranscript = userInput.value || '';
+                // Keep focus for editing
+                setTimeout(() => userInput.focus(), 100);
             
             if (audioWorkletNode) audioWorkletNode.disconnect();
             if (audioContext) audioContext.close();

@@ -36,32 +36,40 @@
         .header {
             background: #1f1f1f;
             color: #e0e0e0;
-            padding: 20px 30px;
+            padding: 25px 30px;
             border-radius: 20px 20px 0 0;
             border-bottom: 1px solid #3a3a3a;
-        }
-
-        .header h1 { 
             display: flex;
             align-items: center;
             gap: 12px;
-            color: #b0b0b0;
-            font-size: 26px;
-            font-weight: 600;
-            margin-bottom: 4px;
         }
-
+        
         .header-logo {
             width: 42px;
             height: 42px;
             object-fit: contain;
-            align-self: center;  /* Center vertically in flex container */
+            flex-shrink: 0;
+        }
+        
+        .header-text {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .header h1 { 
+            color: #b0b0b0;
+            font-size: 26px;
+            font-weight: 600;
+            margin: 0;
+            line-height: 1.2;
         }
 
         .header p {
             opacity: 0.7;
             font-size: 13px;
-            margin-left: 54px;  /* Align with title text (42px logo + 12px gap) */
+            margin: 0;
+            line-height: 1.2;
         }
 
         .dictaphone-setup {
@@ -476,6 +484,39 @@
         
         /* Mobile responsive styles */
         @media (max-width: 768px) {
+            .header {
+                border-radius: 0;
+                padding: 15px 20px;
+                flex-shrink: 0;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+            
+            .header-logo {
+                width: 30px;
+                height: 30px;
+                object-fit: contain;
+                flex-shrink: 0;
+            }
+            
+            .header-text {
+                display: flex;
+                flex-direction: column;
+                gap: 1px;
+            }
+            
+            .header h1 {
+                font-size: 20px;
+                margin: 0;
+                line-height: 1.2;
+            }
+            
+            .header p {
+                font-size: 11px;
+                margin: 0;
+                line-height: 1.2;
+            }
             .example-prompts {
                 margin-top: 15px;
                 gap: 8px;
@@ -516,10 +557,22 @@
             
             
             
+            
+
+                            border-radius: 0;
+                            padding: 15px 20px;
+                            flex-shrink: 0;
+                            display: flex;
+                            align-items: center;
+                            gap: 10px;
+                        
             .header {
                 border-radius: 0;
-                padding: 14px 15px;
+                padding: 15px 20px;
                 flex-shrink: 0;
+                display: flex;
+                align-items: center;
+                gap: 10px;
             }
             
             .header h1 {
@@ -714,11 +767,11 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>
-                <img src="/images/dictaphone-button.png" alt="Logo" class="header-logo">
-                Flow Dictation
-            </h1>
-            <p>AI-Powered Medical Transcription</p>
+            <img src="/images/dictaphone-button.png" alt="Logo" class="header-logo">
+            <div class="header-text">
+                <h1>Flow Dictation</h1>
+                <p>AI-Powered Medical Transcription</p>
+            </div>
         </div>
 
         <div class="dictaphone-setup" id="dictaphoneSetup">

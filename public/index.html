@@ -493,6 +493,17 @@
         
         /* Mobile responsive styles */
         @media (max-width: 768px) {
+            .example-prompts {
+                margin-top: 15px;
+                gap: 8px;
+                display: grid;
+                grid-template-columns: 1fr;
+            }
+            
+            .example-prompt {
+                padding: 10px;
+                font-size: 11px;
+            }
             html, body {
                 margin: 0;
                 padding: 0;
@@ -668,9 +679,6 @@
             
             /* Adjust for small phones */
             @media (max-height: 650px) {
-                .example-prompts {
-                    display: none;
-                }
                 
                 .header {
                     padding: 10px 15px;

@@ -475,6 +475,17 @@
         
         /* Mobile responsive styles */
         @media (max-width: 768px) {
+            .example-prompts {
+                margin-top: 15px;
+                gap: 8px;
+                display: grid;
+                grid-template-columns: 1fr;
+            }
+            
+            .example-prompt {
+                padding: 10px;
+                font-size: 11px;
+            }
             html, body {
                 margin: 0;
                 padding: 0;
@@ -1257,26 +1268,6 @@ async function startRecording() {
             }
         });
 
-        // Show only one random example on mobile
-        function setupMobileExamples() {
-            const examples = document.querySelectorAll('.example-prompt');
-            if (examples.length > 0) {
-                if (window.innerWidth <= 768) {
-                    // Mobile: hide all then show one random
-                    examples.forEach(ex => ex.style.display = 'none');
-                    const randomIndex = Math.floor(Math.random() * examples.length);
-                    examples[randomIndex].style.display = 'block';
-                } else {
-                    // Desktop: show all examples
-                    examples.forEach(ex => ex.style.display = 'block');
-                }
-            }
-        }
-        
-        // Run on load and resize
-        window.addEventListener('load', setupMobileExamples);
-        window.addEventListener('resize', setupMobileExamples);
-
-    </script>
+        </script>
 </body>
 </html>

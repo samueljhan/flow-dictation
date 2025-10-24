@@ -482,6 +482,15 @@
             height: 100%;
         }
         
+        
+        /* Prevent body scroll */
+        html, body {
+            overflow: hidden;
+            position: fixed;
+            width: 100%;
+            height: 100%;
+        }
+        
         /* Mobile responsive styles */
         @media (max-width: 768px) {
             html, body {
@@ -491,106 +500,6 @@
                 position: fixed;
                 width: 100%;
                 height: 100%;
-                background: #1a1a1a;  /* Force dark background */
-                -webkit-overflow-scrolling: touch;
-            }
-            
-            body {
-                background: #1a1a1a !important;  /* Override any other background */
-            }
-            
-            .container {
-                position: fixed;
-                top: 0;
-                left: 0;
-                right: 0;
-                bottom: 0;
-                border-radius: 0;  /* Force no rounded corners */
-                border: none !important;  /* Remove any border */
-                height: 100vh;
-                height: 100dvh;
-                max-width: 100%;
-                width: 100%;
-                box-shadow: none;
-                display: flex;
-                flex-direction: column;
-                overflow: hidden;
-                background: #2a2a2a;  /* Ensure container fills screen */
-            }
-            
-            .header {
-                border-radius: 0;  /* Force no rounded corners */
-                padding: 15px 20px;
-                flex-shrink: 0;
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                background: #1f1f1f;  /* Ensure header has dark background */
-            }
-            
-            .header-logo {
-                width: 42px;  /* Force 42px */
-                height: 42px;
-                object-fit: contain;
-                flex-shrink: 0;
-            } {
-            border-radius: 0;
-                padding: 15px 20px;
-                flex-shrink: 0;
-                display: flex;
-                align-items: center;
-                gap: 8px;
-            .header {
-                border-radius: 0;
-                padding: 15px 20px;
-                flex-shrink: 0;
-                display: flex;
-                align-items: center;
-                gap: 8px;
-            }
-            
-            .header-logo {
-                width: 42px;
-                height: 42px;
-                object-fit: contain;
-                flex-shrink: 0;
-            }
-            
-            .header-text {
-                display: flex;
-                flex-direction: column;
-                gap: 1px;
-            }
-            
-            .header h1 {
-                font-size: 20px;
-                margin: 0;
-                line-height: 1.2;
-            }
-            
-            .header p {
-                font-size: 11px;
-                margin: 0;
-                line-height: 1.2;
-            }
-            .example-prompts {
-                margin-top: 15px;
-                gap: 8px;
-                display: grid;
-                grid-template-columns: 1fr;
-            }
-            
-            .example-prompt {
-                padding: 10px;
-                font-size: 11px;
-            }
-            html, body {
-                margin: 0;
-                padding: 0;
-                overflow: hidden;
-                position: fixed;
-                width: 100%;
-                height: 100%;
                 -webkit-overflow-scrolling: touch;
             }
             
@@ -611,49 +520,31 @@
                 overflow: hidden;
             }
             
-            
-            
-            
-
-                            border-radius: 0;
-                            padding: 15px 20px;
-                            flex-shrink: 0;
-                            display: flex;
-                            align-items: center;
-                            gap: 10px;
-                        
             .header {
                 border-radius: 0;
-                padding: 15px 20px;
+                padding: 12px 15px;
                 flex-shrink: 0;
-                display: flex;
-                align-items: center;
-                gap: 10px;
             }
             
             .header h1 {
                 font-size: 20px;
-                gap: 10px;
-                margin-bottom: 3px;
             }
-            
-            
             
             .header p {
                 font-size: 11px;
-                
+                margin-left: 32px;
             }
-            
-            
             
             .header-logo {
-                width: 42px;
-                height: 42px;
-                object-fit: contain;
-                align-self: center;
+                width: 24px;
+                height: 24px;
             }
             
-            .dictaphone-setup { display: none !important; }
+            .dictaphone-setup {
+                padding: 8px 15px;
+                flex-shrink: 0;
+                font-size: 12px;
+            }
             
             .setup-btn {
                 padding: 5px 10px;
@@ -708,12 +599,10 @@
                 margin-bottom: 4px;
             }
             
-            
             .input-container {
-                padding: 10px 15px 12px;
+                padding: 12px 15px 15px;
                 flex-shrink: 0;
             }
-            
             
             .input-wrapper {
                 padding: 6px 12px;
@@ -722,7 +611,7 @@
             #userInput {
                 font-size: 14px;
                 min-height: 20px;
-                max-height: 160px;
+                max-height: 80px;
             }
             
             .voice-btn,
@@ -737,10 +626,9 @@
                 height: 16px;
             }
             
-            
             .disclaimer {
-                padding: 3px 15px;
-                font-size: 8px;
+                padding: 4px 15px;
+                font-size: 9px;
             }
             
             .message-content {
@@ -782,7 +670,9 @@
             
             /* Adjust for small phones */
             @media (max-height: 650px) {
-                
+                .example-prompts {
+                    display: none;
+                }
                 
                 .header {
                     padding: 10px 15px;
@@ -816,10 +706,12 @@
             }
             
             .input-container {
-                padding: 10px 15px 12px;
+                padding: 8px 15px 10px;
             }
             
-            
+            .example-prompts {
+                display: none;
+            }
         }</style>
     </style>
 </head>

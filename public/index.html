@@ -48,7 +48,7 @@
             color: #b0b0b0;
             font-size: 26px;
             font-weight: 600;
-            margin-bottom: 6px;
+            margin-bottom: 4px;
         }
 
         .header-logo {
@@ -60,7 +60,7 @@
         .header p {
             opacity: 0.7;
             font-size: 13px;
-            margin-left: 44px;
+            margin-left: 44px;  /* Align with title text (32px logo + 12px gap) */
         }
 
         .dictaphone-setup {
@@ -510,16 +510,18 @@
             
             .header h1 {
                 font-size: 20px;
+                gap: 10px;
+                margin-bottom: 3px;
             }
             
             .header p {
                 font-size: 11px;
-                margin-left: 32px;
+                margin-left: 30px;  /* Align with title (20px logo + 10px gap) */
             }
             
             .header-logo {
-                width: 24px;
-                height: 24px;
+                width: 20px;
+                height: 20px;
             }
             
             .dictaphone-setup { display: none !important; }
@@ -648,9 +650,7 @@
             
             /* Adjust for small phones */
             @media (max-height: 650px) {
-                .example-prompts {
-                    display: none;
-                }
+                
                 
                 .header {
                     padding: 10px 15px;
@@ -687,9 +687,7 @@
                 padding: 8px 15px 10px;
             }
             
-            .example-prompts {
-                display: none;
-            }
+            
         }</style>
     </style>
 </head>
@@ -726,7 +724,7 @@
         <div class="chat-container" id="chatContainer">
             <div class="welcome-message">
                 <h2>Welcome to Flow Dictation</h2>
-                <p>Real-time assistance for clinical documentation</p>
+                <p>Real-time AI assistance for clinical documentation</p>
                 
                 <div class="example-prompts">
                     <div class="example-prompt" onclick="useExample(this)">
@@ -1258,6 +1256,25 @@ async function startRecording() {
                 sendMessage();
             }
         });
+
+        // Show only one random example on mobile
+        function setupMobileExamples() {
+            if (window.innerWidth <= 768) {
+                const examples = document.querySelectorAll('.example-prompt');
+                if (examples.length > 0) {
+                    // Hide all examples first
+                    examples.forEach(ex => ex.style.display = 'none');
+                    // Show one random example
+                    const randomIndex = Math.floor(Math.random() * examples.length);
+                    examples[randomIndex].style.display = 'block';
+                }
+            }
+        }
+        
+        // Run on load and resize
+        window.addEventListener('load', setupMobileExamples);
+        window.addEventListener('resize', setupMobileExamples);
+
     </script>
 </body>
 </html>

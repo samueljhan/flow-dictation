@@ -907,55 +907,65 @@
                 // Function to replace spoken punctuation with actual marks
         // Function to replace spoken punctuation and fix formatting
         // Function to fix formatting issues from AWS Transcribe Medical
+        // Function to clean up AWS Transcribe Medical output
         function replacePunctuation(text) {
             if (!text) return text;
             
-            // First, fix decimal numbers (remove space after decimal point in numbers)
-            text = text.replace(/(\d+)\.\s+(\d+)/g, '$1.$2');
-            
-            // Fix "point" when used in numbers (only if not already a decimal)
-            text = text.replace(/(\d+)\s+point\s+(\d+)/gi, '$1.$2');
-            
-            // Fix common AWS Transcribe Medical issues
-            // AWS sometimes outputs ", ," or ": ," - clean these up
+            // Remove periods that AWS adds after common medical terms/phrases that shouldn't end sentences
+            // These are often false sentence endings
             text = text
-                .replace(/,\s*,/g, ',')  // Fix double commas
-                .replace(/:\s*,/g, ':')  // Fix colon followed by comma
-                .replace(/;\s*,/g, ';')  // Fix semicolon followed by comma
-                .replace(/,\s*;/g, ';')  // Fix comma followed by semicolon
-                .replace(/,\s*:/g, ':')  // Fix comma followed by colon
-                .replace(/,\s*\./g, '.')  // Fix comma followed by period
-                .replace(/\.\s*,/g, '.')  // Fix period followed by comma
-                .replace(/([.,;:!?])\s*\1+/g, '$1');  // Remove duplicate punctuation
+                .replace(/(\d+)\.\s+(\d+)/g, '$1.$2')  // Fix decimals: "3. 0" -> "3.0"
+                .replace(/(\d+)\s+point\s+(\d+)/gi, '$1.$2')  // "3 point 0" -> "3.0"
+                .replace(/\bmg\.\s/gi, 'mg ')  // "mg. " -> "mg "
+                .replace(/\bml\.\s/gi, 'ml ')  // "ml. " -> "ml "
+                .replace(/\bDr\.\s/gi, 'Dr. ')  // Keep Dr. period
+                .replace(/\bMr\.\s/gi, 'Mr. ')  // Keep Mr. period
+                .replace(/\bMs\.\s/gi, 'Ms. ')  // Keep Ms. period
+                .replace(/\bMrs\.\s/gi, 'Mrs. ');  // Keep Mrs. period
             
-            // Only replace punctuation words if they haven't been converted already
-            // Check if the word is NOT preceded by punctuation
-            const smartReplacements = [
-                // Only replace if not preceded by punctuation
-                [/(?<![.,;:!?])\s*\bperiod\b/gi, '.'],
-                [/(?<![.,;:!?])\s*\bcomma\b/gi, ','],
-                [/(?<![.,;:!?])\s*\bcolon\b/gi, ':'],
-                [/(?<![.,;:!?])\s*\bsemicolon\b/gi, ';'],
-                [/(?<![.,;:!?])\s*\bquestion mark\b/gi, '?'],
-                [/(?<![.,;:!?])\s*\bexclamation mark\b/gi, '!'],
-                // Parentheses patterns
-                [/\bopen paren\b/gi, '('],
-                [/\bclose paren\b/gi, ')'],
-                [/\bopen parenthesis\b/gi, '('],
-                [/\bclose parenthesis\b/gi, ')'],
-                [/\bleft paren\b/gi, '('],
-                [/\bright paren\b/gi, ')'],
-                [/\bleft parenthesis\b/gi, '('],
-                [/\bright parenthesis\b/gi, ')']
-            ];
+            // Remove stray periods before punctuation words
+            // AWS might output ". comma" which becomes ". ," 
+            text = text
+                .replace(/\.\s+(comma|colon|semicolon|period)/gi, ' $1')  // Remove period before punctuation words
+                .replace(/,\s+(comma|period)/gi, ' $1')  // Remove comma before punctuation words
+                .replace(/:\s+(colon|comma)/gi, ' $1')  // Remove colon before punctuation words
+                .replace(/;\s+(semicolon|comma)/gi, ' $1');  // Remove semicolon before punctuation words
             
-            // Apply smart replacements
-            smartReplacements.forEach(([pattern, replacement]) => {
-                text = text.replace(pattern, replacement);
+            // Now handle spoken punctuation (only if not already punctuated)
+            // This prevents double conversion
+            const punctuationWords = {
+                'comma': ',',
+                'period': '.',
+                'colon': ':',
+                'semicolon': ';',
+                'question mark': '?',
+                'exclamation mark': '!',
+                'exclamation point': '!',
+                'open paren': '(',
+                'close paren': ')',
+                'open parenthesis': '(',
+                'close parenthesis': ')',
+                'left paren': '(',
+                'right paren': ')',
+                'open bracket': '[',
+                'close bracket': ']',
+                'dash': '-',
+                'hyphen': '-',
+                'slash': '/',
+                'new line': '\n',
+                'new paragraph': '\n\n'
+            };
+            
+            // Replace punctuation words with actual punctuation
+            Object.keys(punctuationWords).forEach(word => {
+                const regex = new RegExp('\\b' + word + '\\b', 'gi');
+                text = text.replace(regex, punctuationWords[word]);
             });
             
-            // Final cleanup
+            // Clean up any resulting double/mixed punctuation
             text = text
+                .replace(/([.,;:!?])\s*([.,;:!?])/g, '$2')  // Remove first of double punctuation
+                .replace(/([.,;:!?]){2,}/g, '$1')  // Remove duplicate same punctuation
                 .replace(/\s+([.,;:!?])/g, '$1')  // Remove space before punctuation
                 .replace(/([.,;:!?])(?!\s|$|\d)/g, '$1 ')  // Add space after (except before numbers)
                 .replace(/\(\s+/g, '(')  // Remove space after opening paren
@@ -963,8 +973,14 @@
                 .replace(/\s+/g, ' ')  // Clean up multiple spaces
                 .trim();
             
+            // Final check: remove isolated periods (period with spaces on both sides in middle of text)
+            if (text.length > 2) {
+                text = text.replace(/\s\.\s/g, ' ');
+            }
+            
             return text;
         }
+
 
 
 

@@ -1,5 +1,5 @@
 const express = require('express');
-const OpenAI = require('openai');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 const cors = require('cors');
 const multer = require('multer');
 const fs = require('fs');
@@ -21,9 +21,8 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+// Gemini AI configuration
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // AWS Transcribe Medical configuration
 const transcribeClient = new TranscribeStreamingClient({
@@ -35,7 +34,7 @@ const transcribeClient = new TranscribeStreamingClient({
 });
 
 console.log('=== Environment Check ===');
-console.log('OpenAI:', !!process.env.OPENAI_API_KEY ? '✓' : '✗');
+console.log('Gemini:', !!process.env.GEMINI_API_KEY ? '✓' : '✗');
 console.log('AWS Access Key:', !!process.env.AWS_ACCESS_KEY_ID ? '✓' : '✗');
 console.log('AWS Secret Key:', !!process.env.AWS_SECRET_ACCESS_KEY ? '✓' : '✗');
 console.log('AWS Region:', process.env.AWS_REGION || 'us-east-1');
@@ -263,17 +262,20 @@ app.post('/api/generate-report', async (req, res) => {
       return res.status(400).json({ error: 'Findings are required' });
     }
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        { role: "system", content: NUCLEAR_MEDICINE_SYSTEM_PROMPT },
-        { role: "user", content: `Generate a nuclear medicine PET/CT report based on these dictated findings. Only include the sections and findings that were mentioned. Use standard negative phrasing for unremarkable areas:\n\n${findings}` }
-      ],
-      temperature: 0.2,
-      max_tokens: 2000
+    const model = genAI.getGenerativeModel({ 
+      model: "gemini-1.5-flash",
+      generationConfig: {
+        temperature: 0.2,
+        maxOutputTokens: 2000,
+      }
     });
+    
+    const prompt = `${NUCLEAR_MEDICINE_SYSTEM_PROMPT}\n\nGenerate a nuclear medicine PET/CT report based on these dictated findings. Only include the sections and findings that were mentioned. Use standard negative phrasing for unremarkable areas:\n\n${findings}`;
 
-    res.json({ report: completion.choices[0].message.content });
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+
+    res.json({ report: response.text() });
   } catch (error) {
     console.error('Error:', error);
     res.status(500).json({ error: 'Failed to generate report', details: error.message });
@@ -284,13 +286,15 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     service: 'Flow Dictation API',
-    transcription: 'AWS Transcribe Medical'
+    transcription: 'AWS Transcribe Medical',
+    llm: 'Gemini 1.5 Flash'
   });
 });
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🏥 Flow Dictation running on port ${PORT}`);
   console.log(`🩺 AWS Transcribe Medical enabled`);
+  console.log(`✨ Gemini 1.5 Flash for report generation`);
   console.log(`☢️  Nuclear Medicine/PET reporting mode active`);
   console.log(`📍 Region: ${process.env.AWS_REGION || 'us-east-1'}`);
 });

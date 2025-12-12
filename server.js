@@ -127,7 +127,10 @@ DO NOT include: Patient names, MRNs, dates of birth, exam dates, physician names
 
 // Start OAuth flow
 app.get('/auth/google', (req, res) => {
-  const scopes = ['https://www.googleapis.com/auth/gmail.send'];
+  const scopes = [
+    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/gmail.readonly'
+  ];
   
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',

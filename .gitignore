@@ -8,3 +8,4 @@ sk-proj-*
 *.backup.*
 *.old
 *.sh
+*.backup_*

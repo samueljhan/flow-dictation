@@ -127,10 +127,7 @@ DO NOT include: Patient names, MRNs, dates of birth, exam dates, physician names
 
 // Start OAuth flow
 app.get('/auth/google', (req, res) => {
-  const scopes = [
-    'https://www.googleapis.com/auth/gmail.send',
-    'https://www.googleapis.com/auth/gmail.readonly'
-  ];
+  const scopes = ['https://www.googleapis.com/auth/gmail.send'];
   
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
@@ -193,13 +190,8 @@ app.post('/api/gmail/send', async (req, res) => {
     
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
     
-    // Get user's email for the From field
-    const profile = await gmail.users.getProfile({ userId: 'me' });
-    const fromEmail = profile.data.emailAddress;
-    
-    // Create email
+    // Create email (From is set automatically by Gmail API)
     const emailContent = [
-      `From: ${fromEmail}`,
       `To: ${to}`,
       `Subject: ${subject}`,
       'Content-Type: text/plain; charset=utf-8',

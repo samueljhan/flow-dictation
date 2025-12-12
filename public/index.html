@@ -65,6 +65,7 @@
             display: flex;
             flex-direction: column;
             gap: 2px;
+            flex: 1;
         }
 
         .header h1 { 
@@ -80,6 +81,28 @@
             font-size: 13px;
             margin: 0;
             line-height: 1.2;
+        }
+
+        .gmail-status {
+            font-size: 12px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .gmail-status.connected {
+            background: #1f3a2e;
+            color: #a0e0b0;
+        }
+
+        .gmail-status.disconnected {
+            background: #3a3a3a;
+            color: #909090;
+        }
+
+        .gmail-status:hover {
+            opacity: 0.8;
         }
 
         .dictaphone-setup {
@@ -251,7 +274,14 @@
             text-transform: uppercase;
         }
 
-        .copy-btn {
+        .report-buttons {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+
+        .copy-btn, .email-btn {
             background: #404040;
             color: #e0e0e0;
             border: none;
@@ -259,12 +289,101 @@
             border-radius: 6px;
             cursor: pointer;
             font-size: 12px;
-            margin-top: 10px;
             transition: all 0.3s;
         }
 
-        .copy-btn:hover { background: #505050; }
+        .copy-btn:hover, .email-btn:hover { background: #505050; }
         .copy-btn.copied { background: #28a745; }
+        .email-btn.sent { background: #28a745; }
+        .email-btn:disabled { 
+            background: #333; 
+            color: #666; 
+            cursor: not-allowed; 
+        }
+
+        /* Email Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal {
+            background: #2a2a2a;
+            border-radius: 12px;
+            padding: 24px;
+            width: 90%;
+            max-width: 400px;
+            border: 1px solid #404040;
+        }
+
+        .modal h3 {
+            color: #e0e0e0;
+            margin-bottom: 16px;
+            font-size: 18px;
+        }
+
+        .modal input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #404040;
+            border-radius: 8px;
+            background: #333;
+            color: #e0e0e0;
+            font-size: 14px;
+            margin-bottom: 12px;
+        }
+
+        .modal input:focus {
+            outline: none;
+            border-color: #505050;
+        }
+
+        .modal-buttons {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+
+        .modal-btn {
+            padding: 10px 20px;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .modal-btn.cancel {
+            background: #404040;
+            color: #e0e0e0;
+        }
+
+        .modal-btn.send {
+            background: #28a745;
+            color: white;
+        }
+
+        .modal-btn:hover {
+            opacity: 0.9;
+        }
+
+        .modal-btn:disabled {
+            background: #333;
+            color: #666;
+            cursor: not-allowed;
+        }
 
         /* ChatGPT-style input container */
         .input-container {
@@ -562,6 +681,11 @@
                 line-height: 1.2;
                 opacity: 0.7;
             }
+
+            .gmail-status {
+                font-size: 10px;
+                padding: 4px 8px;
+            }
             
             
 
@@ -694,7 +818,7 @@
                 line-height: 1.4;
             }
             
-            .copy-btn {
+            .copy-btn, .email-btn {
                 padding: 5px 10px;
                 font-size: 11px;
             }
@@ -757,6 +881,9 @@
             <div class="header-text">
                 <h1>Flow Dictation</h1>
                 <p>AI-Powered Medical Transcription</p>
+            </div>
+            <div class="gmail-status disconnected" id="gmailStatus" onclick="handleGmailClick()">
+                📧 Connect Gmail
             </div>
         </div>
 
@@ -828,6 +955,19 @@
         </div>
     </div>
 
+    <!-- Email Modal -->
+    <div class="modal-overlay" id="emailModal">
+        <div class="modal">
+            <h3>📧 Email Report</h3>
+            <input type="email" id="emailTo" placeholder="Recipient email address">
+            <input type="text" id="emailSubject" placeholder="Subject" value="PET/CT Report">
+            <div class="modal-buttons">
+                <button class="modal-btn cancel" onclick="closeEmailModal()">Cancel</button>
+                <button class="modal-btn send" id="sendEmailBtn" onclick="sendEmail()">Send</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const chatContainer = document.getElementById('chatContainer');
         const userInput = document.getElementById('userInput');
@@ -839,6 +979,7 @@
         const setupText = document.getElementById('setupText');
         const setupIcon = document.getElementById('setupIcon');
         const dictaphoneSetup = document.getElementById('dictaphoneSetup');
+        const gmailStatusEl = document.getElementById('gmailStatus');
         
         let ws = null;
         let audioContext = null;
@@ -849,12 +990,64 @@
         let selectedMic = null;
         let hidDevice = null;
         let recordButton = null;
+        let gmailConnected = false;
+        let currentReportText = '';
 
         const supportsHID = 'hid' in navigator;
 
         if (!supportsHID) {
             setupText.textContent = 'WebHID not supported - use Chrome/Edge';
             setupBtn.style.display = 'none';
+        }
+
+        // Check Gmail status on load
+        async function checkGmailStatus() {
+            try {
+                const response = await fetch('/api/gmail/status');
+                const data = await response.json();
+                gmailConnected = data.connected;
+                updateGmailUI();
+            } catch (error) {
+                console.error('Error checking Gmail status:', error);
+            }
+        }
+
+        function updateGmailUI() {
+            if (gmailConnected) {
+                gmailStatusEl.textContent = '✅ Gmail Connected';
+                gmailStatusEl.classList.remove('disconnected');
+                gmailStatusEl.classList.add('connected');
+            } else {
+                gmailStatusEl.textContent = '📧 Connect Gmail';
+                gmailStatusEl.classList.remove('connected');
+                gmailStatusEl.classList.add('disconnected');
+            }
+        }
+
+        function handleGmailClick() {
+            if (gmailConnected) {
+                if (confirm('Disconnect Gmail?')) {
+                    fetch('/api/gmail/disconnect')
+                        .then(() => {
+                            gmailConnected = false;
+                            updateGmailUI();
+                        });
+                }
+            } else {
+                window.location.href = '/auth/google';
+            }
+        }
+
+        // Check for Gmail connection on page load
+        checkGmailStatus();
+
+        // Check URL params for Gmail connection status
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('gmail') === 'connected') {
+            gmailConnected = true;
+            updateGmailUI();
+            // Clean URL
+            window.history.replaceState({}, document.title, window.location.pathname);
         }
 
         // Auto-resize textarea
@@ -961,14 +1154,6 @@
             }
         });
 
-                // Function to replace spoken punctuation with actual marks
-        // Function to replace spoken punctuation and fix formatting
-        // Function to fix formatting issues from AWS Transcribe Medical
-        // Function to clean up AWS Transcribe Medical output
-        // Function to clean up AWS Transcribe Medical output
-        // Function to clean up AWS Transcribe Medical output
-        // Function to clean up AWS Transcribe Medical output
-        // Function to clean up AWS Transcribe Medical output
         function replacePunctuation(text) {
             if (!text) return text;
             
@@ -978,63 +1163,41 @@
             text = text.replace(/(\d+)\.\s+(\d+)/g, '$1.DECIMAL.$2');
             text = text.replace(/(\d+)\s+point\s+(\d+)/gi, '$1.DECIMAL.$2');
             
-            // Handle all the ways AWS might transcribe "period"
-            // AWS might output: "P.", "P", "Per", ",", "period", " ."
             text = text
-                // "P." becomes "."
                 .replace(/\bP\./g, '.')
-                // Standalone "P" at end of phrase becomes "."
                 .replace(/\bP\b(?=[\s,;:!?]|$)/g, '.')
-                // "Per" at end of phrase (likely mistranscription of "period")
                 .replace(/\bPer\b(?=[\s,;:!?]|$)/g, '.')
-                // Fix space before period
                 .replace(/\s+\./g, '.')
-                // Replace "period" word
                 .replace(/\bperiod\b/gi, '.')
-                // Sometimes AWS outputs comma instead of period - this is tricky
-                // Only convert comma to period if followed by capital letter (new sentence)
                 .replace(/,(\s+[A-Z])/g, '.$1')
-                // Clean up multiple periods
                 .replace(/\.{2,}/g, '.');
             
-            // Handle parentheses
             text = text
                 .replace(/\b(open|opening|left)\s+(paren|parenthesis|parentheses)\b/gi, '(')
                 .replace(/\b(close|closing|right)\s+(paren|parenthesis|parentheses)\b/gi, ')');
             
-            // Handle other punctuation
             text = text
-                // Comma (but don't replace commas that should be periods)
                 .replace(/\s+,/g, ',')
                 .replace(/\bcomma\b/gi, ',')
-                // Colon and semicolon
                 .replace(/\s+:/g, ':')
                 .replace(/\bcolon\b/gi, ':')
                 .replace(/\s+;/g, ';')
                 .replace(/\bsemicolon\b/gi, ';')
-                // Questions and exclamations
                 .replace(/\b(question\s+mark|questionmark)\b/gi, '?')
                 .replace(/\b(exclamation\s+mark|exclamation\s+point)\b/gi, '!')
-                // Dashes and slashes
                 .replace(/\b(dash|hyphen)\b/gi, '-')
                 .replace(/\bslash\b/gi, '/')
-                // Line breaks
                 .replace(/\b(new\s+line|newline)\b/gi, '\n')
                 .replace(/\b(new\s+paragraph|newparagraph)\b/gi, '\n\n');
             
-            // Restore protected decimals
             text = text.replace(/\.DECIMAL\./g, '.');
             
-            // Clean up any double/mixed punctuation
             text = text
-                // Remove duplicate same punctuation
                 .replace(/([.,;:!?])\s*\1+/g, '$1')
-                // Fix common mixed punctuation
                 .replace(/,\s*\./g, '.')
                 .replace(/\.\s*,/g, '.')
                 .replace(/;\s*[.,]/g, ';')
                 .replace(/:\s*[.,]/g, ':')
-                // Fix spacing
                 .replace(/\s+([.,;:!?])/g, '$1')
                 .replace(/([.,;:!?])(?![\s\d]|$)/g, '$1 ')
                 .replace(/\(\s+/g, '(')
@@ -1047,15 +1210,7 @@
             return text;
         }
 
-
-
-
-
-
-
-
-
-async function startRecording() {
+        async function startRecording() {
             try {
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 ws = new WebSocket(protocol + '//' + window.location.host);
@@ -1106,22 +1261,18 @@ async function startRecording() {
                         const hasSelection = selectionStart !== selectionEnd;
                         
                         if (data.is_final) {
-                            // Final transcript - clean up any preview text
                             const newText = replacePunctuation((data.text || '').trim());
                             if (newText) {
-                                // Remove any bracketed preview text first
                                 let currentValue = userInput.value.replace(/\[.*?\]/g, '');
                                 let updatedValue;
                                 let newCursorPos;
                                 
                                 if (hasSelection) {
-                                    // Replace selected text
                                     updatedValue = currentValue.substring(0, selectionStart) + 
                                                   newText + ' ' +
                                                   currentValue.substring(selectionEnd);
                                     newCursorPos = selectionStart + newText.length + 1;
                                 } else {
-                                    // Insert at cursor or append
                                     if (currentValue.length === 0) {
                                         updatedValue = newText;
                                         newCursorPos = newText.length;
@@ -1139,22 +1290,16 @@ async function startRecording() {
                                 userInput.value = updatedValue;
                                 finalTranscript = updatedValue;
                                 
-                                // Restore cursor position
                                 userInput.setSelectionRange(newCursorPos, newCursorPos);
                                 userInput.focus();
                             }
                         } else {
-                            // Partial transcript - don't add to text, just show temporarily
-                            // Skip showing partials to avoid confusion
-                            // Optionally update status instead
                             const partialText = data.text || '';
                             if (partialText) {
                                 console.log('Partial:', partialText);
-                                // Don't modify the input field with partial text
                             }
                         }
                         
-                        // Auto-resize textarea
                         userInput.style.height = 'auto';
                         userInput.style.height = Math.min(userInput.scrollHeight, 240) + 'px';
                     } else if (data.type === 'error') {
@@ -1180,11 +1325,8 @@ async function startRecording() {
             micIndicator.classList.remove('recording');
             micStatus.textContent = hidDevice ? 'Press dictaphone button to record' : 'Click mic to record';
             
-            // Preserve the current text
-            // Store current text
-                finalTranscript = userInput.value || '';
-                // Keep focus for editing
-                setTimeout(() => userInput.focus(), 100);
+            finalTranscript = userInput.value || '';
+            setTimeout(() => userInput.focus(), 100);
             
             if (audioWorkletNode) audioWorkletNode.disconnect();
             if (audioContext) audioContext.close();
@@ -1237,6 +1379,9 @@ async function startRecording() {
         }
 
         function formatReportHTML(reportText) {
+            // Store the plain text for emailing
+            currentReportText = reportText;
+            
             const sections = reportText.split('\n\n');
             let html = '';
             
@@ -1252,27 +1397,16 @@ async function startRecording() {
                 }
             });
             
+            html += '<div class="report-buttons">';
             html += '<button class="copy-btn" onclick="copyReport(this)">📋 Copy Report</button>';
+            html += '<button class="email-btn" onclick="openEmailModal()" ' + (gmailConnected ? '' : 'disabled title="Connect Gmail first"') + '>📧 Email Report</button>';
+            html += '</div>';
+            
             return html;
         }
 
         function copyReport(button) {
-            const reportContent = button.parentElement;
-            const sections = reportContent.querySelectorAll('.report-section');
-            let textToCopy = '';
-            
-            sections.forEach(section => {
-                const heading = section.querySelector('h3');
-                const headingText = heading ? heading.textContent : '';
-                const paragraphs = Array.from(section.querySelectorAll('p')).map(p => p.textContent).join('\n');
-                if (headingText) {
-                    textToCopy += headingText + ':\n' + paragraphs + '\n\n';
-                } else {
-                    textToCopy += paragraphs + '\n\n';
-                }
-            });
-
-            navigator.clipboard.writeText(textToCopy).then(() => {
+            navigator.clipboard.writeText(currentReportText).then(() => {
                 button.textContent = '✅ Copied!';
                 button.classList.add('copied');
                 setTimeout(() => {
@@ -1282,8 +1416,83 @@ async function startRecording() {
             });
         }
 
+        // Email modal functions
+        function openEmailModal() {
+            if (!gmailConnected) {
+                alert('Please connect Gmail first by clicking the button in the header.');
+                return;
+            }
+            document.getElementById('emailModal').classList.add('active');
+            document.getElementById('emailTo').focus();
+        }
+
+        function closeEmailModal() {
+            document.getElementById('emailModal').classList.remove('active');
+            document.getElementById('emailTo').value = '';
+        }
+
+        async function sendEmail() {
+            const to = document.getElementById('emailTo').value.trim();
+            const subject = document.getElementById('emailSubject').value.trim();
+            const sendBtn = document.getElementById('sendEmailBtn');
+            
+            if (!to) {
+                alert('Please enter a recipient email address.');
+                return;
+            }
+            
+            sendBtn.disabled = true;
+            sendBtn.textContent = 'Sending...';
+            
+            try {
+                const response = await fetch('/api/gmail/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        to: to,
+                        subject: subject,
+                        report: currentReportText
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    alert('Email sent successfully!');
+                    closeEmailModal();
+                } else {
+                    if (response.status === 401) {
+                        gmailConnected = false;
+                        updateGmailUI();
+                        alert('Gmail session expired. Please reconnect.');
+                    } else {
+                        alert('Failed to send email: ' + (data.error || 'Unknown error'));
+                    }
+                }
+            } catch (error) {
+                console.error('Error sending email:', error);
+                alert('Error sending email. Please try again.');
+            } finally {
+                sendBtn.disabled = false;
+                sendBtn.textContent = 'Send';
+            }
+        }
+
+        // Close modal on overlay click
+        document.getElementById('emailModal').addEventListener('click', function(e) {
+            if (e.target === this) {
+                closeEmailModal();
+            }
+        });
+
+        // Close modal on Escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                closeEmailModal();
+            }
+        });
+
         function sendMessage() {
-            // Stop recording if active
             if (isRecording) {
                 stopRecording();
             }

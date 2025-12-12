@@ -1,5 +1,6 @@
 const express = require('express');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { google } = require('googleapis');
 const cors = require('cors');
 const multer = require('multer');
 const fs = require('fs');
@@ -24,6 +25,19 @@ app.use(express.static('public'));
 // Gemini AI configuration
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+// Gmail OAuth configuration
+const oauth2Client = new google.auth.OAuth2(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  process.env.NODE_ENV === 'production' 
+    ? 'https://flowdictation.com/auth/google/callback'
+    : 'http://localhost:8080/auth/google/callback'
+);
+
+// Simple in-memory token storage (for single user)
+// For multi-user, you'd use a database
+let userTokens = null;
+
 // AWS Transcribe Medical configuration
 const transcribeClient = new TranscribeStreamingClient({
   region: process.env.AWS_REGION || 'us-east-1',
@@ -35,6 +49,8 @@ const transcribeClient = new TranscribeStreamingClient({
 
 console.log('=== Environment Check ===');
 console.log('Gemini:', !!process.env.GEMINI_API_KEY ? '✓' : '✗');
+console.log('Google Client ID:', !!process.env.GOOGLE_CLIENT_ID ? '✓' : '✗');
+console.log('Google Client Secret:', !!process.env.GOOGLE_CLIENT_SECRET ? '✓' : '✗');
 console.log('AWS Access Key:', !!process.env.AWS_ACCESS_KEY_ID ? '✓' : '✗');
 console.log('AWS Secret Key:', !!process.env.AWS_SECRET_ACCESS_KEY ? '✓' : '✗');
 console.log('AWS Region:', process.env.AWS_REGION || 'us-east-1');
@@ -106,6 +122,118 @@ STYLE NOTES:
 - Maintain professional radiologist voice
 
 DO NOT include: Patient names, MRNs, dates of birth, exam dates, physician names, or any PHI.`;
+
+// ============ Gmail OAuth Routes ============
+
+// Start OAuth flow
+app.get('/auth/google', (req, res) => {
+  const scopes = ['https://www.googleapis.com/auth/gmail.send'];
+  
+  const url = oauth2Client.generateAuthUrl({
+    access_type: 'offline',
+    scope: scopes,
+    prompt: 'consent'
+  });
+  
+  res.redirect(url);
+});
+
+// OAuth callback
+app.get('/auth/google/callback', async (req, res) => {
+  const { code } = req.query;
+  
+  try {
+    const { tokens } = await oauth2Client.getToken(code);
+    oauth2Client.setCredentials(tokens);
+    userTokens = tokens;
+    
+    console.log('✅ Gmail OAuth successful');
+    
+    // Redirect back to app with success message
+    res.redirect('/?gmail=connected');
+  } catch (error) {
+    console.error('OAuth error:', error);
+    res.redirect('/?gmail=error');
+  }
+});
+
+// Check Gmail connection status
+app.get('/api/gmail/status', (req, res) => {
+  res.json({ 
+    connected: !!userTokens,
+    email: userTokens ? 'Connected' : null
+  });
+});
+
+// Disconnect Gmail
+app.get('/api/gmail/disconnect', (req, res) => {
+  userTokens = null;
+  oauth2Client.revokeCredentials();
+  res.json({ success: true });
+});
+
+// Send email with report
+app.post('/api/gmail/send', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Gmail not connected. Please connect first.' });
+  }
+  
+  try {
+    const { to, subject, report } = req.body;
+    
+    if (!to || !subject || !report) {
+      return res.status(400).json({ error: 'Missing required fields: to, subject, report' });
+    }
+    
+    // Refresh tokens if needed
+    oauth2Client.setCredentials(userTokens);
+    
+    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+    
+    // Get user's email for the From field
+    const profile = await gmail.users.getProfile({ userId: 'me' });
+    const fromEmail = profile.data.emailAddress;
+    
+    // Create email
+    const emailContent = [
+      `From: ${fromEmail}`,
+      `To: ${to}`,
+      `Subject: ${subject}`,
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      report
+    ].join('\n');
+    
+    const encodedEmail = Buffer.from(emailContent)
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+    
+    await gmail.users.messages.send({
+      userId: 'me',
+      requestBody: {
+        raw: encodedEmail
+      }
+    });
+    
+    console.log(`✅ Email sent to ${to}`);
+    res.json({ success: true, message: `Email sent to ${to}` });
+    
+  } catch (error) {
+    console.error('Email send error:', error);
+    
+    // If token expired, clear it
+    if (error.code === 401) {
+      userTokens = null;
+      return res.status(401).json({ error: 'Gmail session expired. Please reconnect.' });
+    }
+    
+    res.status(500).json({ error: 'Failed to send email', details: error.message });
+  }
+});
+
+// ============ WebSocket for Transcription ============
 
 wss.on('connection', async (clientWs) => {
   console.log('Client connected for AWS Transcribe Medical');
@@ -253,6 +381,7 @@ wss.on('connection', async (clientWs) => {
   });
 });
 
+// ============ Report Generation ============
 
 app.post('/api/generate-report', async (req, res) => {
   try {
@@ -287,14 +416,16 @@ app.get('/api/health', (req, res) => {
     status: 'ok', 
     service: 'Flow Dictation API',
     transcription: 'AWS Transcribe Medical',
-    llm: 'Gemini 1.5 Flash'
+    llm: 'Gemini 2.5 Flash',
+    gmail: userTokens ? 'connected' : 'not connected'
   });
 });
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🏥 Flow Dictation running on port ${PORT}`);
   console.log(`🩺 AWS Transcribe Medical enabled`);
-  console.log(`✨ Gemini 1.5 Flash for report generation`);
+  console.log(`✨ Gemini 2.5 Flash for report generation`);
+  console.log(`📧 Gmail integration ready`);
   console.log(`☢️  Nuclear Medicine/PET reporting mode active`);
   console.log(`📍 Region: ${process.env.AWS_REGION || 'us-east-1'}`);
 });

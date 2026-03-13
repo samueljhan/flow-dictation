@@ -890,7 +890,7 @@
         <div class="dictaphone-setup" id="dictaphoneSetup">
             <div class="setup-info">
                 <span id="setupIcon">🎤</span>
-                <span id="setupText">Connect your Philips dictaphone for hands-free recording</span>
+                <span id="setupText">Connect your Philips or Nuance dictaphone for hands-free recording</span>
             </div>
             <button class="setup-btn" id="setupBtn">Connect Dictaphone</button>
         </div>
@@ -1066,20 +1066,24 @@
             try {
                 const devices = await navigator.hid.requestDevice({
                     filters: [
-                        { vendorId: 0x0911 },
-                        { vendorId: 0x095d }
+                        { vendorId: 0x0911 },  // Philips
+                        { vendorId: 0x095d },  // Philips
+                        { vendorId: 0x0554 },  // Nuance PowerMic III/IV
+                        { vendorId: 0x1532 }   // Nuance PowerMic (alternate)
                     ]
                 });
 
                 if (devices.length === 0) {
-                    alert('No Philips dictaphone found. Make sure it is plugged in.');
+                    alert('No dictaphone found. Make sure your Philips or Nuance device is plugged in.');
                     return;
                 }
 
                 hidDevice = devices[0];
                 await hidDevice.open();
 
-                setupText.textContent = 'Connected: ' + hidDevice.productName;
+                const isNuance = hidDevice.vendorId === 0x0554 || hidDevice.vendorId === 0x1532;
+                const brand = isNuance ? 'Nuance' : 'Philips';
+                setupText.textContent = 'Connected: ' + hidDevice.productName + ' (' + brand + ')';
                 setupIcon.textContent = '✅';
                 setupBtn.textContent = 'Connected';
                 setupBtn.classList.add('connected');
@@ -1088,7 +1092,7 @@
 
                 hidDevice.addEventListener('inputreport', handleDictaphoneButton);
 
-                console.log('Dictaphone connected:', hidDevice.productName);
+                console.log(brand + ' dictaphone connected:', hidDevice.productName);
                 micStatus.textContent = 'Press dictaphone button to record';
 
             } catch (error) {
@@ -1100,14 +1104,26 @@
         function handleDictaphoneButton(event) {
             const { data } = event;
             const value = data.getUint8(0);
-            
-            console.log('Dictaphone button event:', value);
+            const isNuance = hidDevice && (hidDevice.vendorId === 0x0554 || hidDevice.vendorId === 0x1532);
 
-            if (value !== 0x00 && !isRecording) {
-                recordButton = value;
-                startRecording();
-            } else if (value === 0x00 && isRecording) {
-                stopRecording();
+            console.log('Dictaphone button event:', value, 'byte1:', data.byteLength > 1 ? data.getUint8(1) : 'N/A');
+
+            if (isNuance) {
+                // Nuance PowerMic: record button sends 0x01 or 0x02, release sends 0x00
+                if ((value === 0x01 || value === 0x02) && !isRecording) {
+                    recordButton = value;
+                    startRecording();
+                } else if (value === 0x00 && isRecording) {
+                    stopRecording();
+                }
+            } else {
+                // Philips: any non-zero press starts, 0x00 release stops
+                if (value !== 0x00 && !isRecording) {
+                    recordButton = value;
+                    startRecording();
+                } else if (value === 0x00 && isRecording) {
+                    stopRecording();
+                }
             }
         }
 
@@ -1116,10 +1132,12 @@
                 const devices = await navigator.mediaDevices.enumerateDevices();
                 const audioDevices = devices.filter(device => device.kind === 'audioinput');
                 
-                selectedMic = audioDevices.find(device => 
+                selectedMic = audioDevices.find(device =>
                     device.label.toLowerCase().includes('philips') ||
                     device.label.toLowerCase().includes('speechmike') ||
-                    device.label.toLowerCase().includes('precision')
+                    device.label.toLowerCase().includes('precision') ||
+                    device.label.toLowerCase().includes('nuance') ||
+                    device.label.toLowerCase().includes('powermic')
                 ) || audioDevices[0];
 
                 if (selectedMic) {

@@ -958,8 +958,11 @@
                     });
                 } else if (actionType === 'radqa') {
                     // Teaching answers may use **bold**; URLs become clickable links.
-                    // Cited URLs not already written into the answer are appended.
-                    const extraCites = (data.citations || []).filter(c => c.url && !data.text.includes(c.url));
+                    // If the answer already has its own References section, trust that
+                    // curated list; otherwise surface any cited URLs it didn't write out.
+                    const hasOwnRefs = /^\s*(\*\*)?references\b/im.test(data.text);
+                    const extraCites = hasOwnRefs ? []
+                        : (data.citations || []).filter(c => c.url && !data.text.includes(c.url));
                     plainText = data.text.replace(/\*\*(.+?)\*\*/g, '$1');
                     let html = linkifyEscaped(escapeHtml(data.text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>'));
                     if (extraCites.length) {
@@ -970,6 +973,9 @@
                                 '<a href="' + escapeHtml(c.url) + '" target="_blank" rel="noopener">' + escapeHtml(c.url) + '</a>' +
                                 (c.title ? ' — ' + escapeHtml(c.title) : '')
                             ).join('\n');
+                    }
+                    if (data.refs_dropped) {
+                        html += '\n\n<span style="color:#808080; font-size:12px">(Answered without references — the reference search was declined for this question.)</span>';
                     }
                     addAssistantResponse({ html, plainText, actionType, userText: message });
                 } else {

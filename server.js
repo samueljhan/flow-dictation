@@ -153,7 +153,11 @@ const RAD_QA_SYSTEM_PROMPT = `You are an expert academic radiologist answering q
 - No generic safety disclaimers or 'consult your attending' filler; this is education between professionals, not patient advice`;
 
 // Appended only when the "Include references" toggle is on (tools provided)
-const RAD_QA_REFERENCES_ADDENDUM = `When a reference would genuinely help (classification systems, management guidelines, follow-up criteria, entities the resident may want to read further on), use web search to find the specific relevant page and end your answer with a short 'References' line listing 1-3 links with one-phrase descriptions. Prefer Radiopaedia for general entities, ACR Appropriateness Criteria for protocol/appropriateness questions, and RadioGraphics for in-depth reviews. Do not search for questions you can answer completely from knowledge (basic anatomy, simple definitions) — in those cases include no references rather than padding. Never fabricate a URL: only include links returned by search.`;
+const RAD_QA_REFERENCES_ADDENDUM = `When a reference would genuinely help (classification systems, management guidelines, follow-up criteria, entities the resident may want to read further on), use web search to find the specific relevant page and end your answer with a short 'References' line listing 1-3 links with one-phrase descriptions.
+
+Radiopaedia (radiopaedia.org) is the preferred source. Search it first, and include the relevant Radiopaedia article whenever one exists — list it first in the References. Add other sources only when they cover something Radiopaedia does not: ACR Appropriateness Criteria for protocol/appropriateness questions, and RadioGraphics for in-depth reviews.
+
+Do not search for questions you can answer completely from knowledge (basic anatomy, simple definitions) — in those cases include no references rather than padding. Never fabricate a URL: only include links returned by search.`;
 
 const RAD_QA_SEARCH_TOOL = {
   type: 'web_search_20250305',
@@ -412,6 +416,8 @@ app.post('/api/assist', async (req, res) => {
 
       let msgs = messages;
       let text = '';
+      let searchEnabled = useRefs;
+      let refsDropped = false;
       const citations = [];
       const seenUrls = new Set();
 
@@ -419,18 +425,35 @@ app.post('/api/assist', async (req, res) => {
       // web_search_tool_result blocks, and the server-side tool loop can pause
       // (stop_reason "pause_turn") — resume by appending the turn and re-sending.
       for (let attempt = 0; attempt < 4; attempt++) {
-        const response = await anthropic.messages.create({
+        // Server-side fallback: Fable's safety classifiers occasionally decline
+        // benign radiology questions (tumor/bio-adjacent topics). Rather than
+        // erroring, the API re-runs the request on a fallback model.
+        const response = await anthropic.beta.messages.create({
           model: MODEL_RADQA,
           max_tokens: 4000,
-          system,
+          system: searchEnabled ? system : RAD_QA_SYSTEM_PROMPT,
           messages: msgs,
-          ...(useRefs ? { tools: [RAD_QA_SEARCH_TOOL] } : {})
+          betas: ['server-side-fallback-2026-07-01'],
+          fallbacks: 'default',
+          ...(searchEnabled ? { tools: [RAD_QA_SEARCH_TOOL] } : {})
         });
         const u = response.usage || {};
-        console.log(`[claude] ${MODEL_RADQA} radqa${useRefs ? '+search' : ''} in=${u.input_tokens} out=${u.output_tokens} stop=${response.stop_reason}`);
+        const viaFallback = (u.iterations || []).some(i => i.type === 'fallback_message');
+        console.log(`[claude] ${response.model} radqa${searchEnabled ? '+search' : ''}${viaFallback ? ' (fallback)' : ''} in=${u.input_tokens} out=${u.output_tokens} stop=${response.stop_reason}`);
         if (response.stop_reason === 'refusal') {
-          const why = response.stop_details && response.stop_details.explanation;
-          throw new Error('The model declined this request' + (why ? ': ' + why : '.'));
+          // Classifiers occasionally decline benign oncology questions once search
+          // results are in context. Retry once without search — the same question
+          // usually answers fine from knowledge, just without references.
+          if (searchEnabled) {
+            searchEnabled = false;
+            refsDropped = true;
+            msgs = messages;
+            text = '';
+            citations.length = 0;
+            seenUrls.clear();
+            continue;
+          }
+          throw new Error('This question was declined by the model’s safety filters. Try rephrasing it.');
         }
         for (const block of response.content) {
           if (block.type === 'text') {
@@ -449,7 +472,10 @@ app.post('/api/assist', async (req, res) => {
         }
         break;
       }
-      return res.json({ type: 'text', text: text.trim(), citations });
+      // Radiopaedia first in any citation list we render
+      citations.sort((a, b) =>
+        (b.url.includes('radiopaedia.org') ? 1 : 0) - (a.url.includes('radiopaedia.org') ? 1 : 0));
+      return res.json({ type: 'text', text: text.trim(), citations, refs_dropped: refsDropped });
     }
 
     // The four report actions get the knowledge layer (style guide + language +

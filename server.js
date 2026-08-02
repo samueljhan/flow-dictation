@@ -58,6 +58,8 @@ let userTokens = null;
 const ALLOWED_EMAILS = (process.env.ALLOWED_EMAILS || 'samueljhan@gmail.com')
   .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
 const APP_PASSWORD = process.env.APP_PASSWORD || '';
+// Username for password sign-in; defaults to the first allowed email
+const APP_USERNAME = (process.env.APP_USERNAME || ALLOWED_EMAILS[0] || '').toLowerCase();
 // Sessions survive restarts only if this is set explicitly.
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 if (!process.env.SESSION_SECRET) {
@@ -142,13 +144,23 @@ app.get('/auth/login/google', (req, res) => {
   res.redirect(url);
 });
 
+// Compare via fixed-length digests so length differences don't leak and
+// timingSafeEqual never throws on mismatched buffer sizes.
+function secretMatches(supplied, expected) {
+  const a = crypto.createHash('sha256').update(String(supplied)).digest();
+  const b = crypto.createHash('sha256').update(String(expected)).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
 app.post('/auth/password', (req, res) => {
   if (!APP_PASSWORD) return res.redirect('/login?error=password_unconfigured');
-  const supplied = String((req.body && req.body.password) || '');
-  const a = crypto.createHash('sha256').update(supplied).digest();
-  const b = crypto.createHash('sha256').update(APP_PASSWORD).digest();
-  if (!crypto.timingSafeEqual(a, b)) return res.redirect('/login?error=bad_password');
-  setSessionCookie(res, 'password-user');
+  const username = String((req.body && req.body.username) || '').trim().toLowerCase();
+  const password = String((req.body && req.body.password) || '');
+  // Always evaluate both so a wrong username costs the same as a wrong password
+  const okUser = secretMatches(username, APP_USERNAME);
+  const okPass = secretMatches(password, APP_PASSWORD);
+  if (!okUser || !okPass) return res.redirect('/login?error=bad_credentials');
+  setSessionCookie(res, APP_USERNAME || 'password-user');
   res.redirect('/');
 });
 

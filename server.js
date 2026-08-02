@@ -14,12 +14,12 @@ app.use(express.static('public'));
 
 // Claude API configuration — models are env-configurable
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const MODEL_DETECT = process.env.MODEL_DETECT || 'claude-haiku-4-5';  // study type detection
-const MODEL_REPORT = process.env.MODEL_REPORT || 'claude-sonnet-4-6'; // report actions + draft review
-const MODEL_CHAT = process.env.MODEL_CHAT || 'claude-fable-5';        // free-form Assist chat
-const MODEL_RADQA = process.env.MODEL_RADQA || 'claude-fable-5';      // Quick Rad Question
-// Used when MODEL_RADQA's safety classifiers decline a benign question
-const MODEL_RADQA_FALLBACK = process.env.MODEL_RADQA_FALLBACK || 'claude-opus-5';
+const MODEL_DETECT = process.env.MODEL_DETECT || 'claude-fable-5';  // study type detection
+const MODEL_REPORT = process.env.MODEL_REPORT || 'claude-fable-5';  // report actions + draft review
+const MODEL_CHAT = process.env.MODEL_CHAT || 'claude-fable-5';      // free-form Assist chat
+const MODEL_RADQA = process.env.MODEL_RADQA || 'claude-fable-5';    // Quick Rad Question
+// Used on every path when safety classifiers decline a benign radiology request
+const MODEL_FALLBACK = process.env.MODEL_FALLBACK || 'claude-opus-5';
 
 // Supabase (server-side only — service role key, never sent to the browser)
 const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)
@@ -53,7 +53,7 @@ console.log('Anthropic:', !!process.env.ANTHROPIC_API_KEY ? '✓' : '✗');
 console.log('Supabase:', !!supabase ? '✓' : '✗');
 console.log('Google Client ID:', !!process.env.GOOGLE_CLIENT_ID ? '✓' : '✗');
 console.log('Google Client Secret:', !!process.env.GOOGLE_CLIENT_SECRET ? '✓' : '✗');
-console.log(`Models: detect=${MODEL_DETECT} report=${MODEL_REPORT} chat=${MODEL_CHAT} radqa=${MODEL_RADQA} (fallback ${MODEL_RADQA_FALLBACK})`);
+console.log(`Models: detect=${MODEL_DETECT} report=${MODEL_REPORT} chat=${MODEL_CHAT} radqa=${MODEL_RADQA} (fallback ${MODEL_FALLBACK})`);
 console.log('========================');
 
 // ============ Claude helpers ============
@@ -80,13 +80,31 @@ async function claudeText({ model, system, message, messages, maxTokens, withFal
   // Safety classifiers (e.g. on claude-fable-5) can decline a request with a 200 +
   // stop_reason "refusal" and empty content — surface that instead of returning ''.
   if (response.stop_reason === 'refusal') {
-    throw new Error('This request was declined by the model’s safety filters. Try rephrasing it.');
+    const err = new Error('This request was declined by the model’s safety filters. Try rephrasing it.');
+    err.isRefusal = true;
+    throw err;
   }
+  // Fable returns thinking blocks alongside text; only text blocks carry the answer.
   return response.content
     .filter(block => block.type === 'text')
     .map(block => block.text)
     .join('')
     .trim();
+}
+
+// Every Claude path: run on the primary model, and if safety classifiers decline
+// a benign radiology request, transparently retry on the fallback model.
+async function claudeTextFallback(opts) {
+  try {
+    return await claudeText({ ...opts, withFallbacks: true });
+  } catch (e) {
+    const fallback = opts.fallbackModel || MODEL_FALLBACK;
+    if (e.isRefusal && fallback && fallback !== opts.model) {
+      console.log(`[claude] ${opts.model} declined — retrying on ${fallback}`);
+      return await claudeText({ ...opts, model: fallback, withFallbacks: true });
+    }
+    throw e;
+  }
 }
 
 // Claude is instructed to return JSON only, but strip markdown fences defensively.
@@ -476,9 +494,9 @@ app.post('/api/assist', async (req, res) => {
           // results are in context. Degrade in the order that preserves the most:
           //   1. same question on the fallback model, references intact
           //   2. fallback model without search (answer from knowledge, no refs)
-          if (!triedFallbackModel && MODEL_RADQA_FALLBACK && MODEL_RADQA_FALLBACK !== model) {
+          if (!triedFallbackModel && MODEL_FALLBACK && MODEL_FALLBACK !== model) {
             triedFallbackModel = true;
-            model = MODEL_RADQA_FALLBACK;
+            model = MODEL_FALLBACK;
             restart();
             continue;
           }
@@ -528,12 +546,11 @@ app.post('/api/assist', async (req, res) => {
     // Quick actions run on MODEL_REPORT with the knowledge layer; free-form chat
     // runs on MODEL_CHAT (Fable tier — enable refusal fallbacks).
     const chatModel = instruction ? MODEL_REPORT : MODEL_CHAT;
-    const text = await claudeText({
+    const text = await claudeTextFallback({
       model: chatModel,
       system,
       messages,
-      maxTokens: 4000,
-      withFallbacks: !instruction
+      maxTokens: 4000
     });
 
     if (action === 'describe') {
@@ -595,7 +612,7 @@ app.post('/api/draft/review', async (req, res) => {
     }
     const system = await buildKnowledgeSystem(DRAFT_REVIEW_SYSTEM, studyType);
 
-    const text = await claudeText({
+    const text = await claudeTextFallback({
       model: MODEL_REPORT,
       system,
       message: `Review this radiology report draft:\n\n${report}`,
@@ -630,7 +647,7 @@ app.post('/api/draft/review', async (req, res) => {
 });
 
 async function detectStudyType(report) {
-  const text = await claudeText({
+  const text = await claudeTextFallback({
     model: MODEL_DETECT,
     system: STUDY_TYPE_SYSTEM,
     message: `Identify the study type of this radiology report:\n\n${report.slice(0, 4000)}`,
@@ -1163,7 +1180,7 @@ app.post('/api/generate-report', async (req, res) => {
       return res.status(400).json({ error: 'Findings are required' });
     }
     const userMessage = `Generate a nuclear medicine PET/CT report based on these dictated findings. Only include the sections and findings that were mentioned. Use standard negative phrasing for unremarkable areas:\n\n${findings}`;
-    const text = await claudeText({
+    const text = await claudeTextFallback({
       model: MODEL_REPORT,
       system: NUCLEAR_MEDICINE_SYSTEM_PROMPT,
       message: userMessage,

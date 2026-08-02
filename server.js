@@ -3,14 +3,17 @@ const Anthropic = require('@anthropic-ai/sdk');
 const { createClient } = require('@supabase/supabase-js');
 const { google } = require('googleapis');
 const cors = require('cors');
+const crypto = require('crypto');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
+app.set('trust proxy', 1); // Railway terminates TLS upstream
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
-app.use(express.static('public'));
+app.use(express.urlencoded({ extended: false }));
 
 // Claude API configuration — models are env-configurable
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -47,6 +50,117 @@ const oauth2Client = new google.auth.OAuth2(
 
 // Simple in-memory token storage (for single user)
 let userTokens = null;
+
+// ============ Authentication (single-user) ============
+// Two ways in: Google sign-in restricted to an email allowlist, or a shared
+// password. Everything except the login routes and /api/health is gated.
+
+const ALLOWED_EMAILS = (process.env.ALLOWED_EMAILS || 'samueljhan@gmail.com')
+  .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+const APP_PASSWORD = process.env.APP_PASSWORD || '';
+// Sessions survive restarts only if this is set explicitly.
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+if (!process.env.SESSION_SECRET) {
+  console.warn('⚠ SESSION_SECRET not set — sessions will be invalidated on every restart/redeploy.');
+}
+const SESSION_DAYS = 30;
+const COOKIE_NAME = 'fd_session';
+const googleLoginConfigured = !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+
+function hmac(value) {
+  return crypto.createHmac('sha256', SESSION_SECRET).update(value).digest('base64url');
+}
+
+function makeSession(subject) {
+  const payload = `${subject}|${Date.now() + SESSION_DAYS * 86400000}`;
+  return Buffer.from(payload).toString('base64url') + '.' + hmac(payload);
+}
+
+function readSession(token) {
+  if (typeof token !== 'string' || !token.includes('.')) return null;
+  const [body, sig] = token.split('.');
+  let payload;
+  try { payload = Buffer.from(body, 'base64url').toString(); } catch { return null; }
+  const expected = hmac(payload);
+  // Constant-time compare; lengths must match first or timingSafeEqual throws
+  if (sig.length !== expected.length) return null;
+  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+  const [subject, expiry] = payload.split('|');
+  if (!subject || !expiry || Number(expiry) < Date.now()) return null;
+  return subject;
+}
+
+function getCookie(req, name) {
+  const raw = req.headers.cookie;
+  if (!raw) return null;
+  for (const part of raw.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    if (part.slice(0, idx).trim() === name) return decodeURIComponent(part.slice(idx + 1));
+  }
+  return null;
+}
+
+function setSessionCookie(res, subject) {
+  res.cookie(COOKIE_NAME, makeSession(subject), {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: SESSION_DAYS * 86400000
+  });
+}
+
+const PUBLIC_PATHS = new Set(['/login', '/auth/login/google', '/auth/password', '/auth/logout', '/api/health']);
+
+app.use((req, res, next) => {
+  if (PUBLIC_PATHS.has(req.path) || req.path === '/auth/google/callback') return next();
+  const subject = readSession(getCookie(req, COOKIE_NAME));
+  if (subject) {
+    req.user = subject;
+    return next();
+  }
+  // API calls get JSON so the frontend can react; page loads get the login screen
+  if (req.path.startsWith('/api/')) {
+    return res.status(401).json({ error: 'Not signed in', login_required: true });
+  }
+  return res.redirect('/login');
+});
+
+app.get('/login', (req, res) => {
+  if (readSession(getCookie(req, COOKIE_NAME))) return res.redirect('/');
+  res.sendFile(path.join(__dirname, 'public', 'login.html'));
+});
+
+// Google sign-in — reuses the already-registered callback URL, distinguished by `state`
+app.get('/auth/login/google', (req, res) => {
+  if (!googleLoginConfigured) return res.redirect('/login?error=google_unconfigured');
+  const url = oauth2Client.generateAuthUrl({
+    scope: ['openid', 'email'],
+    state: 'login',
+    prompt: 'select_account'
+  });
+  res.redirect(url);
+});
+
+app.post('/auth/password', (req, res) => {
+  if (!APP_PASSWORD) return res.redirect('/login?error=password_unconfigured');
+  const supplied = String((req.body && req.body.password) || '');
+  const a = crypto.createHash('sha256').update(supplied).digest();
+  const b = crypto.createHash('sha256').update(APP_PASSWORD).digest();
+  if (!crypto.timingSafeEqual(a, b)) return res.redirect('/login?error=bad_password');
+  setSessionCookie(res, 'password-user');
+  res.redirect('/');
+});
+
+app.get('/auth/logout', (req, res) => {
+  res.clearCookie(COOKIE_NAME);
+  res.redirect('/login');
+});
+
+app.get('/api/me', (req, res) => res.json({ user: req.user }));
+
+// Static files are served only after the auth gate above
+app.use(express.static('public'));
 
 console.log('=== Environment Check ===');
 console.log('Anthropic:', !!process.env.ANTHROPIC_API_KEY ? '✓' : '✗');
@@ -1059,16 +1173,36 @@ app.get('/auth/google', (req, res) => {
 });
 
 app.get('/auth/google/callback', async (req, res) => {
-  const { code } = req.query;
+  const { code, state } = req.query;
   try {
     const { tokens } = await oauth2Client.getToken(code);
+
+    // Sign-in flow: verify the Google identity and check it against the allowlist
+    if (state === 'login') {
+      if (!tokens.id_token) return res.redirect('/login?error=no_identity');
+      const ticket = await oauth2Client.verifyIdToken({
+        idToken: tokens.id_token,
+        audience: process.env.GOOGLE_CLIENT_ID
+      });
+      const payload = ticket.getPayload() || {};
+      const email = String(payload.email || '').toLowerCase();
+      if (!payload.email_verified || !ALLOWED_EMAILS.includes(email)) {
+        console.warn(`Denied sign-in for ${email || '(unknown)'}`);
+        return res.redirect('/login?error=not_allowed');
+      }
+      setSessionCookie(res, email);
+      console.log(`✅ Signed in: ${email}`);
+      return res.redirect('/');
+    }
+
+    // Gmail connect flow (separate from sign-in)
     oauth2Client.setCredentials(tokens);
     userTokens = tokens;
     console.log('✅ Gmail OAuth successful');
     res.redirect('/?gmail=connected');
   } catch (error) {
     console.error('OAuth error:', error);
-    res.redirect('/?gmail=error');
+    res.redirect(state === 'login' ? '/login?error=oauth_failed' : '/?gmail=error');
   }
 });
 
@@ -1129,6 +1263,7 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     service: 'Flow Dictation API',
     llm: { detect: MODEL_DETECT, report: MODEL_REPORT, chat: MODEL_CHAT, radqa: MODEL_RADQA, fallback: MODEL_FALLBACK },
+    auth: { google: googleLoginConfigured, password: !!APP_PASSWORD, allowed_emails: ALLOWED_EMAILS.length },
     supabase: supabase ? 'configured' : 'not configured'
   });
 });

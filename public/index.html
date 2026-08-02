@@ -54,6 +54,11 @@
         }
         .tab:hover { color: #d0d0d0; }
         .tab.active { color: #ffffff; border-bottom-color: #e0e0e0; }
+        .tab.signout {
+            display: flex; align-items: center; color: #707070;
+            font-size: 12px; text-decoration: none; margin-left: 8px;
+        }
+        .tab.signout:hover { color: #d0d0d0; }
 
         /* Pages fill everything under the header */
         .page { display: none; flex: 1; min-height: 0; flex-direction: column; background: #1a1a1a; }
@@ -484,6 +489,7 @@
                 <button class="tab" data-page="draft">Draft</button>
                 <button class="tab" data-page="final">Final</button>
                 <button class="tab" data-page="review">Review</button>
+                <a class="tab signout" href="/auth/logout" title="Sign out">Sign out</a>
             </nav>
         </div>
 
@@ -708,6 +714,11 @@
                 body: opts.body ? JSON.stringify(opts.body) : undefined
             });
             const data = await res.json().catch(() => ({}));
+            // Session expired mid-use — bounce to the login screen
+            if (res.status === 401 && data.login_required) {
+                window.location.href = '/login?error=session_expired';
+                throw new Error('Session expired');
+            }
             if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
             return data;
         }
@@ -778,9 +789,9 @@
 
         // ==================== Tabs ====================
 
-        document.querySelectorAll('.tab').forEach(tab => {
+        document.querySelectorAll('.tab[data-page]').forEach(tab => {
             tab.addEventListener('click', () => {
-                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab[data-page]').forEach(t => t.classList.remove('active'));
                 document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
                 tab.classList.add('active');
                 document.getElementById('page-' + tab.dataset.page).classList.add('active');
@@ -1730,7 +1741,7 @@
 
         // Open a search result in the Final page's detail view (diff + grade + note)
         async function openReportFromReview(r) {
-            document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.page === 'final'));
+            document.querySelectorAll('.tab[data-page]').forEach(t => t.classList.toggle('active', t.dataset.page === 'final'));
             document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
             document.getElementById('page-final').classList.add('active');
             await initFinalPage();

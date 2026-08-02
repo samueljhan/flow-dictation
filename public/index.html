@@ -977,6 +977,9 @@
                     if (data.refs_dropped) {
                         html += '\n\n<span style="color:#808080; font-size:12px">(Answered without references — the reference search was declined for this question.)</span>';
                     }
+                    if (data.truncated) {
+                        html += '\n\n<span style="color:#e0a832; font-size:12px">(Answer was cut off at the length limit — ask a follow-up to continue.)</span>';
+                    }
                     addAssistantResponse({ html, plainText, actionType, userText: message });
                 } else {
                     plainText = data.text;

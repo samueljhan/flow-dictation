@@ -17,6 +17,8 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL_DETECT = process.env.MODEL_DETECT || 'claude-haiku-4-5';  // study type detection
 const MODEL_REPORT = process.env.MODEL_REPORT || 'claude-sonnet-4-6'; // report actions + draft review
 const MODEL_RADQA = process.env.MODEL_RADQA || 'claude-fable-5';      // Quick Rad Question
+// Used when MODEL_RADQA's safety classifiers decline a benign question
+const MODEL_RADQA_FALLBACK = process.env.MODEL_RADQA_FALLBACK || 'claude-opus-5';
 
 // Supabase (server-side only — service role key, never sent to the browser)
 const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)
@@ -50,7 +52,7 @@ console.log('Anthropic:', !!process.env.ANTHROPIC_API_KEY ? '✓' : '✗');
 console.log('Supabase:', !!supabase ? '✓' : '✗');
 console.log('Google Client ID:', !!process.env.GOOGLE_CLIENT_ID ? '✓' : '✗');
 console.log('Google Client Secret:', !!process.env.GOOGLE_CLIENT_SECRET ? '✓' : '✗');
-console.log(`Models: detect=${MODEL_DETECT} report=${MODEL_REPORT} radqa=${MODEL_RADQA}`);
+console.log(`Models: detect=${MODEL_DETECT} report=${MODEL_REPORT} radqa=${MODEL_RADQA} (fallback ${MODEL_RADQA_FALLBACK})`);
 console.log('========================');
 
 // ============ Claude helpers ============
@@ -416,21 +418,30 @@ app.post('/api/assist', async (req, res) => {
 
       let msgs = messages;
       let text = '';
+      let model = MODEL_RADQA;
       let searchEnabled = useRefs;
+      let triedFallbackModel = false;
       let refsDropped = false;
+      let truncated = false;
       const citations = [];
       const seenUrls = new Set();
 
       // Search-enabled responses interleave text / server_tool_use /
       // web_search_tool_result blocks, and the server-side tool loop can pause
       // (stop_reason "pause_turn") — resume by appending the turn and re-sending.
-      for (let attempt = 0; attempt < 4; attempt++) {
-        // Server-side fallback: Fable's safety classifiers occasionally decline
-        // benign radiology questions (tumor/bio-adjacent topics). Rather than
-        // erroring, the API re-runs the request on a fallback model.
+      const restart = () => {
+        msgs = messages;
+        text = '';
+        citations.length = 0;
+        seenUrls.clear();
+      };
+
+      for (let attempt = 0; attempt < 8; attempt++) {
         const response = await anthropic.beta.messages.create({
-          model: MODEL_RADQA,
-          max_tokens: 4000,
+          model,
+          // Referenced answers run long, and the References line comes last —
+          // too low a ceiling truncates it away.
+          max_tokens: 8000,
           system: searchEnabled ? system : RAD_QA_SYSTEM_PROMPT,
           messages: msgs,
           betas: ['server-side-fallback-2026-07-01'],
@@ -438,19 +449,25 @@ app.post('/api/assist', async (req, res) => {
           ...(searchEnabled ? { tools: [RAD_QA_SEARCH_TOOL] } : {})
         });
         const u = response.usage || {};
-        const viaFallback = (u.iterations || []).some(i => i.type === 'fallback_message');
-        console.log(`[claude] ${response.model} radqa${searchEnabled ? '+search' : ''}${viaFallback ? ' (fallback)' : ''} in=${u.input_tokens} out=${u.output_tokens} stop=${response.stop_reason}`);
+        const viaServerFallback = (u.iterations || []).some(i => i.type === 'fallback_message');
+        console.log(`[claude] ${response.model} radqa${searchEnabled ? '+search' : ''}${viaServerFallback ? ' (server-fallback)' : ''} in=${u.input_tokens} out=${u.output_tokens} stop=${response.stop_reason}`);
+
         if (response.stop_reason === 'refusal') {
-          // Classifiers occasionally decline benign oncology questions once search
-          // results are in context. Retry once without search — the same question
-          // usually answers fine from knowledge, just without references.
+          // Safety classifiers occasionally decline benign radiology questions
+          // (bone/soft-tissue tumors especially), usually only once web search
+          // results are in context. Degrade in the order that preserves the most:
+          //   1. same question on the fallback model, references intact
+          //   2. fallback model without search (answer from knowledge, no refs)
+          if (!triedFallbackModel && MODEL_RADQA_FALLBACK && MODEL_RADQA_FALLBACK !== model) {
+            triedFallbackModel = true;
+            model = MODEL_RADQA_FALLBACK;
+            restart();
+            continue;
+          }
           if (searchEnabled) {
             searchEnabled = false;
             refsDropped = true;
-            msgs = messages;
-            text = '';
-            citations.length = 0;
-            seenUrls.clear();
+            restart();
             continue;
           }
           throw new Error('This question was declined by the model’s safety filters. Try rephrasing it.');
@@ -470,12 +487,13 @@ app.post('/api/assist', async (req, res) => {
           msgs = [...msgs, { role: 'assistant', content: response.content }];
           continue;
         }
+        truncated = response.stop_reason === 'max_tokens';
         break;
       }
       // Radiopaedia first in any citation list we render
       citations.sort((a, b) =>
         (b.url.includes('radiopaedia.org') ? 1 : 0) - (a.url.includes('radiopaedia.org') ? 1 : 0));
-      return res.json({ type: 'text', text: text.trim(), citations, refs_dropped: refsDropped });
+      return res.json({ type: 'text', text: text.trim(), citations, refs_dropped: refsDropped, truncated });
     }
 
     // The four report actions get the knowledge layer (style guide + language +

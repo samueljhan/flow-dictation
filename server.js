@@ -58,9 +58,12 @@ console.log('========================');
 
 // ============ Claude helpers ============
 
-// withFallbacks: use the beta endpoint with server-side refusal fallbacks —
-// worth it for models whose safety classifiers can decline benign radiology
-// content (Fable/Opus tier).
+// Only the Fable/Opus-5 tier accepts the server-side `fallbacks` parameter;
+// Haiku and Sonnet reject it with a 400. Those models also don't exhibit the
+// classifier refusals fallbacks exist to rescue.
+const FALLBACK_CAPABLE = /fable|mythos|opus-5/i;
+
+// withFallbacks: request server-side refusal fallbacks where the model supports it.
 async function claudeText({ model, system, message, messages, maxTokens, withFallbacks }) {
   const params = {
     model,
@@ -68,13 +71,23 @@ async function claudeText({ model, system, message, messages, maxTokens, withFal
     system,
     messages: messages || [{ role: 'user', content: message }]
   };
-  const response = withFallbacks
-    ? await anthropic.beta.messages.create({
+  let response;
+  if (withFallbacks && FALLBACK_CAPABLE.test(model)) {
+    try {
+      response = await anthropic.beta.messages.create({
         ...params,
         betas: ['server-side-fallback-2026-07-01'],
         fallbacks: 'default'
-      })
-    : await anthropic.messages.create(params);
+      });
+    } catch (e) {
+      // Self-heal if a model's fallback support differs from the pattern above
+      if (!/does not support the .?fallbacks/i.test(e.message || '')) throw e;
+      console.warn(`[claude] ${model} rejected fallbacks — retrying without`);
+      response = await anthropic.messages.create(params);
+    }
+  } else {
+    response = await anthropic.messages.create(params);
+  }
   const u = response.usage || {};
   console.log(`[claude] ${response.model || model} in=${u.input_tokens} out=${u.output_tokens} cache_write=${u.cache_creation_input_tokens || 0} cache_read=${u.cache_read_input_tokens || 0}`);
   // Safety classifiers (e.g. on claude-fable-5) can decline a request with a 200 +
@@ -418,8 +431,10 @@ app.post('/api/assist', async (req, res) => {
           max_tokens: 8000,
           system: buildRadQaSystem(model, searchEnabled),
           messages: msgs,
-          betas: ['server-side-fallback-2026-07-01'],
-          fallbacks: 'default',
+          // Only the Fable/Opus-5 tier accepts these; MODEL_RADQA is overridable
+          ...(FALLBACK_CAPABLE.test(model)
+            ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' }
+            : {}),
           ...(searchEnabled ? { tools: [RAD_QA_SEARCH_TOOL] } : {})
         });
         const u = response.usage || {};

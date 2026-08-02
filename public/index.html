@@ -34,39 +34,28 @@
             overflow: hidden;
         }
 
-        /* ---------- Header ---------- */
+        /* ---------- Header (single bar: title left, tabs right) ---------- */
         .header {
             background: #1a1a1a;
             color: #e0e0e0;
-            padding: 20px 30px;
+            padding: 0 24px;
             border-radius: 20px 20px 0 0;
             border-bottom: 1px solid #3a3a3a;
             display: flex;
-            align-items: center;
+            align-items: stretch;
+            justify-content: space-between;
             gap: 15px;
             flex-shrink: 0;
         }
-        .header-logo {
-            width: 52px; height: 52px; object-fit: contain; flex-shrink: 0;
-            user-select: none; -webkit-user-select: none; pointer-events: none; -webkit-user-drag: none;
+        .header h1 {
+            color: #b0b0b0; font-size: 19px; font-weight: 600;
+            display: flex; align-items: center; padding: 15px 0;
         }
-        .header-text { display: flex; flex-direction: column; gap: 2px; flex: 1; }
-        .header h1 { color: #b0b0b0; font-size: 24px; font-weight: 600; line-height: 1.1; }
-        .header p { font-size: 13px; color: #909090; line-height: 1.2; }
-
-        /* ---------- Tab bar (thin strip) ---------- */
-        .tab-bar {
-            padding: 0 30px;
-            background: #242424;
-            border-bottom: 1px solid #3a3a3a;
-            display: flex;
-            gap: 4px;
-            flex-shrink: 0;
-        }
+        .tabs { display: flex; gap: 4px; }
         .tab {
             background: transparent; border: none; cursor: pointer;
             color: #909090; font-size: 13px; font-weight: 600;
-            padding: 11px 18px; font-family: inherit;
+            padding: 0 16px; font-family: inherit;
             border-bottom: 2px solid transparent;
             transition: all 0.2s;
         }
@@ -445,10 +434,9 @@
         @media (max-width: 900px) {
             body { padding: 0; }
             .container { border-radius: 0; height: 100vh; height: 100dvh; max-width: 100%; box-shadow: none; }
-            .header { border-radius: 0; padding: 12px 15px; padding-top: calc(env(safe-area-inset-top, 0px) + 12px); }
-            .header-logo { width: 42px; height: 42px; }
-            .header h1 { font-size: 19px; }
-            .tab-bar { padding: 0 15px; }
+            .header { border-radius: 0; padding: 0 15px; padding-top: env(safe-area-inset-top, 0px); }
+            .header h1 { font-size: 16px; }
+            .tab { padding: 0 10px; }
             .chat-container { padding: 15px; }
             .welcome-message { padding: 20px 10px; }
             .example-prompts { grid-template-columns: 1fr; gap: 8px; margin-top: 15px; }
@@ -465,18 +453,13 @@
 <body>
     <div class="container">
         <div class="header">
-            <img class="header-logo" src="/images/flow-logo.png" alt="Flow Dictation">
-            <div class="header-text">
-                <h1>Flow Dictation</h1>
-                <p>Radiology reporting assistant</p>
-            </div>
-        </div>
-
-        <div class="tab-bar">
-            <button class="tab active" data-page="assist">Assist</button>
-            <button class="tab" data-page="draft">Draft</button>
-            <button class="tab" data-page="final">Final</button>
-            <button class="tab" data-page="library">Library</button>
+            <h1>Flow Dictation</h1>
+            <nav class="tabs">
+                <button class="tab active" data-page="assist">Assist</button>
+                <button class="tab" data-page="draft">Draft</button>
+                <button class="tab" data-page="final">Final</button>
+                <button class="tab" data-page="library">Library</button>
+            </nav>
         </div>
 
         <!-- ================= PAGE 1: ASSIST ================= -->

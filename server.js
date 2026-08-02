@@ -356,72 +356,10 @@ async function buildKnowledgeSystem(baseSystem, studyType) {
 }
 
 // Heuristic: pasted report content is long; short inputs (finding descriptions,
-// questions) skip the Haiku study-type call.
+// questions) skip the study-type detection call.
 function looksLikeReport(text) {
   return text.trim().length >= 200;
 }
-
-const NUCLEAR_MEDICINE_SYSTEM_PROMPT = `You are an expert nuclear medicine radiologist creating structured PET/CT and nuclear medicine reports.
-
-CRITICAL FORMATTING RULES:
-1. Use EXACTLY this structure with proper spacing:
-
-TECHNIQUE: [Generate appropriate technique based on study type - see examples below]
-
-FINDINGS:
-
-HEAD AND NECK: [findings or "There is no increased uptake within lymphadenopathy seen."]
-
-SKULL BASE: [findings or "There is no abnormal increased uptake. There is physiologic uptake within the salivary and thyroid glands."]
-
-CHEST
-
-LUNGS: [findings or "There is no increased uptake within lung nodules visualized."]
-
-MEDIASTINUM: [findings or "There is no increased uptake within lymphadenopathy seen."]
-
-ABDOMEN/PELVIS
-
-LIVER/SPLEEN: [findings or "No abnormal increased uptake is seen."]
-
-ADRENALS: [findings or "No abnormal hypermetabolism is seen."]
-
-LYMPH NODES: [findings or "There is no hypermetabolic lymphadenopathy seen."]
-
-GI TRACT: [findings or "There is physiologic metabolic activity throughout the gastrointestinal tract with no focal abnormal hypermetabolism."]
-
-BONES/BONE MARROW: [findings or "There is no abnormal increased uptake seen."]
-
-EXTREMITIES: [findings or "No abnormal increased uptake seen."]
-
-OTHER: [additional findings or "There are no other abnormal foci of increased uptake."]
-
-NON-PET FINDINGS: [CT findings like "Atherosclerotic calcifications..." or omit if none]
-
-
-CONCLUSION:
-
-1. [First conclusion point]
-2. [Second conclusion point]
-[etc.]
-
-IMPORTANT GUIDELINES:
-- Only include POSITIVE findings in each section
-- Use exact phrasing for negative findings: "There is no increased uptake within..." or "No abnormal increased uptake..."
-- Use "increased uptake" terminology (not "hypermetabolic") to match standard nuclear medicine phrasing
-- Include SUV values when mentioned (e.g., "max SUV of 12.4")
-- Describe lesion locations precisely (e.g., "right lower lobe", "left posterior peripheral zone")
-- Compare to prior studies when mentioned (e.g., "increased from prior", "new since...")
-- Use proper anatomical terminology
-- Keep tone clinical and objective
-- Number all conclusion points
-- Include size measurements when provided (e.g., "3.2 cm lesion")
-- Mention any sclerotic/lytic changes in bones
-- Note any interval changes explicitly
-- Present tense for current findings
-- Past tense for comparisons ("previously seen", "was noted")
-
-DO NOT include: Patient names, MRNs, dates of birth, exam dates, physician names, or any PHI.`;
 
 // ============ Page 1: Assist ============
 
@@ -1171,39 +1109,17 @@ app.post('/api/gmail/send', async (req, res) => {
   }
 });
 
-// ============ Legacy Report Generation (nuclear medicine) ============
-
-app.post('/api/generate-report', async (req, res) => {
-  try {
-    const { findings } = req.body;
-    if (!findings) {
-      return res.status(400).json({ error: 'Findings are required' });
-    }
-    const userMessage = `Generate a nuclear medicine PET/CT report based on these dictated findings. Only include the sections and findings that were mentioned. Use standard negative phrasing for unremarkable areas:\n\n${findings}`;
-    const text = await claudeTextFallback({
-      model: MODEL_REPORT,
-      system: NUCLEAR_MEDICINE_SYSTEM_PROMPT,
-      message: userMessage,
-      maxTokens: 2000
-    });
-    res.json({ report: text });
-  } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ error: 'Failed to generate report', details: error.message });
-  }
-});
-
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     service: 'Flow Dictation API',
-    llm: `${MODEL_REPORT} + ${MODEL_DETECT}`,
+    llm: { detect: MODEL_DETECT, report: MODEL_REPORT, chat: MODEL_CHAT, radqa: MODEL_RADQA, fallback: MODEL_FALLBACK },
     supabase: supabase ? 'configured' : 'not configured'
   });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🏥 Flow Dictation running on port ${PORT}`);
-  console.log(`✨ Claude: ${MODEL_REPORT} (reports) + ${MODEL_DETECT} (lightweight)`);
+  console.log(`✨ Claude: ${MODEL_REPORT} (reports), fallback ${MODEL_FALLBACK}`);
   console.log(`🗄️  Supabase: ${supabase ? 'connected' : 'NOT CONFIGURED'}`);
 });

@@ -1,7 +1,7 @@
 {
-  "name": "mise-flow",
+  "name": "flow-dictation",
   "version": "1.2.0",
-  "description": "AI-powered voice inventory management for small businesses",
+  "description": "AI-assisted radiology dictation and reporting",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -27,6 +27,6 @@
     "ws": "^8.17.1"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22"
   }
 }

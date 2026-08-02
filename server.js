@@ -30,7 +30,9 @@ const HAIKU = 'claude-haiku-4-5';     // lightweight tasks (study type detection
 
 // Supabase (server-side only — service role key, never sent to the browser)
 const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)
-  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+      auth: { persistSession: false }
+    })
   : null;
 
 function requireSupabase(res) {

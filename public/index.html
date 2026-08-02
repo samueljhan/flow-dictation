@@ -348,13 +348,6 @@
         .rr-type { font-size: 11px; color: #909090; text-transform: uppercase; font-weight: 700; }
         .list-empty { color: #808080; font-size: 13px; font-style: italic; padding: 12px; }
 
-        .gf-bar { display: flex; border: 1px solid #404040; border-radius: 8px; overflow: hidden; }
-        .gf-btn {
-            background: transparent; border: none; color: #909090;
-            padding: 7px 12px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s;
-        }
-        .gf-btn:hover { color: #d0d0d0; }
-        .gf-btn.active { background: #e0e0e0; color: #1a1a1a; }
         .report-row { flex-wrap: wrap; }
         .rr-note { width: 100%; font-size: 12px; color: #909090; font-style: italic; padding-top: 2px; }
         .rpr-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 8px; letter-spacing: 0.3px; background: #404040; color: #b0b0b0; }
@@ -386,25 +379,6 @@
         }
         .diff-add { color: #e0a832; font-weight: 700; }
         .diff-del { color: #777; text-decoration: line-through; opacity: 0.6; }
-
-        /* ---------- Library page ---------- */
-        .chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
-        .chip { background: #404040; color: #b0b0b0; font-size: 11px; padding: 2px 8px; border-radius: 8px; }
-        .chip b { color: #e0e0e0; }
-        .lib-form-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-        .lib-list { display: flex; flex-direction: column; gap: 6px; }
-        .lib-row {
-            display: flex; align-items: center; gap: 10px;
-            background: #2a2a2a; border: 1px solid #404040; border-radius: 8px;
-            padding: 8px 12px; font-size: 13px; color: #d0d0d0;
-        }
-        .lib-row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-        .lib-row .sub { color: #808080; font-size: 12px; }
-        .lib-mini { background: none; border: none; color: #808080; cursor: pointer; font-size: 12px; text-decoration: underline; flex-shrink: 0; }
-        .lib-mini:hover { color: #d0d0d0; }
-        .lib-group-title { font-size: 12px; font-weight: 700; color: #909090; text-transform: uppercase; letter-spacing: 0.6px; margin: 8px 0 4px; }
-        .source-badge { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 6px; background: #404040; color: #909090; text-transform: uppercase; flex-shrink: 0; }
-        .source-badge.user { color: #28a745; }
 
         /* ---------- Modals & toast ---------- */
         .modal-overlay {
@@ -458,7 +432,7 @@
                 <button class="tab active" data-page="assist">Assist</button>
                 <button class="tab" data-page="draft">Draft</button>
                 <button class="tab" data-page="final">Final</button>
-                <button class="tab" data-page="library">Library</button>
+                <button class="tab" data-page="review">Review</button>
             </nav>
         </div>
 
@@ -554,15 +528,6 @@
                 <div class="final-toolbar">
                     <label>Shift</label>
                     <select id="shiftSelect"></select>
-                    <span style="flex:1"></span>
-                    <label title="Grade filters search across ALL shifts">Review</label>
-                    <div class="gf-bar">
-                        <button class="gf-btn active" data-gf="all">All</button>
-                        <button class="gf-btn" data-gf="RPR2">RPR2</button>
-                        <button class="gf-btn" data-gf="RPR3">RPR3</button>
-                        <button class="gf-btn" data-gf="RPR4">RPR4</button>
-                        <button class="gf-btn" data-gf="ungraded">Ungraded</button>
-                    </div>
                 </div>
                 <div id="reportList" class="report-list"></div>
                 <div id="finalDetail" style="display:none">
@@ -604,64 +569,28 @@
             </div>
         </section>
 
-        <!-- ================= PAGE 4: LIBRARY ================= -->
-        <section id="page-library" class="page">
+        <!-- ================= PAGE 4: REVIEW ================= -->
+        <section id="page-review" class="page">
             <div class="final-scroll">
-                <div class="panel" style="margin-bottom:16px">
-                    <div class="panel-title">Exemplar Reports</div>
-                    <div id="exemplarCounts" class="chip-row"></div>
-                    <label>Report body</label>
-                    <textarea id="exBody" rows="8" placeholder="Paste a gold-standard report…" style="background:#242424"></textarea>
-                    <div class="lib-form-row">
-                        <input id="exStudyType" placeholder="Study type (blank = auto-detect on save)" style="flex:1; min-width:200px">
-                        <button class="ghost" id="exDetectBtn">Auto-detect</button>
-                    </div>
-                    <div class="lib-form-row">
-                        <input id="exTitle" placeholder="Title (optional)" style="flex:1; min-width:160px">
-                        <input id="exNotes" placeholder="Notes (optional)" style="flex:1; min-width:160px">
-                    </div>
-                    <div class="lib-form-row">
-                        <button class="primary" id="exSaveBtn">Save Exemplar</button>
-                        <button class="ghost" id="exCancelBtn" style="display:none">Cancel edit</button>
-                        <span class="status" id="exStatus"></span>
-                    </div>
-                    <input id="exSearch" placeholder="Search exemplars by study type or title…">
-                    <div id="exList" class="lib-list"></div>
+                <div class="final-toolbar" style="flex-wrap:wrap">
+                    <label>Shift</label>
+                    <select id="rvShift"><option value="">All shifts</option></select>
+                    <label>RPR</label>
+                    <select id="rvGrade">
+                        <option value="">All</option>
+                        <option value="RPR1">RPR1</option>
+                        <option value="RPR2">RPR2</option>
+                        <option value="RPR3">RPR3</option>
+                        <option value="RPR4">RPR4</option>
+                        <option value="ungraded">Ungraded</option>
+                    </select>
+                    <label>Study type</label>
+                    <input id="rvStudyType" list="rvStudyTypes" placeholder="e.g. CT head" style="width:170px">
+                    <datalist id="rvStudyTypes"></datalist>
+                    <button class="ghost" id="rvClear">Clear</button>
+                    <span class="status" id="rvCount"></span>
                 </div>
-
-                <div class="panel" style="margin-bottom:16px">
-                    <div class="panel-title">Style Guide</div>
-                    <div class="lib-form-row">
-                        <input id="sgSection" list="sgSections" placeholder="Section" style="width:180px">
-                        <datalist id="sgSections"></datalist>
-                        <input id="sgRule" placeholder="Rule…" style="flex:1; min-width:220px">
-                        <button class="primary" id="sgSaveBtn">Add</button>
-                        <button class="ghost" id="sgCancelBtn" style="display:none">Cancel</button>
-                    </div>
-                    <span class="status" id="sgStatus"></span>
-                    <div id="sgList"></div>
-                </div>
-
-                <div class="panel">
-                    <div class="panel-title">Radiology Language</div>
-                    <div class="lib-form-row">
-                        <select id="rlCategory">
-                            <option value="findings_phrasing">findings_phrasing</option>
-                            <option value="impression_phrasing">impression_phrasing</option>
-                            <option value="hedging">hedging</option>
-                            <option value="negatives">negatives</option>
-                            <option value="measurements">measurements</option>
-                            <option value="comparison">comparison</option>
-                            <option value="modality_conventions">modality_conventions</option>
-                            <option value="words_to_avoid">words_to_avoid</option>
-                        </select>
-                        <input id="rlContent" placeholder="Entry…" style="flex:1; min-width:220px">
-                        <button class="primary" id="rlSaveBtn">Add</button>
-                        <button class="ghost" id="rlCancelBtn" style="display:none">Cancel</button>
-                    </div>
-                    <span class="status" id="rlStatus"></span>
-                    <div id="rlList"></div>
-                </div>
+                <div id="rvList" class="report-list"></div>
             </div>
         </section>
     </div>
@@ -795,7 +724,7 @@
                 document.getElementById('page-' + tab.dataset.page).classList.add('active');
                 if (tab.dataset.page === 'draft') initDraftPage();
                 if (tab.dataset.page === 'final') initFinalPage();
-                if (tab.dataset.page === 'library') initLibraryPage();
+                if (tab.dataset.page === 'review') initReviewPage();
             });
         });
 
@@ -1469,56 +1398,40 @@
             loadFinalReports();
         });
 
-        let gradeFilter = 'all';
-
-        document.querySelectorAll('.gf-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                gradeFilter = btn.dataset.gf;
-                document.querySelectorAll('.gf-btn').forEach(b => b.classList.toggle('active', b === btn));
-                // Grade filters search across ALL shifts; the shift selector only applies to "All"
-                shiftSelect.disabled = gradeFilter !== 'all';
-                finalDetail.style.display = 'none';
-                finalReport = null;
-                loadFinalReports();
-            });
-        });
+        // Renders one report row; used by both the Final list and the Review results
+        function renderReportRow(r, { showDate, showNote } = {}) {
+            const row = document.createElement('div');
+            row.className = 'report-row';
+            row.dataset.id = r.id;
+            const t = new Date(r.created_at);
+            const when = (showDate ? fmtDate(t) + ' ' : '') + pad2(t.getHours()) + ':' + pad2(t.getMinutes());
+            const noteLine = (r.rpr_note || '').split('\n')[0].slice(0, 120);
+            row.innerHTML =
+                '<span class="rr-id">' + escapeHtml(r.id) + '</span>' +
+                '<span class="rr-study">' + escapeHtml(r.study_type || '—') + '</span>' +
+                (r.study_id_label ? '<span class="rr-label">' + escapeHtml(r.study_id_label) + '</span>' : '') +
+                '<span class="rr-type">' + escapeHtml(r.report_type) + '</span>' +
+                '<span class="rr-time">' + when + '</span>' +
+                (r.rpr_grade ? '<span class="rpr-badge ' + r.rpr_grade.toLowerCase() + '">' + escapeHtml(r.rpr_grade) + '</span>' : '') +
+                '<span class="rr-final ' + (r.final_saved_at ? 'yes' : 'no') + '">' + (r.final_saved_at ? '✓ Final' : 'No final') + '</span>' +
+                (showNote && noteLine ? '<span class="rr-note">' + escapeHtml(noteLine) + '</span>' : '');
+            return row;
+        }
 
         async function loadFinalReports() {
-            const crossShift = gradeFilter !== 'all';
             const shiftId = shiftSelect.value;
-            if (!crossShift && !shiftId) return;
+            if (!shiftId) return;
             reportList.innerHTML = '<div class="list-empty"><span class="spinner"></span>Loading…</div>';
             try {
-                const url = crossShift
-                    ? '/api/reports?grade=' + encodeURIComponent(gradeFilter)
-                    : '/api/reports?shift_id=' + encodeURIComponent(shiftId);
-                const data = await api(url);
+                const data = await api('/api/reports?shift_id=' + encodeURIComponent(shiftId));
                 const reports = data.reports || [];
                 if (reports.length === 0) {
-                    reportList.innerHTML = '<div class="list-empty">' +
-                        (crossShift ? 'No ' + escapeHtml(gradeFilter === 'ungraded' ? 'ungraded' : gradeFilter) + ' reports in any shift.' : 'No reports in this shift.') +
-                        '</div>';
+                    reportList.innerHTML = '<div class="list-empty">No reports in this shift.</div>';
                     return;
                 }
                 reportList.innerHTML = '';
                 reports.forEach(r => {
-                    const row = document.createElement('div');
-                    row.className = 'report-row';
-                    row.dataset.id = r.id;
-                    const t = new Date(r.created_at);
-                    const when = crossShift
-                        ? fmtDate(t) + ' ' + pad2(t.getHours()) + ':' + pad2(t.getMinutes())
-                        : pad2(t.getHours()) + ':' + pad2(t.getMinutes());
-                    const noteLine = (r.rpr_note || '').split('\n')[0].slice(0, 120);
-                    row.innerHTML =
-                        '<span class="rr-id">' + escapeHtml(r.id) + '</span>' +
-                        '<span class="rr-study">' + escapeHtml(r.study_type || '—') + '</span>' +
-                        (r.study_id_label ? '<span class="rr-label">' + escapeHtml(r.study_id_label) + '</span>' : '') +
-                        '<span class="rr-type">' + escapeHtml(r.report_type) + '</span>' +
-                        '<span class="rr-time">' + when + '</span>' +
-                        (r.rpr_grade ? '<span class="rpr-badge ' + r.rpr_grade.toLowerCase() + '">' + escapeHtml(r.rpr_grade) + '</span>' : '') +
-                        '<span class="rr-final ' + (r.final_saved_at ? 'yes' : 'no') + '">' + (r.final_saved_at ? '✓ Final' : 'No final') + '</span>' +
-                        (crossShift && noteLine ? '<span class="rr-note">' + escapeHtml(noteLine) + '</span>' : '');
+                    const row = renderReportRow(r);
                     row.addEventListener('click', () => selectFinalReport(r.id, row));
                     reportList.appendChild(row);
                 });
@@ -1529,7 +1442,7 @@
 
         async function selectFinalReport(id, row) {
             document.querySelectorAll('.report-row').forEach(r => r.classList.remove('selected'));
-            row.classList.add('selected');
+            if (row) row.classList.add('selected');
             finalStatusEl.textContent = '';
             try {
                 const data = await api('/api/reports/' + encodeURIComponent(id));
@@ -1661,252 +1574,93 @@
             }
         });
 
-        // ==================== LIBRARY PAGE ====================
+        // ==================== REVIEW PAGE ====================
+        // Search previously drafted studies (the reports table only — PARROT
+        // exemplars live in a separate table and never appear here).
 
-        let libraryInited = false;
-        let exEditingId = null;
-        let sgEditingId = null;
-        let rlEditingId = null;
+        const rvShift = document.getElementById('rvShift');
+        const rvGrade = document.getElementById('rvGrade');
+        const rvStudyType = document.getElementById('rvStudyType');
+        const rvList = document.getElementById('rvList');
+        const rvCount = document.getElementById('rvCount');
+        let reviewInited = false;
 
-        async function initLibraryPage() {
-            if (libraryInited) return;
-            libraryInited = true;
-            loadExemplarCounts();
-            loadExemplarList();
-            loadStyleGuide();
-            loadLanguage();
-        }
-
-        function setLibStatus(id, msg, cls) {
-            const el = document.getElementById(id);
-            el.textContent = msg || '';
-            el.className = 'status' + (cls ? ' ' + cls : '');
-        }
-
-        // ---- Exemplars ----
-        async function loadExemplarCounts() {
-            try {
-                const data = await api('/api/library/exemplars/counts');
-                const el = document.getElementById('exemplarCounts');
-                const entries = Object.entries(data.counts).sort((a, b) => b[1].total - a[1].total);
-                if (entries.length === 0) {
-                    el.innerHTML = '<span class="sub" style="color:#808080; font-size:12px">No exemplars yet.</span>';
-                    return;
+        async function initReviewPage() {
+            if (!reviewInited) {
+                reviewInited = true;
+                try {
+                    const [shiftsData, typesData] = await Promise.all([
+                        api('/api/shifts'),
+                        api('/api/study-types')
+                    ]);
+                    rvShift.innerHTML = '<option value="">All shifts</option>' +
+                        (shiftsData.shifts || []).map(s =>
+                            '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'
+                        ).join('');
+                    document.getElementById('rvStudyTypes').innerHTML =
+                        (typesData.study_types || []).map(t =>
+                            '<option value="' + escapeHtml(t.name) + '">'
+                        ).join('');
+                } catch (e) {
+                    console.error('Review init failed:', e);
                 }
-                el.innerHTML =
-                    '<span class="chip"><b>' + data.total + '</b> total</span>' +
-                    entries.slice(0, 25).map(([st, c]) =>
-                        '<span class="chip">' + escapeHtml(st) + ' <b>×' + c.total + '</b>' +
-                        (c.user ? ' (' + c.user + ' yours)' : '') + '</span>'
-                    ).join('') +
-                    (entries.length > 25 ? '<span class="chip">+' + (entries.length - 25) + ' more types</span>' : '');
-            } catch (e) {
-                document.getElementById('exemplarCounts').innerHTML =
-                    '<span style="color:#dc7a7a; font-size:12px">' + escapeHtml(e.message) + '</span>';
             }
+            runReviewSearch();
         }
 
-        async function loadExemplarList() {
-            const q = document.getElementById('exSearch').value.trim();
-            const list = document.getElementById('exList');
+        async function runReviewSearch() {
+            const params = new URLSearchParams();
+            if (rvShift.value) params.set('shift_id', rvShift.value);
+            if (rvGrade.value) params.set('grade', rvGrade.value);
+            if (rvStudyType.value.trim()) params.set('study_type', rvStudyType.value.trim());
+            rvList.innerHTML = '<div class="list-empty"><span class="spinner"></span>Searching…</div>';
+            rvCount.textContent = '';
             try {
-                const data = await api('/api/library/exemplars?limit=50' + (q ? '&query=' + encodeURIComponent(q) : ''));
-                if (!data.exemplars.length) {
-                    list.innerHTML = '<div class="list-empty">No exemplars' + (q ? ' matching "' + escapeHtml(q) + '"' : '') + '.</div>';
+                const data = await api('/api/reports?' + params.toString());
+                const reports = data.reports || [];
+                rvCount.textContent = reports.length + ' report' + (reports.length === 1 ? '' : 's');
+                if (reports.length === 0) {
+                    rvList.innerHTML = '<div class="list-empty">No drafted studies match these filters.</div>';
                     return;
                 }
-                list.innerHTML = '';
-                data.exemplars.forEach(ex => {
-                    const row = document.createElement('div');
-                    row.className = 'lib-row';
-                    row.innerHTML =
-                        '<span class="source-badge ' + (ex.source === 'user' ? 'user' : '') + '">' + escapeHtml(ex.source) + '</span>' +
-                        '<span class="grow"><b>' + escapeHtml(ex.title || '(untitled)') + '</b>' +
-                        ' <span class="sub">' + escapeHtml(ex.study_type || '') + '</span></span>' +
-                        '<button class="lib-mini ex-edit">Edit</button>' +
-                        '<button class="lib-mini ex-del">Delete</button>';
-                    row.querySelector('.ex-edit').addEventListener('click', async () => {
-                        try {
-                            const full = await api('/api/library/exemplars/' + ex.id);
-                            exEditingId = ex.id;
-                            document.getElementById('exBody').value = full.exemplar.body;
-                            document.getElementById('exStudyType').value = full.exemplar.study_type || '';
-                            document.getElementById('exTitle').value = full.exemplar.title || '';
-                            document.getElementById('exNotes').value = full.exemplar.notes || '';
-                            document.getElementById('exSaveBtn').textContent = 'Update Exemplar';
-                            document.getElementById('exCancelBtn').style.display = '';
-                            document.getElementById('exBody').scrollIntoView({ behavior: 'smooth', block: 'center' });
-                        } catch (e) { showToast('Load failed: ' + e.message); }
-                    });
-                    row.querySelector('.ex-del').addEventListener('click', async () => {
-                        if (!confirm('Delete this exemplar?')) return;
-                        try {
-                            await api('/api/library/exemplars/' + ex.id, { method: 'DELETE' });
-                            loadExemplarCounts();
-                            loadExemplarList();
-                        } catch (e) { showToast('Delete failed: ' + e.message); }
-                    });
-                    list.appendChild(row);
+                rvList.innerHTML = '';
+                reports.forEach(r => {
+                    const row = renderReportRow(r, { showDate: true, showNote: true });
+                    row.addEventListener('click', () => openReportFromReview(r));
+                    rvList.appendChild(row);
                 });
             } catch (e) {
-                list.innerHTML = '<div class="list-empty">⚠️ ' + escapeHtml(e.message) + '</div>';
+                rvList.innerHTML = '<div class="list-empty">⚠️ ' + escapeHtml(e.message) + '</div>';
             }
         }
 
-        let exSearchDebounce = null;
-        document.getElementById('exSearch').addEventListener('input', () => {
-            clearTimeout(exSearchDebounce);
-            exSearchDebounce = setTimeout(loadExemplarList, 300);
-        });
-
-        function resetExemplarForm() {
-            exEditingId = null;
-            document.getElementById('exBody').value = '';
-            document.getElementById('exStudyType').value = '';
-            document.getElementById('exTitle').value = '';
-            document.getElementById('exNotes').value = '';
-            document.getElementById('exSaveBtn').textContent = 'Save Exemplar';
-            document.getElementById('exCancelBtn').style.display = 'none';
-        }
-        document.getElementById('exCancelBtn').addEventListener('click', resetExemplarForm);
-
-        document.getElementById('exDetectBtn').addEventListener('click', async () => {
-            const body = document.getElementById('exBody').value.trim();
-            if (!body) { setLibStatus('exStatus', 'Paste a report first.', 'error'); return; }
-            setLibStatus('exStatus', 'Detecting…');
-            try {
-                const data = await api('/api/study-type/detect', { method: 'POST', body: { report: body } });
-                document.getElementById('exStudyType').value = data.study_type;
-                setLibStatus('exStatus', 'Detected: ' + data.study_type, 'ok');
-            } catch (e) {
-                setLibStatus('exStatus', 'Detection failed: ' + e.message, 'error');
+        // Open a search result in the Final page's detail view (diff + grade + note)
+        async function openReportFromReview(r) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.page === 'final'));
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.getElementById('page-final').classList.add('active');
+            await initFinalPage();
+            if (r.shift_id && finalShifts.some(s => s.id === r.shift_id) && shiftSelect.value !== r.shift_id) {
+                shiftSelect.value = r.shift_id;
+                sessionStorage.setItem('finalShiftId', r.shift_id);
+                await loadFinalReports();
             }
-        });
-
-        document.getElementById('exSaveBtn').addEventListener('click', async () => {
-            const body = document.getElementById('exBody').value;
-            if (!body.trim()) { setLibStatus('exStatus', 'Paste a report first.', 'error'); return; }
-            const payload = {
-                study_type: document.getElementById('exStudyType').value,
-                title: document.getElementById('exTitle').value,
-                body,
-                notes: document.getElementById('exNotes').value
-            };
-            setLibStatus('exStatus', 'Saving…');
-            try {
-                if (exEditingId) {
-                    await api('/api/library/exemplars/' + exEditingId, { method: 'PUT', body: payload });
-                } else {
-                    await api('/api/library/exemplars', { method: 'POST', body: payload });
-                }
-                setLibStatus('exStatus', 'Saved ✓', 'ok');
-                resetExemplarForm();
-                loadExemplarCounts();
-                loadExemplarList();
-            } catch (e) {
-                setLibStatus('exStatus', 'Save failed: ' + e.message, 'error');
-            }
-        });
-
-        // ---- Style guide & language (shared grouped-list CRUD) ----
-        function knowledgeSection({ route, listId, statusId, keyInputId, valueInputId, saveBtnId, cancelBtnId,
-                                    keyField, valueField, getEditingId, setEditingId, afterLoad }) {
-            async function load() {
-                const list = document.getElementById(listId);
-                try {
-                    const data = await api('/api/library/' + route);
-                    const grouped = {};
-                    data.entries.forEach(e => { (grouped[e[keyField]] = grouped[e[keyField]] || []).push(e); });
-                    list.innerHTML = '';
-                    for (const [group, entries] of Object.entries(grouped)) {
-                        const title = document.createElement('div');
-                        title.className = 'lib-group-title';
-                        title.textContent = group;
-                        list.appendChild(title);
-                        entries.forEach(entry => {
-                            const row = document.createElement('div');
-                            row.className = 'lib-row';
-                            row.style.marginBottom = '6px';
-                            row.innerHTML =
-                                '<span class="grow" style="white-space:normal">' + escapeHtml(entry[valueField]) + '</span>' +
-                                '<button class="lib-mini k-edit">Edit</button>' +
-                                '<button class="lib-mini k-del">Delete</button>';
-                            row.querySelector('.k-edit').addEventListener('click', () => {
-                                setEditingId(entry.id);
-                                document.getElementById(keyInputId).value = entry[keyField];
-                                document.getElementById(valueInputId).value = entry[valueField];
-                                document.getElementById(saveBtnId).textContent = 'Update';
-                                document.getElementById(cancelBtnId).style.display = '';
-                                document.getElementById(valueInputId).focus();
-                            });
-                            row.querySelector('.k-del').addEventListener('click', async () => {
-                                if (!confirm('Delete this entry?')) return;
-                                try {
-                                    await api('/api/library/' + route + '/' + entry.id, { method: 'DELETE' });
-                                    load();
-                                } catch (e) { showToast('Delete failed: ' + e.message); }
-                            });
-                            list.appendChild(row);
-                        });
-                    }
-                    if (!data.entries.length) list.innerHTML = '<div class="list-empty">No entries yet — run seed.sql or add some above.</div>';
-                    if (afterLoad) afterLoad(data.entries);
-                } catch (e) {
-                    list.innerHTML = '<div class="list-empty">⚠️ ' + escapeHtml(e.message) + '</div>';
-                }
-            }
-
-            function reset() {
-                setEditingId(null);
-                document.getElementById(valueInputId).value = '';
-                document.getElementById(saveBtnId).textContent = 'Add';
-                document.getElementById(cancelBtnId).style.display = 'none';
-            }
-            document.getElementById(cancelBtnId).addEventListener('click', reset);
-
-            document.getElementById(saveBtnId).addEventListener('click', async () => {
-                const key = document.getElementById(keyInputId).value.trim();
-                const value = document.getElementById(valueInputId).value.trim();
-                if (!key || !value) { setLibStatus(statusId, 'Both fields are required.', 'error'); return; }
-                setLibStatus(statusId, 'Saving…');
-                try {
-                    const editingId = getEditingId();
-                    const payload = { [keyField]: key, [valueField]: value };
-                    if (editingId) {
-                        await api('/api/library/' + route + '/' + editingId, { method: 'PUT', body: payload });
-                    } else {
-                        await api('/api/library/' + route, { method: 'POST', body: payload });
-                    }
-                    setLibStatus(statusId, 'Saved ✓', 'ok');
-                    reset();
-                    load();
-                } catch (e) {
-                    setLibStatus(statusId, 'Save failed: ' + e.message, 'error');
-                }
-            });
-
-            return load;
+            const row = reportList.querySelector('[data-id="' + r.id + '"]');
+            selectFinalReport(r.id, row);
         }
 
-        const loadStyleGuide = knowledgeSection({
-            route: 'style-guide', listId: 'sgList', statusId: 'sgStatus',
-            keyInputId: 'sgSection', valueInputId: 'sgRule',
-            saveBtnId: 'sgSaveBtn', cancelBtnId: 'sgCancelBtn',
-            keyField: 'section', valueField: 'rule',
-            getEditingId: () => sgEditingId, setEditingId: v => { sgEditingId = v; },
-            afterLoad: entries => {
-                const sections = [...new Set(entries.map(e => e.section))];
-                document.getElementById('sgSections').innerHTML =
-                    sections.map(s => '<option value="' + escapeHtml(s) + '">').join('');
-            }
+        rvShift.addEventListener('change', runReviewSearch);
+        rvGrade.addEventListener('change', runReviewSearch);
+        let rvDebounce = null;
+        rvStudyType.addEventListener('input', () => {
+            clearTimeout(rvDebounce);
+            rvDebounce = setTimeout(runReviewSearch, 300);
         });
-
-        const loadLanguage = knowledgeSection({
-            route: 'language', listId: 'rlList', statusId: 'rlStatus',
-            keyInputId: 'rlCategory', valueInputId: 'rlContent',
-            saveBtnId: 'rlSaveBtn', cancelBtnId: 'rlCancelBtn',
-            keyField: 'category', valueField: 'content',
-            getEditingId: () => rlEditingId, setEditingId: v => { rlEditingId = v; }
+        document.getElementById('rvClear').addEventListener('click', () => {
+            rvShift.value = '';
+            rvGrade.value = '';
+            rvStudyType.value = '';
+            runReviewSearch();
         });
     </script>
 </body>

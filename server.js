@@ -687,19 +687,18 @@ app.post('/api/reports', async (req, res) => {
 app.get('/api/reports', async (req, res) => {
   if (!requireSupabase(res)) return;
   try {
-    const { shift_id, grade } = req.query;
+    // Filters combine (Review page): any subset of shift, grade, study type.
+    // This only ever searches the user's own drafted reports — PARROT exemplars
+    // live in exemplar_reports and cannot appear here.
+    const { shift_id, grade, study_type } = req.query;
     let query = supabase
       .from('reports')
       .select('id, shift_id, study_type, study_id_label, report_type, created_at, final_saved_at, rpr_grade, rpr_note')
       .order('created_at', { ascending: false });
-    // A grade filter searches ACROSS ALL SHIFTS (review workflow); shift_id is ignored
-    if (grade === 'ungraded') {
-      query = query.is('rpr_grade', null);
-    } else if (VALID_RPR.test(grade || '')) {
-      query = query.eq('rpr_grade', grade);
-    } else if (shift_id) {
-      query = query.eq('shift_id', shift_id);
-    }
+    if (shift_id) query = query.eq('shift_id', shift_id);
+    if (grade === 'ungraded') query = query.is('rpr_grade', null);
+    else if (VALID_RPR.test(grade || '')) query = query.eq('rpr_grade', grade);
+    if (study_type && study_type.trim()) query = query.ilike('study_type', '%' + study_type.trim() + '%');
     const { data, error } = await query;
     if (error) throw error;
     res.json({ reports: data });

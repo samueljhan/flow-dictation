@@ -12,10 +12,11 @@ app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static('public'));
 
-// Claude API configuration
+// Claude API configuration — models are env-configurable
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const SONNET = 'claude-sonnet-4-6';   // report editing / generation
-const HAIKU = 'claude-haiku-4-5';     // lightweight tasks (study type detection)
+const MODEL_DETECT = process.env.MODEL_DETECT || 'claude-haiku-4-5';  // study type detection
+const MODEL_REPORT = process.env.MODEL_REPORT || 'claude-sonnet-4-6'; // report actions + draft review
+const MODEL_RADQA = process.env.MODEL_RADQA || 'claude-fable-5';      // Quick Rad Question
 
 // Supabase (server-side only — service role key, never sent to the browser)
 const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)
@@ -49,6 +50,7 @@ console.log('Anthropic:', !!process.env.ANTHROPIC_API_KEY ? '✓' : '✗');
 console.log('Supabase:', !!supabase ? '✓' : '✗');
 console.log('Google Client ID:', !!process.env.GOOGLE_CLIENT_ID ? '✓' : '✗');
 console.log('Google Client Secret:', !!process.env.GOOGLE_CLIENT_SECRET ? '✓' : '✗');
+console.log(`Models: detect=${MODEL_DETECT} report=${MODEL_REPORT} radqa=${MODEL_RADQA}`);
 console.log('========================');
 
 // ============ Claude helpers ============
@@ -60,6 +62,14 @@ async function claudeText({ model, system, message, messages, maxTokens }) {
     system,
     messages: messages || [{ role: 'user', content: message }]
   });
+  const u = response.usage || {};
+  console.log(`[claude] ${model} in=${u.input_tokens} out=${u.output_tokens} cache_write=${u.cache_creation_input_tokens || 0} cache_read=${u.cache_read_input_tokens || 0}`);
+  // Safety classifiers (e.g. on claude-fable-5) can decline a request with a 200 +
+  // stop_reason "refusal" and empty content — surface that instead of returning ''.
+  if (response.stop_reason === 'refusal') {
+    const why = response.stop_details && response.stop_details.explanation;
+    throw new Error('The model declined this request' + (why ? ': ' + why : '.'));
+  }
   return response.content
     .filter(block => block.type === 'text')
     .map(block => block.text)
@@ -132,32 +142,159 @@ Rules:
 const STUDY_TYPE_SYSTEM = `You identify the study type of a radiology report: modality plus body part, normalized in the style "MRI knee", "CT abdomen pelvis", "US thyroid", "XR chest", "PET/CT whole body", "CT head".
 Return JSON only — no markdown fences, no commentary: {"study_type": "..."}`;
 
-const RPR_GRADE_SYSTEM = `You grade a radiology preliminary (draft) report against the attending's final report, assessing how significant the attending's changes were.
-
-Grades:
-- RPR1: Concordant. No changes, or trivial changes only (formatting, dictation cleanup, punctuation) with no change in meaning.
-- RPR2: Minor discrepancy. Wording/style edits, small additions or clarifications with little or no clinical significance. Findings and impression are substantively unchanged.
-- RPR3: Moderate discrepancy. Findings or impression were changed, added, or removed in a way that could have clinical significance (e.g., a finding upgraded/downgraded, a differential changed, a recommendation altered).
-- RPR4: Major discrepancy. A clinically significant miss or change that alters the diagnosis or patient management (e.g., a missed fracture, missed hemorrhage, wrong laterality on a significant finding).
-
-Judge only the substantive clinical differences — ignore formatting, section reordering, boilerplate, and pure style. When in doubt between two grades, choose based on whether the change could plausibly alter management.
-
-Return JSON only — no markdown fences, no commentary — exactly:
-{"grade": "RPR1", "rationale": "<one or two sentences citing the key difference(s), or noting concordance>"}`;
+const RAD_QA_SYSTEM_PROMPT = `You are an expert academic radiologist answering quick questions from a radiology resident. Style:
+- Answer directly and precisely at resident-to-fellow teaching level; assume medical vocabulary
+- Anatomic precision matters — name specific structures, attachments, and relationships
+- Proactively flag imaging pitfalls, mimics, and pseudolesions relevant to the question
+- For protocol questions, reason about the clinical question first, then the acquisition
+- When asked for report language, give drop-in ready phrasing with bracketed [placeholders]
+- Concise but substantive: typically a few short paragraphs; use a brief list only when enumerating truly parallel items
+- If a question has genuine controversy or institutional variation, say so briefly
+- No generic safety disclaimers or 'consult your attending' filler; this is education between professionals, not patient advice`;
 
 const VALID_RPR = /^RPR[1-4]$/;
 
-async function gradeReport(draftText, finalText) {
-  const text = await claudeText({
-    model: SONNET,
-    system: RPR_GRADE_SYSTEM,
-    message: `PRELIMINARY (resident draft):\n${draftText}\n\nFINAL (attending):\n${finalText}`,
-    maxTokens: 500
-  });
-  const parsed = parseClaudeJson(text);
-  const grade = String(parsed.grade || '').toUpperCase().trim();
-  if (!VALID_RPR.test(grade)) throw new Error('Model returned invalid grade: ' + grade);
-  return { grade, rationale: String(parsed.rationale || '').trim() };
+// ============ Knowledge layer (style guide, language library, exemplars) ============
+
+// The style guide + language library form a static system-prompt block that is
+// prompt-cached (cache_control: ephemeral). Cached in memory so the block stays
+// byte-identical across requests; invalidated when the library is edited.
+let knowledgeCache = { block: null, loadedAt: 0 };
+const KNOWLEDGE_TTL_MS = 5 * 60 * 1000;
+function invalidateKnowledge() { knowledgeCache = { block: null, loadedAt: 0 }; }
+
+// Supabase caps selects at 1000 rows — page through everything.
+async function fetchAllRows(table, columns) {
+  const out = [];
+  const page = 1000;
+  for (let from = 0; ; from += page) {
+    const { data, error } = await supabase
+      .from(table)
+      .select(columns)
+      .order('created_at', { ascending: true })
+      .range(from, from + page - 1);
+    if (error) throw error;
+    out.push(...data);
+    if (data.length < page) break;
+  }
+  return out;
+}
+
+function groupLines(rows, keyField, valueField, fallbackKey) {
+  const grouped = {};
+  for (const r of rows) {
+    const k = (r[keyField] || fallbackKey).trim();
+    (grouped[k] = grouped[k] || []).push(r[valueField]);
+  }
+  let text = '';
+  for (const [k, list] of Object.entries(grouped)) {
+    text += `\n[${k}]\n` + list.map(v => '- ' + v).join('\n') + '\n';
+  }
+  return text;
+}
+
+async function getKnowledgeBlock() {
+  if (!supabase) return '';
+  if (knowledgeCache.block !== null && Date.now() - knowledgeCache.loadedAt < KNOWLEDGE_TTL_MS) {
+    return knowledgeCache.block;
+  }
+  try {
+    const [rules, lang] = await Promise.all([
+      fetchAllRows('style_guide', 'section, rule, created_at'),
+      fetchAllRows('rad_language', 'category, content, created_at')
+    ]);
+    let block = '';
+    if (rules.length) {
+      block += '\n\nSTYLE GUIDE — follow these reporting rules:\n' +
+        groupLines(rules, 'section', 'rule', 'general');
+    }
+    if (lang.length) {
+      block += '\nRADIOLOGY LANGUAGE REFERENCE — preferred register and phrasing:\n' +
+        groupLines(lang, 'category', 'content', 'general');
+    }
+    knowledgeCache = { block, loadedAt: Date.now() };
+    return block;
+  } catch (e) {
+    console.error('Knowledge load failed:', e.message);
+    return '';
+  }
+}
+
+// Up to 3 exemplars for the study type: user rows first, PARROT fills the rest;
+// fall back to modality-level matches, then up to 2 general exemplars.
+// 'user' > 'parrot' alphabetically, so order source DESC puts user rows first.
+const EXEMPLAR_COLS = 'id, study_type, title, body, source';
+
+async function selectExemplars(studyType) {
+  if (!supabase) return [];
+  const chosen = [];
+  const seen = new Set();
+  const add = rows => {
+    for (const r of rows || []) {
+      if (chosen.length >= 3) break;
+      if (seen.has(r.id)) continue;
+      seen.add(r.id);
+      chosen.push(r);
+    }
+  };
+  try {
+    if (studyType && studyType.trim()) {
+      const st = studyType.trim();
+      const { data: userRows } = await supabase.from('exemplar_reports')
+        .select(EXEMPLAR_COLS).ilike('study_type', st).eq('source', 'user').limit(3);
+      add(userRows);
+      if (chosen.length < 3) {
+        const { data: parrotRows } = await supabase.from('exemplar_reports')
+          .select(EXEMPLAR_COLS).ilike('study_type', st).neq('source', 'user').limit(3);
+        add(parrotRows);
+      }
+      if (chosen.length === 0) {
+        const modality = st.split(/\s+/)[0];
+        if (modality) {
+          const { data: modRows } = await supabase.from('exemplar_reports')
+            .select(EXEMPLAR_COLS).ilike('study_type', modality + ' %')
+            .order('source', { ascending: false }).limit(3);
+          add(modRows);
+        }
+      }
+    }
+    if (chosen.length === 0) {
+      const { data: anyRows } = await supabase.from('exemplar_reports')
+        .select(EXEMPLAR_COLS).order('source', { ascending: false }).limit(2);
+      add(anyRows);
+    }
+  } catch (e) {
+    console.error('Exemplar selection failed:', e.message);
+  }
+  return chosen;
+}
+
+function exemplarBlockText(exemplars) {
+  if (!exemplars.length) return '';
+  return '\n\nEXEMPLAR REPORTS — match their structure, register, and phrasing style. Do not copy their content or findings:\n' +
+    exemplars.map((e, i) =>
+      `\n--- Exemplar ${i + 1} (${e.study_type || 'general'}) ---\n${e.body.slice(0, 6000)}`
+    ).join('\n');
+}
+
+// System prompt as content blocks: [static block (cached), exemplar block (varies)]
+async function buildKnowledgeSystem(baseSystem, studyType) {
+  const knowledge = await getKnowledgeBlock();
+  const blocks = [];
+  if (knowledge) {
+    blocks.push({ type: 'text', text: baseSystem + knowledge, cache_control: { type: 'ephemeral' } });
+  } else {
+    blocks.push({ type: 'text', text: baseSystem });
+  }
+  const exText = exemplarBlockText(await selectExemplars(studyType));
+  if (exText) blocks.push({ type: 'text', text: exText });
+  return blocks;
+}
+
+// Heuristic: pasted report content is long; short inputs (finding descriptions,
+// questions) skip the Haiku study-type call.
+function looksLikeReport(text) {
+  return text.trim().length >= 200;
 }
 
 const NUCLEAR_MEDICINE_SYSTEM_PROMPT = `You are an expert nuclear medicine radiologist creating structured PET/CT and nuclear medicine reports.
@@ -246,9 +383,31 @@ app.post('/api/assist', async (req, res) => {
     }
     messages.push({ role: 'user', content: userMessage });
 
+    // Quick Rad Question: dedicated teaching prompt, lean context (no knowledge injection)
+    if (action === 'radqa') {
+      const text = await claudeText({
+        model: MODEL_RADQA,
+        system: RAD_QA_SYSTEM_PROMPT,
+        messages,
+        maxTokens: 4000
+      });
+      return res.json({ type: 'text', text });
+    }
+
+    // The four report actions get the knowledge layer (style guide + language +
+    // matched exemplars). Free-form chat keeps the lean base prompt.
+    let system = ASSIST_SYSTEM;
+    if (instruction) {
+      let studyType = null;
+      if (looksLikeReport(message)) {
+        try { studyType = await detectStudyType(message); } catch (e) { /* non-fatal */ }
+      }
+      system = await buildKnowledgeSystem(ASSIST_SYSTEM, studyType);
+    }
+
     const text = await claudeText({
-      model: SONNET,
-      system: ASSIST_SYSTEM,
+      model: MODEL_REPORT,
+      system,
       messages,
       maxTokens: 4000
     });
@@ -300,14 +459,21 @@ app.post('/api/assist/feedback', async (req, res) => {
 
 app.post('/api/draft/review', async (req, res) => {
   try {
-    const { report } = req.body;
+    const { report, study_type } = req.body;
     if (!report || !report.trim()) {
       return res.status(400).json({ error: 'Report text is required' });
     }
 
+    // Use the selected study type when provided; otherwise detect it
+    let studyType = (study_type || '').trim() || null;
+    if (!studyType) {
+      try { studyType = await detectStudyType(report); } catch (e) { /* non-fatal */ }
+    }
+    const system = await buildKnowledgeSystem(DRAFT_REVIEW_SYSTEM, studyType);
+
     const text = await claudeText({
-      model: SONNET,
-      system: DRAFT_REVIEW_SYSTEM,
+      model: MODEL_REPORT,
+      system,
       message: `Review this radiology report draft:\n\n${report}`,
       maxTokens: 8000
     });
@@ -341,7 +507,7 @@ app.post('/api/draft/review', async (req, res) => {
 
 async function detectStudyType(report) {
   const text = await claudeText({
-    model: HAIKU,
+    model: MODEL_DETECT,
     system: STUDY_TYPE_SYSTEM,
     message: `Identify the study type of this radiology report:\n\n${report.slice(0, 4000)}`,
     maxTokens: 100
@@ -521,12 +687,19 @@ app.post('/api/reports', async (req, res) => {
 app.get('/api/reports', async (req, res) => {
   if (!requireSupabase(res)) return;
   try {
-    const { shift_id } = req.query;
+    const { shift_id, grade } = req.query;
     let query = supabase
       .from('reports')
-      .select('id, shift_id, study_type, study_id_label, report_type, created_at, final_saved_at, rpr_grade')
+      .select('id, shift_id, study_type, study_id_label, report_type, created_at, final_saved_at, rpr_grade, rpr_note')
       .order('created_at', { ascending: false });
-    if (shift_id) query = query.eq('shift_id', shift_id);
+    // A grade filter searches ACROSS ALL SHIFTS (review workflow); shift_id is ignored
+    if (grade === 'ungraded') {
+      query = query.is('rpr_grade', null);
+    } else if (VALID_RPR.test(grade || '')) {
+      query = query.eq('rpr_grade', grade);
+    } else if (shift_id) {
+      query = query.eq('shift_id', shift_id);
+    }
     const { data, error } = await query;
     if (error) throw error;
     res.json({ reports: data });
@@ -566,65 +739,29 @@ app.put('/api/reports/:id/final', async (req, res) => {
       .select()
       .single();
     if (error) throw error;
-
-    // Auto-grade against the draft. Grading failure must not fail the save.
-    let report = data;
-    try {
-      const { grade, rationale } = await gradeReport(data.draft_text, final_text);
-      const { data: graded, error: gradeErr } = await supabase
-        .from('reports')
-        .update({ rpr_grade: grade, rpr_rationale: rationale })
-        .eq('id', req.params.id)
-        .select()
-        .single();
-      if (gradeErr) throw gradeErr;
-      report = graded;
-    } catch (e) {
-      console.error('Auto-grade failed (final still saved):', e.message);
-    }
-
-    res.json({ report });
+    res.json({ report: data });
   } catch (error) {
     console.error('Save final error:', error);
     res.status(500).json({ error: 'Failed to save final', details: error.message });
   }
 });
 
-// Re-run auto-grading, or set a manual override with {manual_grade: "RPR1".."RPR4"}
+// Record the grade the attending/QA actually assigned. Manual documentation only —
+// Flow Dictation never generates or suggests RPR grades.
 app.post('/api/reports/:id/grade', async (req, res) => {
   if (!requireSupabase(res)) return;
   try {
-    const { manual_grade } = req.body || {};
-
-    if (manual_grade !== undefined) {
-      const grade = String(manual_grade).toUpperCase().trim();
-      if (!VALID_RPR.test(grade)) {
-        return res.status(400).json({ error: 'manual_grade must be RPR1–RPR4' });
-      }
-      const { data, error } = await supabase
-        .from('reports')
-        .update({ rpr_grade: grade, rpr_rationale: 'Manually set' })
-        .eq('id', req.params.id)
-        .select()
-        .single();
-      if (error) throw error;
-      return res.json({ report: data });
+    const { manual_grade, grade_note } = req.body || {};
+    const grade = String(manual_grade || '').toUpperCase().trim();
+    if (!VALID_RPR.test(grade)) {
+      return res.status(400).json({ error: 'manual_grade must be RPR1–RPR4' });
     }
-
-    const { data: report, error: getErr } = await supabase
-      .from('reports')
-      .select('draft_text, final_text')
-      .eq('id', req.params.id)
-      .single();
-    if (getErr) throw getErr;
-    if (!report.final_text) {
-      return res.status(400).json({ error: 'Save a final report before grading' });
-    }
-
-    const { grade, rationale } = await gradeReport(report.draft_text, report.final_text);
     const { data, error } = await supabase
       .from('reports')
-      .update({ rpr_grade: grade, rpr_rationale: rationale })
+      .update({
+        rpr_grade: grade,
+        rpr_note: typeof grade_note === 'string' && grade_note.trim() ? grade_note.trim() : null
+      })
       .eq('id', req.params.id)
       .select()
       .single();
@@ -632,9 +769,189 @@ app.post('/api/reports/:id/grade', async (req, res) => {
     res.json({ report: data });
   } catch (error) {
     console.error('Grade error:', error);
-    res.status(500).json({ error: 'Grading failed', details: error.message });
+    res.status(500).json({ error: 'Failed to save grade', details: error.message });
   }
 });
+
+// ============ Library CRUD (exemplars, style guide, language) ============
+
+app.get('/api/library/exemplars/counts', async (req, res) => {
+  if (!requireSupabase(res)) return;
+  try {
+    const rows = await fetchAllRows('exemplar_reports', 'study_type, source, created_at');
+    const counts = {};
+    for (const r of rows) {
+      const k = r.study_type || '(untyped)';
+      counts[k] = counts[k] || { total: 0, user: 0, parrot: 0 };
+      counts[k].total++;
+      if (r.source === 'user') counts[k].user++; else counts[k].parrot++;
+    }
+    res.json({ counts, total: rows.length });
+  } catch (error) {
+    console.error('Exemplar counts error:', error);
+    res.status(500).json({ error: 'Failed to load counts', details: error.message });
+  }
+});
+
+app.get('/api/library/exemplars', async (req, res) => {
+  if (!requireSupabase(res)) return;
+  try {
+    const { query, limit } = req.query;
+    let q = supabase
+      .from('exemplar_reports')
+      .select('id, study_type, title, notes, source, created_at')
+      .order('created_at', { ascending: false })
+      .limit(Math.min(parseInt(limit, 10) || 50, 200));
+    if (query && query.trim()) {
+      const like = '%' + query.trim() + '%';
+      q = q.or(`study_type.ilike.${like},title.ilike.${like}`);
+    }
+    const { data, error } = await q;
+    if (error) throw error;
+    res.json({ exemplars: data });
+  } catch (error) {
+    console.error('Exemplars list error:', error);
+    res.status(500).json({ error: 'Failed to load exemplars', details: error.message });
+  }
+});
+
+app.get('/api/library/exemplars/:id', async (req, res) => {
+  if (!requireSupabase(res)) return;
+  try {
+    const { data, error } = await supabase
+      .from('exemplar_reports').select('*').eq('id', req.params.id).single();
+    if (error) throw error;
+    res.json({ exemplar: data });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to load exemplar', details: error.message });
+  }
+});
+
+app.post('/api/library/exemplars', async (req, res) => {
+  if (!requireSupabase(res)) return;
+  try {
+    const { study_type, title, body, notes } = req.body;
+    if (!body || !body.trim()) return res.status(400).json({ error: 'Report body is required' });
+
+    let finalStudyType = (study_type || '').trim();
+    if (!finalStudyType) {
+      try { finalStudyType = await detectStudyType(body); } catch (e) { finalStudyType = null; }
+    }
+    const { data, error } = await supabase
+      .from('exemplar_reports')
+      .insert({
+        study_type: finalStudyType,
+        title: (title || '').trim() || (finalStudyType ? finalStudyType + ' exemplar' : 'Exemplar'),
+        body,
+        notes: (notes || '').trim() || null,
+        source: 'user'
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ exemplar: data });
+  } catch (error) {
+    console.error('Exemplar create error:', error);
+    res.status(500).json({ error: 'Failed to save exemplar', details: error.message });
+  }
+});
+
+app.put('/api/library/exemplars/:id', async (req, res) => {
+  if (!requireSupabase(res)) return;
+  try {
+    const { study_type, title, body, notes } = req.body;
+    const { data, error } = await supabase
+      .from('exemplar_reports')
+      .update({
+        study_type: (study_type || '').trim() || null,
+        title: (title || '').trim() || null,
+        body,
+        notes: (notes || '').trim() || null
+      })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ exemplar: data });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to update exemplar', details: error.message });
+  }
+});
+
+app.delete('/api/library/exemplars/:id', async (req, res) => {
+  if (!requireSupabase(res)) return;
+  try {
+    const { error } = await supabase.from('exemplar_reports').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to delete exemplar', details: error.message });
+  }
+});
+
+// Generic CRUD for the two simple knowledge tables (both feed the cached prompt block)
+function knowledgeCrud(route, table, fields) {
+  app.get(`/api/library/${route}`, async (req, res) => {
+    if (!requireSupabase(res)) return;
+    try {
+      const rows = await fetchAllRows(table, 'id, ' + fields.join(', ') + ', created_at');
+      res.json({ entries: rows });
+    } catch (error) {
+      res.status(500).json({ error: `Failed to load ${route}`, details: error.message });
+    }
+  });
+
+  app.post(`/api/library/${route}`, async (req, res) => {
+    if (!requireSupabase(res)) return;
+    try {
+      const record = {};
+      for (const f of fields) {
+        const v = (req.body[f] || '').trim();
+        if (!v) return res.status(400).json({ error: `${f} is required` });
+        record[f] = v;
+      }
+      const { data, error } = await supabase.from(table).insert(record).select().single();
+      if (error) throw error;
+      invalidateKnowledge();
+      res.json({ entry: data });
+    } catch (error) {
+      res.status(500).json({ error: `Failed to save`, details: error.message });
+    }
+  });
+
+  app.put(`/api/library/${route}/:id`, async (req, res) => {
+    if (!requireSupabase(res)) return;
+    try {
+      const record = {};
+      for (const f of fields) {
+        const v = (req.body[f] || '').trim();
+        if (!v) return res.status(400).json({ error: `${f} is required` });
+        record[f] = v;
+      }
+      const { data, error } = await supabase.from(table).update(record).eq('id', req.params.id).select().single();
+      if (error) throw error;
+      invalidateKnowledge();
+      res.json({ entry: data });
+    } catch (error) {
+      res.status(500).json({ error: `Failed to update`, details: error.message });
+    }
+  });
+
+  app.delete(`/api/library/${route}/:id`, async (req, res) => {
+    if (!requireSupabase(res)) return;
+    try {
+      const { error } = await supabase.from(table).delete().eq('id', req.params.id);
+      if (error) throw error;
+      invalidateKnowledge();
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: `Failed to delete`, details: error.message });
+    }
+  });
+}
+
+knowledgeCrud('style-guide', 'style_guide', ['section', 'rule']);
+knowledgeCrud('language', 'rad_language', ['category', 'content']);
 
 // ============ Gmail OAuth Routes ============
 
@@ -724,7 +1041,7 @@ app.post('/api/generate-report', async (req, res) => {
     }
     const userMessage = `Generate a nuclear medicine PET/CT report based on these dictated findings. Only include the sections and findings that were mentioned. Use standard negative phrasing for unremarkable areas:\n\n${findings}`;
     const text = await claudeText({
-      model: SONNET,
+      model: MODEL_REPORT,
       system: NUCLEAR_MEDICINE_SYSTEM_PROMPT,
       message: userMessage,
       maxTokens: 2000
@@ -740,13 +1057,13 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     service: 'Flow Dictation API',
-    llm: `${SONNET} + ${HAIKU}`,
+    llm: `${MODEL_REPORT} + ${MODEL_DETECT}`,
     supabase: supabase ? 'configured' : 'not configured'
   });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🏥 Flow Dictation running on port ${PORT}`);
-  console.log(`✨ Claude: ${SONNET} (reports) + ${HAIKU} (lightweight)`);
+  console.log(`✨ Claude: ${MODEL_REPORT} (reports) + ${MODEL_DETECT} (lightweight)`);
   console.log(`🗄️  Supabase: ${supabase ? 'connected' : 'NOT CONFIGURED'}`);
 });

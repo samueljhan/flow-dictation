@@ -140,7 +140,7 @@
         /* In-chat "next task" grid */
         .nav-prompts {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
             gap: 8px;
             margin-top: 8px;
         }
@@ -359,6 +359,15 @@
         .rr-type { font-size: 11px; color: #909090; text-transform: uppercase; font-weight: 700; }
         .list-empty { color: #808080; font-size: 13px; font-style: italic; padding: 12px; }
 
+        .gf-bar { display: flex; border: 1px solid #404040; border-radius: 8px; overflow: hidden; }
+        .gf-btn {
+            background: transparent; border: none; color: #909090;
+            padding: 7px 12px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s;
+        }
+        .gf-btn:hover { color: #d0d0d0; }
+        .gf-btn.active { background: #e0e0e0; color: #1a1a1a; }
+        .report-row { flex-wrap: wrap; }
+        .rr-note { width: 100%; font-size: 12px; color: #909090; font-style: italic; padding-top: 2px; }
         .rpr-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 8px; letter-spacing: 0.3px; background: #404040; color: #b0b0b0; }
         .rpr-badge.rpr1 { background: rgba(40, 167, 69, 0.18); color: #28a745; }
         .rpr-badge.rpr2 { background: #404040; color: #d0d0d0; }
@@ -388,6 +397,25 @@
         }
         .diff-add { color: #e0a832; font-weight: 700; }
         .diff-del { color: #777; text-decoration: line-through; opacity: 0.6; }
+
+        /* ---------- Library page ---------- */
+        .chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+        .chip { background: #404040; color: #b0b0b0; font-size: 11px; padding: 2px 8px; border-radius: 8px; }
+        .chip b { color: #e0e0e0; }
+        .lib-form-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        .lib-list { display: flex; flex-direction: column; gap: 6px; }
+        .lib-row {
+            display: flex; align-items: center; gap: 10px;
+            background: #2a2a2a; border: 1px solid #404040; border-radius: 8px;
+            padding: 8px 12px; font-size: 13px; color: #d0d0d0;
+        }
+        .lib-row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+        .lib-row .sub { color: #808080; font-size: 12px; }
+        .lib-mini { background: none; border: none; color: #808080; cursor: pointer; font-size: 12px; text-decoration: underline; flex-shrink: 0; }
+        .lib-mini:hover { color: #d0d0d0; }
+        .lib-group-title { font-size: 12px; font-weight: 700; color: #909090; text-transform: uppercase; letter-spacing: 0.6px; margin: 8px 0 4px; }
+        .source-badge { font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 6px; background: #404040; color: #909090; text-transform: uppercase; flex-shrink: 0; }
+        .source-badge.user { color: #28a745; }
 
         /* ---------- Modals & toast ---------- */
         .modal-overlay {
@@ -448,6 +476,7 @@
             <button class="tab active" data-page="assist">Assist</button>
             <button class="tab" data-page="draft">Draft</button>
             <button class="tab" data-page="final">Final</button>
+            <button class="tab" data-page="library">Library</button>
         </div>
 
         <!-- ================= PAGE 1: ASSIST ================= -->
@@ -472,6 +501,10 @@
                         <div class="example-prompt" data-action="impression">
                             <strong>Generate Impression</strong>
                             <span>Numbered impression from a report body</span>
+                        </div>
+                        <div class="example-prompt" data-action="radqa">
+                            <strong>Quick Rad Question</strong>
+                            <span>Anatomy, protocols, differentials, pitfalls</span>
                         </div>
                     </div>
                 </div>
@@ -538,6 +571,15 @@
                 <div class="final-toolbar">
                     <label>Shift</label>
                     <select id="shiftSelect"></select>
+                    <span style="flex:1"></span>
+                    <label title="Grade filters search across ALL shifts">Review</label>
+                    <div class="gf-bar">
+                        <button class="gf-btn active" data-gf="all">All</button>
+                        <button class="gf-btn" data-gf="RPR2">RPR2</button>
+                        <button class="gf-btn" data-gf="RPR3">RPR3</button>
+                        <button class="gf-btn" data-gf="RPR4">RPR4</button>
+                        <button class="gf-btn" data-gf="ungraded">Ungraded</button>
+                    </div>
                 </div>
                 <div id="reportList" class="report-list"></div>
                 <div id="finalDetail" style="display:none">
@@ -556,23 +598,86 @@
                         </div>
                     </div>
                     <div class="panel" id="gradePanel" style="display:none">
-                        <div class="panel-title">RPR Grade — attending comparison</div>
+                        <div class="panel-title">RPR Grade — as assigned by attending/QA</div>
                         <div class="grade-row">
                             <span id="gradeBadge" class="rpr-badge"></span>
-                            <span id="gradeRationale" class="grade-rationale"></span>
+                            <span id="gradeNoteView" class="grade-rationale"></span>
                         </div>
                         <div class="grade-actions">
-                            <span style="font-size:12px; color:#808080">Override:</span>
-                            <button class="ghost grade-btn" data-g="RPR1" title="Concordant — no meaningful changes">RPR1</button>
-                            <button class="ghost grade-btn" data-g="RPR2" title="Minor discrepancy — little or no clinical significance">RPR2</button>
+                            <button class="ghost grade-btn" data-g="RPR1" title="Concordant">RPR1</button>
+                            <button class="ghost grade-btn" data-g="RPR2" title="Minor discrepancy — unlikely clinical significance">RPR2</button>
                             <button class="ghost grade-btn" data-g="RPR3" title="Moderate discrepancy — possible clinical significance">RPR3</button>
-                            <button class="ghost grade-btn" data-g="RPR4" title="Major discrepancy — clinically significant">RPR4</button>
-                            <button class="ghost" id="regradeBtn" title="Re-run automatic grading">↻ Re-grade</button>
+                            <button class="ghost grade-btn" data-g="RPR4" title="Major discrepancy — likely clinical significance">RPR4</button>
+                        </div>
+                        <input id="gradeNote" placeholder="What I missed / lesson (optional)">
+                        <div class="grade-actions">
+                            <button class="primary" id="saveGradeBtn">Save Grade</button>
                             <span class="status" id="gradeStatus"></span>
                         </div>
                     </div>
                     <div class="col-title">Corrections (<span class="diff-add" style="font-size:11px">added/changed</span> · <span class="diff-del" style="font-size:11px">removed</span>)</div>
                     <div id="finalDiffView" class="diff-view"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ================= PAGE 4: LIBRARY ================= -->
+        <section id="page-library" class="page">
+            <div class="final-scroll">
+                <div class="panel" style="margin-bottom:16px">
+                    <div class="panel-title">Exemplar Reports</div>
+                    <div id="exemplarCounts" class="chip-row"></div>
+                    <label>Report body</label>
+                    <textarea id="exBody" rows="8" placeholder="Paste a gold-standard report…" style="background:#242424"></textarea>
+                    <div class="lib-form-row">
+                        <input id="exStudyType" placeholder="Study type (blank = auto-detect on save)" style="flex:1; min-width:200px">
+                        <button class="ghost" id="exDetectBtn">Auto-detect</button>
+                    </div>
+                    <div class="lib-form-row">
+                        <input id="exTitle" placeholder="Title (optional)" style="flex:1; min-width:160px">
+                        <input id="exNotes" placeholder="Notes (optional)" style="flex:1; min-width:160px">
+                    </div>
+                    <div class="lib-form-row">
+                        <button class="primary" id="exSaveBtn">Save Exemplar</button>
+                        <button class="ghost" id="exCancelBtn" style="display:none">Cancel edit</button>
+                        <span class="status" id="exStatus"></span>
+                    </div>
+                    <input id="exSearch" placeholder="Search exemplars by study type or title…">
+                    <div id="exList" class="lib-list"></div>
+                </div>
+
+                <div class="panel" style="margin-bottom:16px">
+                    <div class="panel-title">Style Guide</div>
+                    <div class="lib-form-row">
+                        <input id="sgSection" list="sgSections" placeholder="Section" style="width:180px">
+                        <datalist id="sgSections"></datalist>
+                        <input id="sgRule" placeholder="Rule…" style="flex:1; min-width:220px">
+                        <button class="primary" id="sgSaveBtn">Add</button>
+                        <button class="ghost" id="sgCancelBtn" style="display:none">Cancel</button>
+                    </div>
+                    <span class="status" id="sgStatus"></span>
+                    <div id="sgList"></div>
+                </div>
+
+                <div class="panel">
+                    <div class="panel-title">Radiology Language</div>
+                    <div class="lib-form-row">
+                        <select id="rlCategory">
+                            <option value="findings_phrasing">findings_phrasing</option>
+                            <option value="impression_phrasing">impression_phrasing</option>
+                            <option value="hedging">hedging</option>
+                            <option value="negatives">negatives</option>
+                            <option value="measurements">measurements</option>
+                            <option value="comparison">comparison</option>
+                            <option value="modality_conventions">modality_conventions</option>
+                            <option value="words_to_avoid">words_to_avoid</option>
+                        </select>
+                        <input id="rlContent" placeholder="Entry…" style="flex:1; min-width:220px">
+                        <button class="primary" id="rlSaveBtn">Add</button>
+                        <button class="ghost" id="rlCancelBtn" style="display:none">Cancel</button>
+                    </div>
+                    <span class="status" id="rlStatus"></span>
+                    <div id="rlList"></div>
                 </div>
             </div>
         </section>
@@ -707,6 +812,7 @@
                 document.getElementById('page-' + tab.dataset.page).classList.add('active');
                 if (tab.dataset.page === 'draft') initDraftPage();
                 if (tab.dataset.page === 'final') initFinalPage();
+                if (tab.dataset.page === 'library') initLibraryPage();
             });
         });
 
@@ -724,9 +830,10 @@
             describe: 'Describe the finding you’re struggling to word — I’ll suggest Findings wording and matching Impression wording.',
             reword: 'Paste the sentence, section, or entire report you’d like reworded.',
             proofread: 'Paste the text to proofread — corrections will be shown in bold (copies as plain text).',
-            impression: 'Paste the report body — I’ll generate a numbered Impression.'
+            impression: 'Paste the report body — I’ll generate a numbered Impression.',
+            radqa: 'Ask a quick radiology question — anatomy, protocol selection, differentials, imaging pitfalls, or report language. Follow-ups work.'
         };
-        const ACTION_LABELS = { describe: 'Describe a Finding', reword: 'Reword', proofread: 'Proofread', impression: 'Generate Impression' };
+        const ACTION_LABELS = { describe: 'Describe a Finding', reword: 'Reword', proofread: 'Proofread', impression: 'Generate Impression', radqa: 'Quick Rad Question' };
 
         function armAction(action) {
             pendingAction = action;
@@ -916,6 +1023,13 @@
                     plainText = data.text;
                     addAssistantResponse({
                         html: proofreadHtml(message, data.text),
+                        plainText, actionType, userText: message
+                    });
+                } else if (actionType === 'radqa') {
+                    // Teaching answers may use **bold** — render it; copy stays plain
+                    plainText = data.text.replace(/\*\*(.+?)\*\*/g, '$1');
+                    addAssistantResponse({
+                        html: escapeHtml(data.text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>'),
                         plainText, actionType, userText: message
                     });
                 } else {
@@ -1138,7 +1252,10 @@
             setDraftStatus('Reviewing with Claude…');
             try {
                 reviewedRaw = draftText.value;
-                const data = await api('/api/draft/review', { method: 'POST', body: { report: reviewedRaw } });
+                const data = await api('/api/draft/review', { method: 'POST', body: {
+                    report: reviewedRaw,
+                    study_type: studyTypeInput.value.trim()
+                } });
                 currentEdits = locateEdits(reviewedRaw, data.edits || []);
                 setDraftStatus('');
                 if (currentEdits.length === 0) {
@@ -1369,15 +1486,35 @@
             loadFinalReports();
         });
 
+        let gradeFilter = 'all';
+
+        document.querySelectorAll('.gf-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                gradeFilter = btn.dataset.gf;
+                document.querySelectorAll('.gf-btn').forEach(b => b.classList.toggle('active', b === btn));
+                // Grade filters search across ALL shifts; the shift selector only applies to "All"
+                shiftSelect.disabled = gradeFilter !== 'all';
+                finalDetail.style.display = 'none';
+                finalReport = null;
+                loadFinalReports();
+            });
+        });
+
         async function loadFinalReports() {
+            const crossShift = gradeFilter !== 'all';
             const shiftId = shiftSelect.value;
-            if (!shiftId) return;
+            if (!crossShift && !shiftId) return;
             reportList.innerHTML = '<div class="list-empty"><span class="spinner"></span>Loading…</div>';
             try {
-                const data = await api('/api/reports?shift_id=' + encodeURIComponent(shiftId));
+                const url = crossShift
+                    ? '/api/reports?grade=' + encodeURIComponent(gradeFilter)
+                    : '/api/reports?shift_id=' + encodeURIComponent(shiftId);
+                const data = await api(url);
                 const reports = data.reports || [];
                 if (reports.length === 0) {
-                    reportList.innerHTML = '<div class="list-empty">No reports in this shift.</div>';
+                    reportList.innerHTML = '<div class="list-empty">' +
+                        (crossShift ? 'No ' + escapeHtml(gradeFilter === 'ungraded' ? 'ungraded' : gradeFilter) + ' reports in any shift.' : 'No reports in this shift.') +
+                        '</div>';
                     return;
                 }
                 reportList.innerHTML = '';
@@ -1385,15 +1522,20 @@
                     const row = document.createElement('div');
                     row.className = 'report-row';
                     row.dataset.id = r.id;
-                    const time = new Date(r.created_at);
+                    const t = new Date(r.created_at);
+                    const when = crossShift
+                        ? fmtDate(t) + ' ' + pad2(t.getHours()) + ':' + pad2(t.getMinutes())
+                        : pad2(t.getHours()) + ':' + pad2(t.getMinutes());
+                    const noteLine = (r.rpr_note || '').split('\n')[0].slice(0, 120);
                     row.innerHTML =
                         '<span class="rr-id">' + escapeHtml(r.id) + '</span>' +
                         '<span class="rr-study">' + escapeHtml(r.study_type || '—') + '</span>' +
                         (r.study_id_label ? '<span class="rr-label">' + escapeHtml(r.study_id_label) + '</span>' : '') +
                         '<span class="rr-type">' + escapeHtml(r.report_type) + '</span>' +
-                        '<span class="rr-time">' + pad2(time.getHours()) + ':' + pad2(time.getMinutes()) + '</span>' +
+                        '<span class="rr-time">' + when + '</span>' +
                         (r.rpr_grade ? '<span class="rpr-badge ' + r.rpr_grade.toLowerCase() + '">' + escapeHtml(r.rpr_grade) + '</span>' : '') +
-                        '<span class="rr-final ' + (r.final_saved_at ? 'yes' : 'no') + '">' + (r.final_saved_at ? '✓ Final' : 'No final') + '</span>';
+                        '<span class="rr-final ' + (r.final_saved_at ? 'yes' : 'no') + '">' + (r.final_saved_at ? '✓ Final' : 'No final') + '</span>' +
+                        (crossShift && noteLine ? '<span class="rr-note">' + escapeHtml(noteLine) + '</span>' : '');
                     row.addEventListener('click', () => selectFinalReport(r.id, row));
                     reportList.appendChild(row);
                 });
@@ -1435,54 +1577,70 @@
             }).join('');
         }
 
-        // ---- RPR grading ----
+        // ---- RPR grading: manual documentation of the grade the attending/QA
+        // actually assigned. Nothing here is AI-generated or automatic. ----
         const gradePanel = document.getElementById('gradePanel');
         const gradeStatus = document.getElementById('gradeStatus');
+        const gradeNoteInput = document.getElementById('gradeNote');
+        let selectedGrade = null;
 
         function renderGrade() {
-            if (!finalReport || !finalReport.final_saved_at) {
+            if (!finalReport) {
                 gradePanel.style.display = 'none';
                 return;
             }
             gradePanel.style.display = '';
             const badge = document.getElementById('gradeBadge');
-            const rationale = document.getElementById('gradeRationale');
+            const noteView = document.getElementById('gradeNoteView');
             if (finalReport.rpr_grade) {
                 badge.textContent = finalReport.rpr_grade;
                 badge.className = 'rpr-badge ' + finalReport.rpr_grade.toLowerCase();
-                rationale.textContent = finalReport.rpr_rationale || '';
+                noteView.textContent = finalReport.rpr_note || '';
             } else {
-                badge.textContent = 'Ungraded';
+                badge.textContent = 'Not graded';
                 badge.className = 'rpr-badge';
-                rationale.textContent = 'Automatic grading didn’t complete — use Re-grade or set manually.';
+                noteView.textContent = '';
             }
+            selectedGrade = finalReport.rpr_grade || null;
+            gradeNoteInput.value = finalReport.rpr_note || '';
             document.querySelectorAll('.grade-btn').forEach(b =>
-                b.classList.toggle('on', b.dataset.g === finalReport.rpr_grade));
+                b.classList.toggle('on', b.dataset.g === selectedGrade));
             gradeStatus.textContent = '';
             gradeStatus.className = 'status';
         }
 
-        async function postGrade(body, busyLabel) {
+        document.querySelectorAll('.grade-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                selectedGrade = btn.dataset.g;
+                document.querySelectorAll('.grade-btn').forEach(b =>
+                    b.classList.toggle('on', b.dataset.g === selectedGrade));
+            });
+        });
+
+        document.getElementById('saveGradeBtn').addEventListener('click', async () => {
             if (!finalReport) return;
-            gradeStatus.textContent = busyLabel;
+            if (!selectedGrade) {
+                gradeStatus.textContent = 'Pick a grade first.';
+                gradeStatus.className = 'status error';
+                return;
+            }
+            gradeStatus.textContent = 'Saving…';
             gradeStatus.className = 'status';
             try {
                 const data = await api('/api/reports/' + encodeURIComponent(finalReport.id) + '/grade', {
-                    method: 'POST', body: body || {}
+                    method: 'POST',
+                    body: { manual_grade: selectedGrade, grade_note: gradeNoteInput.value }
                 });
                 finalReport = data.report;
                 renderGrade();
+                gradeStatus.textContent = 'Grade saved ✓';
+                gradeStatus.className = 'status ok';
                 loadFinalReports();
             } catch (e) {
                 gradeStatus.textContent = e.message;
                 gradeStatus.className = 'status error';
             }
-        }
-
-        document.querySelectorAll('.grade-btn').forEach(btn => {
-            btn.addEventListener('click', () => postGrade({ manual_grade: btn.dataset.g }, 'Saving…'));
         });
-        document.getElementById('regradeBtn').addEventListener('click', () => postGrade(null, 'Grading…'));
 
         let diffDebounce = null;
         finalTextEl.addEventListener('input', () => {
@@ -1500,14 +1658,14 @@
             if (!text) { finalStatusEl.textContent = 'Paste the final report first.'; finalStatusEl.className = 'status error'; return; }
             const btn = document.getElementById('saveFinalBtn');
             btn.disabled = true;
-            finalStatusEl.textContent = 'Saving & grading…';
+            finalStatusEl.textContent = 'Saving…';
             finalStatusEl.className = 'status';
             try {
                 const data = await api('/api/reports/' + encodeURIComponent(finalReport.id) + '/final', {
                     method: 'PUT', body: { final_text: finalTextEl.value }
                 });
                 finalReport = data.report;
-                finalStatusEl.textContent = 'Final saved ✓' + (finalReport.rpr_grade ? ' — graded ' + finalReport.rpr_grade : '');
+                finalStatusEl.textContent = 'Final saved ✓';
                 finalStatusEl.className = 'status ok';
                 renderGrade();
                 renderFinalDiff();
@@ -1518,6 +1676,254 @@
             } finally {
                 btn.disabled = false;
             }
+        });
+
+        // ==================== LIBRARY PAGE ====================
+
+        let libraryInited = false;
+        let exEditingId = null;
+        let sgEditingId = null;
+        let rlEditingId = null;
+
+        async function initLibraryPage() {
+            if (libraryInited) return;
+            libraryInited = true;
+            loadExemplarCounts();
+            loadExemplarList();
+            loadStyleGuide();
+            loadLanguage();
+        }
+
+        function setLibStatus(id, msg, cls) {
+            const el = document.getElementById(id);
+            el.textContent = msg || '';
+            el.className = 'status' + (cls ? ' ' + cls : '');
+        }
+
+        // ---- Exemplars ----
+        async function loadExemplarCounts() {
+            try {
+                const data = await api('/api/library/exemplars/counts');
+                const el = document.getElementById('exemplarCounts');
+                const entries = Object.entries(data.counts).sort((a, b) => b[1].total - a[1].total);
+                if (entries.length === 0) {
+                    el.innerHTML = '<span class="sub" style="color:#808080; font-size:12px">No exemplars yet.</span>';
+                    return;
+                }
+                el.innerHTML =
+                    '<span class="chip"><b>' + data.total + '</b> total</span>' +
+                    entries.slice(0, 25).map(([st, c]) =>
+                        '<span class="chip">' + escapeHtml(st) + ' <b>×' + c.total + '</b>' +
+                        (c.user ? ' (' + c.user + ' yours)' : '') + '</span>'
+                    ).join('') +
+                    (entries.length > 25 ? '<span class="chip">+' + (entries.length - 25) + ' more types</span>' : '');
+            } catch (e) {
+                document.getElementById('exemplarCounts').innerHTML =
+                    '<span style="color:#dc7a7a; font-size:12px">' + escapeHtml(e.message) + '</span>';
+            }
+        }
+
+        async function loadExemplarList() {
+            const q = document.getElementById('exSearch').value.trim();
+            const list = document.getElementById('exList');
+            try {
+                const data = await api('/api/library/exemplars?limit=50' + (q ? '&query=' + encodeURIComponent(q) : ''));
+                if (!data.exemplars.length) {
+                    list.innerHTML = '<div class="list-empty">No exemplars' + (q ? ' matching "' + escapeHtml(q) + '"' : '') + '.</div>';
+                    return;
+                }
+                list.innerHTML = '';
+                data.exemplars.forEach(ex => {
+                    const row = document.createElement('div');
+                    row.className = 'lib-row';
+                    row.innerHTML =
+                        '<span class="source-badge ' + (ex.source === 'user' ? 'user' : '') + '">' + escapeHtml(ex.source) + '</span>' +
+                        '<span class="grow"><b>' + escapeHtml(ex.title || '(untitled)') + '</b>' +
+                        ' <span class="sub">' + escapeHtml(ex.study_type || '') + '</span></span>' +
+                        '<button class="lib-mini ex-edit">Edit</button>' +
+                        '<button class="lib-mini ex-del">Delete</button>';
+                    row.querySelector('.ex-edit').addEventListener('click', async () => {
+                        try {
+                            const full = await api('/api/library/exemplars/' + ex.id);
+                            exEditingId = ex.id;
+                            document.getElementById('exBody').value = full.exemplar.body;
+                            document.getElementById('exStudyType').value = full.exemplar.study_type || '';
+                            document.getElementById('exTitle').value = full.exemplar.title || '';
+                            document.getElementById('exNotes').value = full.exemplar.notes || '';
+                            document.getElementById('exSaveBtn').textContent = 'Update Exemplar';
+                            document.getElementById('exCancelBtn').style.display = '';
+                            document.getElementById('exBody').scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        } catch (e) { showToast('Load failed: ' + e.message); }
+                    });
+                    row.querySelector('.ex-del').addEventListener('click', async () => {
+                        if (!confirm('Delete this exemplar?')) return;
+                        try {
+                            await api('/api/library/exemplars/' + ex.id, { method: 'DELETE' });
+                            loadExemplarCounts();
+                            loadExemplarList();
+                        } catch (e) { showToast('Delete failed: ' + e.message); }
+                    });
+                    list.appendChild(row);
+                });
+            } catch (e) {
+                list.innerHTML = '<div class="list-empty">⚠️ ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        let exSearchDebounce = null;
+        document.getElementById('exSearch').addEventListener('input', () => {
+            clearTimeout(exSearchDebounce);
+            exSearchDebounce = setTimeout(loadExemplarList, 300);
+        });
+
+        function resetExemplarForm() {
+            exEditingId = null;
+            document.getElementById('exBody').value = '';
+            document.getElementById('exStudyType').value = '';
+            document.getElementById('exTitle').value = '';
+            document.getElementById('exNotes').value = '';
+            document.getElementById('exSaveBtn').textContent = 'Save Exemplar';
+            document.getElementById('exCancelBtn').style.display = 'none';
+        }
+        document.getElementById('exCancelBtn').addEventListener('click', resetExemplarForm);
+
+        document.getElementById('exDetectBtn').addEventListener('click', async () => {
+            const body = document.getElementById('exBody').value.trim();
+            if (!body) { setLibStatus('exStatus', 'Paste a report first.', 'error'); return; }
+            setLibStatus('exStatus', 'Detecting…');
+            try {
+                const data = await api('/api/study-type/detect', { method: 'POST', body: { report: body } });
+                document.getElementById('exStudyType').value = data.study_type;
+                setLibStatus('exStatus', 'Detected: ' + data.study_type, 'ok');
+            } catch (e) {
+                setLibStatus('exStatus', 'Detection failed: ' + e.message, 'error');
+            }
+        });
+
+        document.getElementById('exSaveBtn').addEventListener('click', async () => {
+            const body = document.getElementById('exBody').value;
+            if (!body.trim()) { setLibStatus('exStatus', 'Paste a report first.', 'error'); return; }
+            const payload = {
+                study_type: document.getElementById('exStudyType').value,
+                title: document.getElementById('exTitle').value,
+                body,
+                notes: document.getElementById('exNotes').value
+            };
+            setLibStatus('exStatus', 'Saving…');
+            try {
+                if (exEditingId) {
+                    await api('/api/library/exemplars/' + exEditingId, { method: 'PUT', body: payload });
+                } else {
+                    await api('/api/library/exemplars', { method: 'POST', body: payload });
+                }
+                setLibStatus('exStatus', 'Saved ✓', 'ok');
+                resetExemplarForm();
+                loadExemplarCounts();
+                loadExemplarList();
+            } catch (e) {
+                setLibStatus('exStatus', 'Save failed: ' + e.message, 'error');
+            }
+        });
+
+        // ---- Style guide & language (shared grouped-list CRUD) ----
+        function knowledgeSection({ route, listId, statusId, keyInputId, valueInputId, saveBtnId, cancelBtnId,
+                                    keyField, valueField, getEditingId, setEditingId, afterLoad }) {
+            async function load() {
+                const list = document.getElementById(listId);
+                try {
+                    const data = await api('/api/library/' + route);
+                    const grouped = {};
+                    data.entries.forEach(e => { (grouped[e[keyField]] = grouped[e[keyField]] || []).push(e); });
+                    list.innerHTML = '';
+                    for (const [group, entries] of Object.entries(grouped)) {
+                        const title = document.createElement('div');
+                        title.className = 'lib-group-title';
+                        title.textContent = group;
+                        list.appendChild(title);
+                        entries.forEach(entry => {
+                            const row = document.createElement('div');
+                            row.className = 'lib-row';
+                            row.style.marginBottom = '6px';
+                            row.innerHTML =
+                                '<span class="grow" style="white-space:normal">' + escapeHtml(entry[valueField]) + '</span>' +
+                                '<button class="lib-mini k-edit">Edit</button>' +
+                                '<button class="lib-mini k-del">Delete</button>';
+                            row.querySelector('.k-edit').addEventListener('click', () => {
+                                setEditingId(entry.id);
+                                document.getElementById(keyInputId).value = entry[keyField];
+                                document.getElementById(valueInputId).value = entry[valueField];
+                                document.getElementById(saveBtnId).textContent = 'Update';
+                                document.getElementById(cancelBtnId).style.display = '';
+                                document.getElementById(valueInputId).focus();
+                            });
+                            row.querySelector('.k-del').addEventListener('click', async () => {
+                                if (!confirm('Delete this entry?')) return;
+                                try {
+                                    await api('/api/library/' + route + '/' + entry.id, { method: 'DELETE' });
+                                    load();
+                                } catch (e) { showToast('Delete failed: ' + e.message); }
+                            });
+                            list.appendChild(row);
+                        });
+                    }
+                    if (!data.entries.length) list.innerHTML = '<div class="list-empty">No entries yet — run seed.sql or add some above.</div>';
+                    if (afterLoad) afterLoad(data.entries);
+                } catch (e) {
+                    list.innerHTML = '<div class="list-empty">⚠️ ' + escapeHtml(e.message) + '</div>';
+                }
+            }
+
+            function reset() {
+                setEditingId(null);
+                document.getElementById(valueInputId).value = '';
+                document.getElementById(saveBtnId).textContent = 'Add';
+                document.getElementById(cancelBtnId).style.display = 'none';
+            }
+            document.getElementById(cancelBtnId).addEventListener('click', reset);
+
+            document.getElementById(saveBtnId).addEventListener('click', async () => {
+                const key = document.getElementById(keyInputId).value.trim();
+                const value = document.getElementById(valueInputId).value.trim();
+                if (!key || !value) { setLibStatus(statusId, 'Both fields are required.', 'error'); return; }
+                setLibStatus(statusId, 'Saving…');
+                try {
+                    const editingId = getEditingId();
+                    const payload = { [keyField]: key, [valueField]: value };
+                    if (editingId) {
+                        await api('/api/library/' + route + '/' + editingId, { method: 'PUT', body: payload });
+                    } else {
+                        await api('/api/library/' + route, { method: 'POST', body: payload });
+                    }
+                    setLibStatus(statusId, 'Saved ✓', 'ok');
+                    reset();
+                    load();
+                } catch (e) {
+                    setLibStatus(statusId, 'Save failed: ' + e.message, 'error');
+                }
+            });
+
+            return load;
+        }
+
+        const loadStyleGuide = knowledgeSection({
+            route: 'style-guide', listId: 'sgList', statusId: 'sgStatus',
+            keyInputId: 'sgSection', valueInputId: 'sgRule',
+            saveBtnId: 'sgSaveBtn', cancelBtnId: 'sgCancelBtn',
+            keyField: 'section', valueField: 'rule',
+            getEditingId: () => sgEditingId, setEditingId: v => { sgEditingId = v; },
+            afterLoad: entries => {
+                const sections = [...new Set(entries.map(e => e.section))];
+                document.getElementById('sgSections').innerHTML =
+                    sections.map(s => '<option value="' + escapeHtml(s) + '">').join('');
+            }
+        });
+
+        const loadLanguage = knowledgeSection({
+            route: 'language', listId: 'rlList', statusId: 'rlStatus',
+            keyInputId: 'rlCategory', valueInputId: 'rlContent',
+            saveBtnId: 'rlSaveBtn', cancelBtnId: 'rlCancelBtn',
+            keyField: 'category', valueField: 'content',
+            getEditingId: () => rlEditingId, setEditingId: v => { rlEditingId = v; }
         });
     </script>
 </body>

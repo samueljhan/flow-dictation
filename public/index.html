@@ -43,7 +43,7 @@
             color: #e0e0e0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em;
             display: flex; align-items: center; padding: 16px 0; white-space: nowrap;
         }
-        .tabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+        .tabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; margin-left: auto; }
         .tabs::-webkit-scrollbar { display: none; }
         .tab {
             background: transparent; border: none; cursor: pointer;
@@ -54,11 +54,34 @@
         }
         .tab:hover { color: #d0d0d0; }
         .tab.active { color: #ffffff; border-bottom-color: #e0e0e0; }
-        .tab.signout {
-            display: flex; align-items: center; color: #707070;
-            font-size: 12px; text-decoration: none; margin-left: 8px;
+        /* Hamburger menu (top-right) */
+        .header-menu { position: relative; display: flex; align-items: center; margin-left: 8px; }
+        .header-menu-btn {
+            background: none; border: none; cursor: pointer; padding: 6px;
+            color: #b0b0b0; line-height: 1;
+            display: inline-flex; align-items: center; justify-content: center;
+            min-width: 36px; height: 36px; border-radius: 8px;
+            transition: background 0.15s, color 0.15s;
         }
-        .tab.signout:hover { color: #d0d0d0; }
+        .header-menu-btn:hover { background: #2a2a2a; color: #e0e0e0; }
+        .header-menu-dropdown {
+            position: absolute; top: 100%; right: 0; margin-top: 8px;
+            background: #242424; border: 1px solid #3a3a3a; border-radius: 10px;
+            box-shadow: 0 12px 32px rgba(0,0,0,0.5);
+            min-width: 200px; z-index: 200; overflow: hidden;
+        }
+        .header-menu-user {
+            padding: 12px 16px; font-size: 12px; color: #808080;
+            border-bottom: 1px solid #333333; word-break: break-all; line-height: 1.4;
+        }
+        .header-menu-item {
+            display: block; width: 100%; padding: 12px 16px;
+            background: none; border: none; text-align: left;
+            font-size: 14px; color: #e0e0e0; cursor: pointer;
+            text-decoration: none; font-family: inherit;
+            transition: background 0.15s;
+        }
+        .header-menu-item:hover, .header-menu-item:active { background: #2f2f2f; }
 
         /* Pages fill everything under the header */
         .page { display: none; flex: 1; min-height: 0; flex-direction: column; background: #1a1a1a; }
@@ -449,12 +472,14 @@
         /* Mobile: single column everywhere; header tabs scroll horizontally */
         @media (max-width: 768px) {
             .container { height: 100vh; height: 100dvh; }
+            /* Title + hamburger on one row, tabs wrap to a second full-width row */
             .header {
-                flex-direction: column; align-items: stretch; gap: 0;
+                flex-wrap: wrap; align-items: center; gap: 0;
                 padding-left: 16px; padding-right: 16px;
             }
-            .header h1 { font-size: 17px; padding: 12px 0 8px; }
-            .tabs { margin: 0 -16px; padding: 0 16px; }
+            .header h1 { font-size: 17px; padding: 12px 0 8px; flex: 1; }
+            .header-menu { margin-left: 0; }
+            .tabs { order: 3; width: 100%; margin: 0 -16px; padding: 0 16px; }
             .tab { padding: 8px 14px; }
             .chat-container { padding: 16px 14px; }
             .input-container { padding: 12px 14px 16px; }
@@ -489,8 +514,16 @@
                 <button class="tab" data-page="draft">Draft</button>
                 <button class="tab" data-page="final">Final</button>
                 <button class="tab" data-page="review">Review</button>
-                <a class="tab signout" href="/auth/logout" title="Sign out">Sign out</a>
             </nav>
+            <div class="header-menu" id="headerMenu">
+                <button class="header-menu-btn" id="menuToggle" aria-label="Menu" aria-expanded="false">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                </button>
+                <div class="header-menu-dropdown" id="menuDropdown" style="display:none">
+                    <div class="header-menu-user" id="menuUser">Signed in</div>
+                    <a href="/auth/logout" class="header-menu-item">Sign out</a>
+                </div>
+            </div>
         </div>
 
         <!-- ================= PAGE 1: ASSIST ================= -->
@@ -800,6 +833,37 @@
                 if (tab.dataset.page === 'review') initReviewPage();
             });
         });
+
+        // ==================== Header menu ====================
+
+        const MENU_CLOSED_SVG = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>';
+        const MENU_OPEN_SVG = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+
+        const menuToggle = document.getElementById('menuToggle');
+        const menuDropdown = document.getElementById('menuDropdown');
+
+        function closeMenu() {
+            menuDropdown.style.display = 'none';
+            menuToggle.innerHTML = MENU_CLOSED_SVG;
+            menuToggle.setAttribute('aria-expanded', 'false');
+        }
+
+        menuToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const open = menuDropdown.style.display !== 'none';
+            if (open) return closeMenu();
+            menuDropdown.style.display = 'block';
+            menuToggle.innerHTML = MENU_OPEN_SVG;
+            menuToggle.setAttribute('aria-expanded', 'true');
+        });
+        document.addEventListener('click', closeMenu);
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+        menuDropdown.addEventListener('click', (e) => e.stopPropagation());
+
+        // Show who's signed in (muted, non-interactive)
+        fetch('/api/me').then(r => r.json()).then(d => {
+            if (d && d.user) document.getElementById('menuUser').textContent = d.user;
+        }).catch(() => {});
 
         // ==================== ASSIST PAGE ====================
 

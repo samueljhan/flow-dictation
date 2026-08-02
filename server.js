@@ -16,6 +16,7 @@ app.use(express.static('public'));
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL_DETECT = process.env.MODEL_DETECT || 'claude-haiku-4-5';  // study type detection
 const MODEL_REPORT = process.env.MODEL_REPORT || 'claude-sonnet-4-6'; // report actions + draft review
+const MODEL_CHAT = process.env.MODEL_CHAT || 'claude-fable-5';        // free-form Assist chat
 const MODEL_RADQA = process.env.MODEL_RADQA || 'claude-fable-5';      // Quick Rad Question
 // Used when MODEL_RADQA's safety classifiers decline a benign question
 const MODEL_RADQA_FALLBACK = process.env.MODEL_RADQA_FALLBACK || 'claude-opus-5';
@@ -52,25 +53,34 @@ console.log('Anthropic:', !!process.env.ANTHROPIC_API_KEY ? '✓' : '✗');
 console.log('Supabase:', !!supabase ? '✓' : '✗');
 console.log('Google Client ID:', !!process.env.GOOGLE_CLIENT_ID ? '✓' : '✗');
 console.log('Google Client Secret:', !!process.env.GOOGLE_CLIENT_SECRET ? '✓' : '✗');
-console.log(`Models: detect=${MODEL_DETECT} report=${MODEL_REPORT} radqa=${MODEL_RADQA} (fallback ${MODEL_RADQA_FALLBACK})`);
+console.log(`Models: detect=${MODEL_DETECT} report=${MODEL_REPORT} chat=${MODEL_CHAT} radqa=${MODEL_RADQA} (fallback ${MODEL_RADQA_FALLBACK})`);
 console.log('========================');
 
 // ============ Claude helpers ============
 
-async function claudeText({ model, system, message, messages, maxTokens }) {
-  const response = await anthropic.messages.create({
+// withFallbacks: use the beta endpoint with server-side refusal fallbacks —
+// worth it for models whose safety classifiers can decline benign radiology
+// content (Fable/Opus tier).
+async function claudeText({ model, system, message, messages, maxTokens, withFallbacks }) {
+  const params = {
     model,
     max_tokens: maxTokens,
     system,
     messages: messages || [{ role: 'user', content: message }]
-  });
+  };
+  const response = withFallbacks
+    ? await anthropic.beta.messages.create({
+        ...params,
+        betas: ['server-side-fallback-2026-07-01'],
+        fallbacks: 'default'
+      })
+    : await anthropic.messages.create(params);
   const u = response.usage || {};
-  console.log(`[claude] ${model} in=${u.input_tokens} out=${u.output_tokens} cache_write=${u.cache_creation_input_tokens || 0} cache_read=${u.cache_read_input_tokens || 0}`);
+  console.log(`[claude] ${response.model || model} in=${u.input_tokens} out=${u.output_tokens} cache_write=${u.cache_creation_input_tokens || 0} cache_read=${u.cache_read_input_tokens || 0}`);
   // Safety classifiers (e.g. on claude-fable-5) can decline a request with a 200 +
   // stop_reason "refusal" and empty content — surface that instead of returning ''.
   if (response.stop_reason === 'refusal') {
-    const why = response.stop_details && response.stop_details.explanation;
-    throw new Error('The model declined this request' + (why ? ': ' + why : '.'));
+    throw new Error('This request was declined by the model’s safety filters. Try rephrasing it.');
   }
   return response.content
     .filter(block => block.type === 'text')
@@ -515,11 +525,15 @@ app.post('/api/assist', async (req, res) => {
       system = await buildKnowledgeSystem(ASSIST_SYSTEM, studyType);
     }
 
+    // Quick actions run on MODEL_REPORT with the knowledge layer; free-form chat
+    // runs on MODEL_CHAT (Fable tier — enable refusal fallbacks).
+    const chatModel = instruction ? MODEL_REPORT : MODEL_CHAT;
     const text = await claudeText({
-      model: MODEL_REPORT,
+      model: chatModel,
       system,
       messages,
-      maxTokens: 4000
+      maxTokens: 4000,
+      withFallbacks: !instruction
     });
 
     if (action === 'describe') {

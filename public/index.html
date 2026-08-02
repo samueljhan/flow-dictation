@@ -2,381 +2,489 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Flow Dictation</title>
+    <meta name="theme-color" content="#1a1a1a">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
-        :root {
-            --bg: #1a1a1a;
-            --panel: #2a2a2a;
-            --panel-2: #333333;
-            --border: #3d3d3d;
-            --text: #e8e8e8;
-            --text-dim: #9a9a9a;
-            --accent: #4a9eff;
-            --accent-dim: #2d6db3;
-            --green: #4caf7d;
-            --red: #e05c5c;
-            --amber: #e0a832;
-        }
+        html, body { overflow: hidden; width: 100%; height: 100%; }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            background: var(--bg);
-            color: var(--text);
-            height: 100vh;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #1a1a1a;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+            padding-top: max(20px, env(safe-area-inset-top));
+            padding-bottom: max(20px, env(safe-area-inset-bottom));
+        }
+
+        .container {
+            background: #2a2a2a;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+            max-width: 1100px;
+            width: 100%;
+            height: 92vh;
             display: flex;
             flex-direction: column;
+            overflow: hidden;
         }
 
         /* ---------- Header ---------- */
-        header {
+        .header {
+            background: #1a1a1a;
+            color: #e0e0e0;
+            padding: 20px 30px;
+            border-radius: 20px 20px 0 0;
+            border-bottom: 1px solid #3a3a3a;
             display: flex;
             align-items: center;
-            gap: 24px;
-            padding: 10px 20px;
-            background: var(--panel);
-            border-bottom: 1px solid var(--border);
+            gap: 15px;
             flex-shrink: 0;
         }
-        .brand { font-size: 17px; font-weight: 700; letter-spacing: 0.3px; }
-        .brand span { color: var(--accent); }
-        .tabs { display: flex; gap: 4px; }
-        .tab {
-            background: none; border: none; color: var(--text-dim);
-            font-size: 14px; font-weight: 600; padding: 8px 18px;
-            border-radius: 8px; cursor: pointer;
+        .header-logo {
+            width: 52px; height: 52px; object-fit: contain; flex-shrink: 0;
+            user-select: none; -webkit-user-select: none; pointer-events: none; -webkit-user-drag: none;
         }
-        .tab:hover { color: var(--text); background: var(--panel-2); }
-        .tab.active { color: #fff; background: var(--accent-dim); }
-        .header-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
-        .gmail-btn {
-            background: var(--panel-2); border: 1px solid var(--border); color: var(--text-dim);
-            font-size: 12px; padding: 6px 12px; border-radius: 6px; cursor: pointer;
-        }
-        .gmail-btn.connected { color: var(--green); border-color: var(--green); }
+        .header-text { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+        .header h1 { color: #b0b0b0; font-size: 24px; font-weight: 600; line-height: 1.1; }
+        .header p { font-size: 13px; color: #909090; line-height: 1.2; }
 
-        main { flex: 1; overflow: hidden; }
-        .page { display: none; height: 100%; }
-        .page.active { display: flex; flex-direction: column; }
+        /* ---------- Tab bar (thin strip) ---------- */
+        .tab-bar {
+            padding: 0 30px;
+            background: #242424;
+            border-bottom: 1px solid #3a3a3a;
+            display: flex;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+        .tab {
+            background: transparent; border: none; cursor: pointer;
+            color: #909090; font-size: 13px; font-weight: 600;
+            padding: 11px 18px; font-family: inherit;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+        }
+        .tab:hover { color: #d0d0d0; }
+        .tab.active { color: #e0e0e0; border-bottom-color: #e0e0e0; }
+
+        .page { display: none; flex: 1; min-height: 0; flex-direction: column; }
+        .page.active { display: flex; }
 
         button { font-family: inherit; }
         textarea, input, select {
-            font-family: inherit; background: var(--bg); color: var(--text);
-            border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 14px;
+            font-family: inherit;
+            background: #2a2a2a; color: #e0e0e0;
+            border: 1px solid #404040; border-radius: 8px;
+            padding: 10px 12px; font-size: 14px;
         }
-        textarea:focus, input:focus, select:focus { outline: none; border-color: var(--accent); }
+        textarea:focus, input:focus, select:focus { outline: none; border-color: #606060; }
         textarea { resize: none; line-height: 1.55; }
+        ::placeholder { color: #707070; }
 
         .primary {
-            background: var(--accent); color: #fff; border: none; border-radius: 8px;
+            background: #e0e0e0; color: #1a1a1a;
+            border: none; border-radius: 8px;
             padding: 10px 16px; font-size: 14px; font-weight: 600; cursor: pointer;
+            transition: all 0.2s;
         }
-        .primary:hover { background: #5aa9ff; }
-        .primary:disabled { opacity: 0.5; cursor: not-allowed; }
+        .primary:hover { background: #ffffff; }
+        .primary:disabled { opacity: 0.4; cursor: not-allowed; }
         .ghost {
-            background: none; border: 1px solid var(--border); color: var(--text-dim);
+            background: #404040; border: none; color: #d0d0d0;
             border-radius: 8px; padding: 9px 14px; font-size: 13px; cursor: pointer;
+            transition: all 0.2s;
         }
-        .ghost:hover { color: var(--text); border-color: var(--text-dim); }
+        .ghost:hover { background: #505050; }
 
-        /* ---------- Assist page ---------- */
-        #page-assist { max-width: 900px; width: 100%; margin: 0 auto; padding: 0 16px; }
+        /* ---------- Assist: chat ---------- */
+        .chat-container {
+            flex: 1; overflow-y: auto;
+            padding: 30px; padding-bottom: 20px;
+            background: #2a2a2a;
+        }
 
-        .dictaphone-bar {
-            display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-            padding: 8px 14px; margin-top: 10px;
-            background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-            font-size: 12px; color: var(--text-dim);
-        }
-        .dictaphone-bar button {
-            background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
-            padding: 4px 12px; border-radius: 6px; font-size: 12px; cursor: pointer;
-        }
-        .dictaphone-bar button.connected { color: var(--green); border-color: var(--green); }
-        .mic-indicator {
-            width: 8px; height: 8px; border-radius: 50%; background: #555; display: inline-block;
-        }
-        .mic-indicator.connected { background: var(--green); }
-        .mic-indicator.recording { background: var(--red); animation: pulse 1s infinite; }
-        @keyframes pulse { 50% { opacity: 0.35; } }
+        .welcome-message { text-align: center; padding: 50px 20px; color: #909090; }
+        .welcome-message h2 { font-size: 22px; margin-bottom: 10px; color: #b0b0b0; font-weight: 500; }
+        .welcome-message > p { font-size: 14px; }
 
-        .chat {
-            flex: 1; overflow-y: auto; padding: 18px 4px;
-            display: flex; flex-direction: column; gap: 14px;
+        .example-prompts {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 12px;
+            margin-top: 25px;
+            text-align: left;
         }
-        .welcome-message { color: var(--text-dim); text-align: center; margin-top: 60px; font-size: 14px; line-height: 1.8; }
-        .welcome-message h2 { color: var(--text); font-size: 18px; margin-bottom: 8px; }
+        .example-prompt {
+            background: #333333;
+            padding: 14px;
+            border-radius: 12px;
+            border: 1px solid #404040;
+            cursor: pointer;
+            transition: all 0.2s;
+            height: 70px;
+            display: flex; flex-direction: column; justify-content: center;
+        }
+        .example-prompt:hover { border-color: #606060; background: #363636; }
+        .example-prompt strong { display: block; margin-bottom: 4px; font-size: 13px; color: #e0e0e0; }
+        .example-prompt span {
+            font-size: 12px; color: #808080; line-height: 1.3;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
 
-        .msg { display: flex; gap: 10px; max-width: 100%; }
-        .msg .avatar {
-            width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
-            display: flex; align-items: center; justify-content: center;
-            font-size: 11px; font-weight: 700;
+        /* In-chat "next task" grid */
+        .nav-prompts {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+            margin-top: 8px;
         }
-        .msg.user .avatar { background: var(--accent-dim); color: #fff; }
-        .msg.assistant .avatar { background: var(--panel-2); color: var(--accent); }
-        .bubble {
-            background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-            padding: 12px 14px; font-size: 14px; line-height: 1.6;
-            white-space: pre-wrap; word-break: break-word;
-            user-select: text; -webkit-user-select: text; max-width: 100%; overflow-x: auto; flex: 1;
+        .nav-prompt {
+            background: #333333; padding: 10px 8px; border-radius: 10px;
+            border: 1px solid #404040; cursor: pointer; transition: all 0.2s;
+            text-align: center; display: flex; align-items: center; justify-content: center;
+            min-height: 44px;
         }
-        .msg.user .bubble { background: #24344a; border-color: #31517a; }
-        .msg.hint .bubble { color: var(--text-dim); font-style: italic; background: none; border-style: dashed; }
-        .bubble strong { color: #ffd57e; font-weight: 700; }
-        .bubble .section-label {
-            display: block; font-weight: 700; color: var(--accent); font-size: 12px;
-            letter-spacing: 0.5px; margin-bottom: 2px;
+        .nav-prompt:hover { border-color: #606060; background: #363636; }
+        .nav-prompt strong { font-size: 11px; color: #e0e0e0; line-height: 1.3; font-weight: 600; }
+
+        .message {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 15px;
+            animation: slideIn 0.3s ease-out;
         }
-        .bubble-tools { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-        .tool-btn {
-            background: var(--panel-2); border: 1px solid var(--border); color: var(--text-dim);
-            padding: 4px 10px; border-radius: 6px; font-size: 12px; cursor: pointer;
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
         }
-        .tool-btn:hover { color: var(--text); border-color: var(--text-dim); }
-        .tool-btn.copied { color: var(--green); border-color: var(--green); }
+        .message.user { flex-direction: row-reverse; }
+        .message-content {
+            max-width: 85%;
+            padding: 12px 18px;
+            border-radius: 18px;
+            line-height: 1.55;
+            font-size: 14px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            user-select: text; -webkit-user-select: text;
+        }
+        .user .message-content {
+            background: #3a3a3a; color: #e0e0e0;
+            border-radius: 18px 18px 4px 18px;
+        }
+        .assistant .message-content {
+            background: #333333; color: #d0d0d0;
+            border: 1px solid #404040;
+            border-radius: 18px 18px 18px 4px;
+        }
+        .message.hint .message-content {
+            background: transparent; border: 1px dashed #404040;
+            color: #909090; font-style: italic;
+        }
+        .message.nav .message-content { max-width: 100%; flex: 1; background: transparent; border: none; padding: 0; }
+
+        .message-content strong { color: #ffffff; font-weight: 700; }
+        .section-label {
+            display: block; font-weight: 700; color: #909090; font-size: 11px;
+            letter-spacing: 0.8px; margin-bottom: 2px;
+        }
+
+        .response-buttons { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+        .action-btn {
+            background: #404040; color: #e0e0e0; border: none;
+            padding: 7px 14px; border-radius: 6px; cursor: pointer;
+            font-size: 12px; transition: all 0.3s;
+        }
+        .action-btn:hover { background: #505050; }
+        .action-btn.success { background: #28a745; color: white; }
 
         .feedback-bar {
-            display: flex; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px;
-            border-top: 1px dashed var(--border); flex-wrap: wrap;
+            display: flex; align-items: center; gap: 8px; margin-top: 12px; padding-top: 12px;
+            border-top: 1px solid #404040; flex-wrap: wrap;
         }
-        .fb-label { font-size: 12px; color: var(--text-dim); }
+        .fb-label { font-size: 12px; color: #909090; }
         .fb-thumb {
-            background: none; border: 1px solid var(--border); border-radius: 6px;
-            font-size: 14px; padding: 3px 9px; cursor: pointer; opacity: 0.7;
+            background: transparent; border: 1px solid #404040; border-radius: 6px;
+            font-size: 14px; padding: 3px 9px; cursor: pointer; opacity: 0.7; transition: all 0.2s;
         }
-        .fb-thumb.selected { opacity: 1; border-color: var(--accent); background: var(--panel-2); }
-        .fb-comment { flex: 1; min-width: 140px; font-size: 12px; padding: 5px 9px; }
+        .fb-thumb:hover { opacity: 1; }
+        .fb-thumb.selected { opacity: 1; border-color: #909090; background: #404040; }
+        .fb-comment { flex: 1; min-width: 140px; font-size: 12px; padding: 5px 9px; background: #2a2a2a; }
         .fb-submit { font-size: 12px; padding: 5px 12px; }
-        .fb-skip { background: none; border: none; color: var(--text-dim); font-size: 12px; cursor: pointer; text-decoration: underline; }
-        .fb-done { font-size: 12px; color: var(--text-dim); margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
-
-        .quick-actions { display: flex; gap: 8px; padding: 8px 0; flex-wrap: wrap; }
-        .qa-btn {
-            background: var(--panel); border: 1px solid var(--border); color: var(--text);
-            padding: 7px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; cursor: pointer;
+        .fb-skip {
+            background: none; border: none; color: #808080; font-size: 12px;
+            cursor: pointer; text-decoration: underline;
         }
-        .qa-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-        .qa-btn.armed { background: var(--accent-dim); border-color: var(--accent); color: #fff; }
-        .qa-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-        .qa-note { font-size: 11px; color: var(--amber); align-self: center; }
+        .fb-skip:hover { color: #b0b0b0; }
+        .fb-done { font-size: 12px; color: #808080; margin-top: 12px; padding-top: 12px; border-top: 1px solid #404040; }
 
-        .input-row { display: flex; gap: 8px; align-items: flex-end; padding-bottom: 14px; }
+        /* ---------- Assist: input ---------- */
+        .input-container {
+            padding: 15px 20px 20px;
+            background: #1a1a1a;
+            border-top: 1px solid #3a3a3a;
+            flex-shrink: 0;
+        }
+        .input-wrapper {
+            background: #3a3a3a;
+            border: 1px solid #4a4a4a;
+            border-radius: 28px;
+            padding: 8px 16px;
+            display: flex;
+            align-items: flex-end;
+            gap: 12px;
+            transition: border-color 0.2s;
+        }
+        .input-wrapper:focus-within { border-color: #606060; }
         #userInput {
-            flex: 1; min-height: 46px; max-height: 240px; font-size: 14px;
+            flex: 1; background: transparent; border: none;
+            font-size: 15px; color: #e0e0e0; font-family: inherit;
+            resize: none; outline: none;
+            line-height: 24px; min-height: 24px; max-height: 240px; padding: 0;
         }
-        .round-btn {
-            width: 46px; height: 46px; border-radius: 10px; border: 1px solid var(--border);
-            background: var(--panel); color: var(--text); font-size: 17px; cursor: pointer; flex-shrink: 0;
-        }
-        .round-btn:hover { border-color: var(--accent); }
-        .round-btn.recording { background: var(--red); border-color: var(--red); animation: pulse 1s infinite; }
         #sendBtn {
-            height: 46px; padding: 0 20px; flex-shrink: 0;
+            background: #333333; border: 1px solid #404040; color: #d0d0d0;
+            cursor: pointer; padding: 0; width: 36px; height: 36px;
+            border-radius: 50%; transition: all 0.3s; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
         }
-
-        /* ---------- Draft page ---------- */
-        #page-draft { padding: 16px 20px; }
-        .draft-layout { display: flex; gap: 16px; flex: 1; overflow: hidden; }
-        .draft-left { flex: 1.6; display: flex; flex-direction: column; min-width: 0; }
-        #draftText { flex: 1; font-size: 14px; }
-        .report-preview {
-            flex: 1; overflow-y: auto; background: var(--bg); border: 1px solid var(--border);
-            border-radius: 8px; padding: 14px; font-size: 14px; line-height: 1.6; white-space: pre-wrap;
-        }
-        .edit-span-original { background: rgba(224, 92, 92, 0.18); text-decoration: line-through; color: #d99; border-radius: 3px; }
-        .edit-span-suggested { background: rgba(76, 175, 125, 0.18); color: #8fd8b0; border-radius: 3px; }
-        .draft-right { flex: 1; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; min-width: 300px; max-width: 420px; }
-        .panel {
-            background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px;
-            display: flex; flex-direction: column; gap: 10px; flex-shrink: 0;
-        }
-        .panel-title { font-size: 13px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.6px; }
-        .panel label { font-size: 13px; font-weight: 600; }
-        .panel .opt { font-weight: 400; color: var(--text-dim); font-size: 11px; }
-        .shift-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-        #currentShiftName { font-size: 14px; font-weight: 600; color: var(--green); }
-        .combobox { position: relative; display: flex; flex-direction: column; }
-        .combobox input { width: 100%; }
-        .dropdown {
-            position: absolute; top: 100%; left: 0; right: 0; z-index: 30;
-            background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
-            max-height: 220px; overflow-y: auto; margin-top: 4px;
-        }
-        .dropdown-item { padding: 8px 12px; font-size: 13px; cursor: pointer; }
-        .dropdown-item:hover { background: var(--accent-dim); }
-        .dropdown-empty { padding: 8px 12px; font-size: 12px; color: var(--text-dim); font-style: italic; }
-        .segmented { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-        .seg {
-            flex: 1; background: none; border: none; color: var(--text-dim);
-            padding: 9px 0; font-size: 13px; font-weight: 600; cursor: pointer;
-        }
-        .seg.active { background: var(--accent-dim); color: #fff; }
-        .status { font-size: 12px; color: var(--text-dim); min-height: 16px; }
-        .status.error { color: var(--red); }
-        .status.ok { color: var(--green); }
-
-        .edit-card {
-            background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
-            padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; font-size: 13px;
-        }
-        .edit-card.accepted { border-color: var(--green); }
-        .edit-card.rejected { opacity: 0.5; }
-        .edit-cat {
-            display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase;
-            padding: 1px 7px; border-radius: 8px; letter-spacing: 0.5px; width: fit-content;
-        }
-        .edit-cat.typo { background: rgba(224, 92, 92, 0.2); color: #e88; }
-        .edit-cat.style { background: rgba(74, 158, 255, 0.2); color: #7bb8ff; }
-        .edit-context { line-height: 1.5; word-break: break-word; }
-        .edit-context .ctx { color: var(--text-dim); }
-        .edit-orig { text-decoration: line-through; color: #d99; }
-        .edit-sugg { color: #8fd8b0; font-weight: 600; }
-        .edit-reason { font-size: 12px; color: var(--text-dim); font-style: italic; }
-        .edit-actions { display: flex; gap: 8px; }
-        .edit-actions button {
-            flex: 1; padding: 5px 0; font-size: 12px; font-weight: 600; border-radius: 6px;
-            border: 1px solid var(--border); background: none; color: var(--text-dim); cursor: pointer;
-        }
-        .edit-actions .accept-btn.on { background: rgba(76, 175, 125, 0.2); border-color: var(--green); color: var(--green); }
-        .edit-actions .reject-btn.on { background: rgba(224, 92, 92, 0.15); border-color: var(--red); color: var(--red); }
-
-        /* ---------- Final page ---------- */
-        #page-final { padding: 16px 20px; overflow-y: auto; }
-        #page-final.active { display: block; }
-        .final-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
-        .final-toolbar select { min-width: 260px; }
-        .report-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 18px; }
-        .report-row {
-            display: flex; align-items: center; gap: 14px; padding: 10px 14px;
-            background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-            cursor: pointer; font-size: 13px;
-        }
-        .report-row:hover { border-color: var(--accent); }
-        .report-row.selected { border-color: var(--accent); background: var(--panel-2); }
-        .rr-id { font-family: 'SF Mono', Menlo, Consolas, monospace; font-weight: 600; color: var(--accent); }
-        .rr-study { font-weight: 600; }
-        .rr-label { color: var(--text-dim); }
-        .rr-time { color: var(--text-dim); margin-left: auto; }
-        .rr-final { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 8px; }
-        .rr-final.yes { background: rgba(76, 175, 125, 0.2); color: var(--green); }
-        .rr-final.no { background: var(--panel-2); color: var(--text-dim); }
-        .rr-type { font-size: 11px; color: var(--amber); text-transform: uppercase; font-weight: 700; }
-        .list-empty { color: var(--text-dim); font-size: 13px; font-style: italic; padding: 12px; }
-
-        .rpr-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 8px; letter-spacing: 0.3px; }
-        .rpr-badge.rpr1 { background: rgba(76, 175, 125, 0.2); color: var(--green); }
-        .rpr-badge.rpr2 { background: rgba(74, 158, 255, 0.2); color: #7bb8ff; }
-        .rpr-badge.rpr3 { background: rgba(224, 168, 50, 0.2); color: var(--amber); }
-        .rpr-badge.rpr4 { background: rgba(224, 92, 92, 0.22); color: var(--red); }
-        #gradePanel { margin-bottom: 16px; }
-        .grade-row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-        .grade-rationale { font-size: 13px; color: var(--text-dim); line-height: 1.5; }
-        .grade-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-        .grade-btn { padding: 4px 10px; font-size: 12px; }
-        .grade-btn.on { border-color: var(--accent); color: var(--accent); }
-
-        .final-columns { display: flex; gap: 16px; margin-bottom: 16px; }
-        .final-col { flex: 1; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-        .col-title { font-size: 13px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.6px; }
-        #finalDraftView {
-            background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-            padding: 14px; font-size: 13px; line-height: 1.6; white-space: pre-wrap;
-            font-family: inherit; max-height: 420px; overflow-y: auto; user-select: text;
-        }
-        #finalText { min-height: 300px; max-height: 420px; font-size: 13px; }
-        .final-save-row { display: flex; align-items: center; gap: 10px; }
-        .diff-view {
-            background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-            padding: 14px; font-size: 14px; line-height: 1.7; white-space: pre-wrap; user-select: text;
-            margin-top: 8px; margin-bottom: 24px;
-        }
-        .diff-add { color: var(--amber); font-weight: 700; }
-        .diff-del { color: #777; text-decoration: line-through; opacity: 0.6; }
-
-        /* ---------- Modals ---------- */
-        .modal-overlay {
-            display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
-            z-index: 100; align-items: center; justify-content: center;
-        }
-        .modal-overlay.active { display: flex; }
-        .modal {
-            background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
-            padding: 22px; width: 92%; max-width: 440px; display: flex; flex-direction: column; gap: 14px;
-        }
-        .modal h3 { font-size: 16px; }
-        .modal p { font-size: 13px; color: var(--text-dim); line-height: 1.5; }
-        .modal-buttons { display: flex; gap: 10px; justify-content: flex-end; }
-
-        .toast {
-            position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
-            background: var(--panel-2); border: 1px solid var(--accent); color: var(--text);
-            padding: 10px 20px; border-radius: 10px; font-size: 13px; z-index: 200;
-            opacity: 0; transition: opacity 0.25s; pointer-events: none; white-space: pre-line; text-align: center;
-        }
-        .toast.show { opacity: 1; }
+        #sendBtn:hover { background: #3a3a3a; border-color: #505050; }
+        #sendBtn svg { width: 20px; height: 20px; }
 
         .spinner {
-            display: inline-block; width: 13px; height: 13px; border: 2px solid var(--text-dim);
+            display: inline-block; width: 13px; height: 13px; border: 2px solid #808080;
             border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite;
             vertical-align: -2px; margin-right: 6px;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
+        /* ---------- Draft page ---------- */
+        #page-draft { padding: 20px; }
+        .draft-layout { display: flex; gap: 16px; flex: 1; min-height: 0; }
+        .draft-left { flex: 1.6; display: flex; flex-direction: column; min-width: 0; }
+        #draftText { flex: 1; font-size: 14px; background: #242424; }
+        .report-preview {
+            flex: 1; overflow-y: auto; background: #242424; border: 1px solid #404040;
+            border-radius: 8px; padding: 14px; font-size: 14px; line-height: 1.6; white-space: pre-wrap;
+            user-select: text;
+        }
+        .edit-span-original { background: rgba(220, 53, 69, 0.15); text-decoration: line-through; color: #c98a8a; border-radius: 3px; }
+        .edit-span-suggested { background: rgba(40, 167, 69, 0.15); color: #8ec9a0; border-radius: 3px; }
+        .draft-right {
+            flex: 1; display: flex; flex-direction: column; gap: 12px;
+            overflow-y: auto; min-width: 290px; max-width: 400px;
+        }
+        .panel {
+            background: #333333; border: 1px solid #404040; border-radius: 12px; padding: 14px;
+            display: flex; flex-direction: column; gap: 10px; flex-shrink: 0;
+        }
+        .panel-title { font-size: 11px; font-weight: 700; color: #909090; text-transform: uppercase; letter-spacing: 0.8px; }
+        .panel label { font-size: 13px; font-weight: 600; color: #d0d0d0; }
+        .panel .opt { font-weight: 400; color: #808080; font-size: 11px; }
+        .shift-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+        #currentShiftName { font-size: 14px; font-weight: 600; color: #e0e0e0; }
+        .combobox { position: relative; display: flex; flex-direction: column; }
+        .combobox input { width: 100%; }
+        .dropdown {
+            position: absolute; top: 100%; left: 0; right: 0; z-index: 30;
+            background: #3a3a3a; border: 1px solid #4a4a4a; border-radius: 8px;
+            max-height: 220px; overflow-y: auto; margin-top: 4px;
+        }
+        .dropdown-item { padding: 8px 12px; font-size: 13px; cursor: pointer; color: #d0d0d0; }
+        .dropdown-item:hover { background: #4a4a4a; }
+        .dropdown-empty { padding: 8px 12px; font-size: 12px; color: #808080; font-style: italic; }
+        .segmented { display: flex; border: 1px solid #404040; border-radius: 8px; overflow: hidden; }
+        .seg {
+            flex: 1; background: transparent; border: none; color: #909090;
+            padding: 9px 0; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s;
+        }
+        .seg.active { background: #e0e0e0; color: #1a1a1a; }
+        .status { font-size: 12px; color: #909090; min-height: 16px; }
+        .status.error { color: #dc7a7a; }
+        .status.ok { color: #28a745; }
+
+        .edit-card {
+            background: #2a2a2a; border: 1px solid #404040; border-radius: 8px;
+            padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; font-size: 13px;
+        }
+        .edit-card.accepted { border-color: #28a745; }
+        .edit-card.rejected { opacity: 0.45; }
+        .edit-cat {
+            display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase;
+            padding: 1px 7px; border-radius: 8px; letter-spacing: 0.5px; width: fit-content;
+            background: #404040; color: #b0b0b0;
+        }
+        .edit-context { line-height: 1.5; word-break: break-word; color: #d0d0d0; }
+        .edit-context .ctx { color: #808080; }
+        .edit-orig { text-decoration: line-through; color: #c98a8a; }
+        .edit-sugg { color: #8ec9a0; font-weight: 600; }
+        .edit-reason { font-size: 12px; color: #909090; font-style: italic; }
+        .edit-actions { display: flex; gap: 8px; }
+        .edit-actions button {
+            flex: 1; padding: 5px 0; font-size: 12px; font-weight: 600; border-radius: 6px;
+            border: 1px solid #404040; background: transparent; color: #909090; cursor: pointer;
+            transition: all 0.2s;
+        }
+        .edit-actions button:hover { color: #e0e0e0; border-color: #606060; }
+        .edit-actions .accept-btn.on { background: rgba(40, 167, 69, 0.15); border-color: #28a745; color: #28a745; }
+        .edit-actions .reject-btn.on { background: rgba(220, 53, 69, 0.12); border-color: #dc3545; color: #dc7a7a; }
+
+        /* ---------- Final page ---------- */
+        #page-final { padding: 0; }
+        .final-scroll { flex: 1; overflow-y: auto; padding: 20px; min-height: 0; }
+        .final-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+        .final-toolbar label { font-size: 13px; font-weight: 600; color: #d0d0d0; }
+        .final-toolbar select { min-width: 260px; background: #333; }
+        .report-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 18px; }
+        .report-row {
+            display: flex; align-items: center; gap: 14px; padding: 10px 14px;
+            background: #333333; border: 1px solid #404040; border-radius: 10px;
+            cursor: pointer; font-size: 13px; transition: all 0.2s; color: #d0d0d0;
+        }
+        .report-row:hover { border-color: #606060; background: #363636; }
+        .report-row.selected { border-color: #909090; background: #3a3a3a; }
+        .rr-id { font-family: 'SF Mono', Menlo, Consolas, monospace; font-weight: 600; color: #e0e0e0; }
+        .rr-study { font-weight: 600; }
+        .rr-label { color: #909090; }
+        .rr-time { color: #808080; margin-left: auto; }
+        .rr-final { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 8px; }
+        .rr-final.yes { background: rgba(40, 167, 69, 0.18); color: #28a745; }
+        .rr-final.no { background: #404040; color: #909090; }
+        .rr-type { font-size: 11px; color: #909090; text-transform: uppercase; font-weight: 700; }
+        .list-empty { color: #808080; font-size: 13px; font-style: italic; padding: 12px; }
+
+        .rpr-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 8px; letter-spacing: 0.3px; background: #404040; color: #b0b0b0; }
+        .rpr-badge.rpr1 { background: rgba(40, 167, 69, 0.18); color: #28a745; }
+        .rpr-badge.rpr2 { background: #404040; color: #d0d0d0; }
+        .rpr-badge.rpr3 { background: rgba(224, 168, 50, 0.18); color: #e0a832; }
+        .rpr-badge.rpr4 { background: rgba(220, 53, 69, 0.18); color: #dc7a7a; }
+        #gradePanel { margin-bottom: 16px; }
+        .grade-row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+        .grade-rationale { font-size: 13px; color: #909090; line-height: 1.5; }
+        .grade-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+        .grade-btn { padding: 4px 10px; font-size: 12px; }
+        .grade-btn.on { background: #e0e0e0; color: #1a1a1a; }
+
+        .final-columns { display: flex; gap: 16px; margin-bottom: 16px; }
+        .final-col { flex: 1; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+        .col-title { font-size: 11px; font-weight: 700; color: #909090; text-transform: uppercase; letter-spacing: 0.8px; }
+        #finalDraftView {
+            background: #333333; border: 1px solid #404040; border-radius: 8px;
+            padding: 14px; font-size: 13px; line-height: 1.6; white-space: pre-wrap;
+            font-family: inherit; max-height: 420px; overflow-y: auto; user-select: text; color: #d0d0d0;
+        }
+        #finalText { min-height: 300px; max-height: 420px; font-size: 13px; background: #242424; }
+        .final-save-row { display: flex; align-items: center; gap: 10px; }
+        .diff-view {
+            background: #333333; border: 1px solid #404040; border-radius: 8px;
+            padding: 14px; font-size: 14px; line-height: 1.7; white-space: pre-wrap; user-select: text;
+            margin-top: 8px; margin-bottom: 24px; color: #d0d0d0;
+        }
+        .diff-add { color: #e0a832; font-weight: 700; }
+        .diff-del { color: #777; text-decoration: line-through; opacity: 0.6; }
+
+        /* ---------- Modals & toast ---------- */
+        .modal-overlay {
+            display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+            z-index: 3000; justify-content: center; align-items: center;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal {
+            background: #2a2a2a; border-radius: 12px; padding: 24px;
+            width: 90%; max-width: 420px; border: 1px solid #404040;
+            display: flex; flex-direction: column; gap: 14px;
+        }
+        .modal h3 { color: #e0e0e0; font-size: 17px; }
+        .modal p { font-size: 13px; color: #909090; line-height: 1.5; }
+        .modal input { background: #333; }
+        .modal-buttons { display: flex; gap: 10px; justify-content: flex-end; }
+
+        .toast {
+            position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+            background: #3a3a3a; border: 1px solid #606060; color: #e0e0e0;
+            padding: 10px 20px; border-radius: 10px; font-size: 13px; z-index: 4000;
+            opacity: 0; transition: opacity 0.25s; pointer-events: none; white-space: pre-line; text-align: center;
+        }
+        .toast.show { opacity: 1; }
+
+        /* ---------- Mobile ---------- */
         @media (max-width: 900px) {
+            body { padding: 0; }
+            .container { border-radius: 0; height: 100vh; height: 100dvh; max-width: 100%; box-shadow: none; }
+            .header { border-radius: 0; padding: 12px 15px; padding-top: calc(env(safe-area-inset-top, 0px) + 12px); }
+            .header-logo { width: 42px; height: 42px; }
+            .header h1 { font-size: 19px; }
+            .tab-bar { padding: 0 15px; }
+            .chat-container { padding: 15px; }
+            .welcome-message { padding: 20px 10px; }
+            .example-prompts { grid-template-columns: 1fr; gap: 8px; margin-top: 15px; }
+            .example-prompt { height: 60px; padding: 10px; }
+            .nav-prompts { grid-template-columns: repeat(2, 1fr); }
+            #page-draft { padding: 12px; }
             .draft-layout { flex-direction: column; overflow-y: auto; }
-            .draft-right { max-width: none; }
-            .draft-left { min-height: 300px; }
+            .draft-right { max-width: none; overflow-y: visible; }
+            .draft-left { min-height: 260px; }
             .final-columns { flex-direction: column; }
         }
     </style>
 </head>
 <body>
-    <header>
-        <div class="brand">Flow<span>Dictation</span></div>
-        <nav class="tabs">
+    <div class="container">
+        <div class="header">
+            <img class="header-logo" src="/images/flow-logo.png" alt="Flow Dictation">
+            <div class="header-text">
+                <h1>Flow Dictation</h1>
+                <p>Radiology reporting assistant</p>
+            </div>
+        </div>
+
+        <div class="tab-bar">
             <button class="tab active" data-page="assist">Assist</button>
             <button class="tab" data-page="draft">Draft</button>
             <button class="tab" data-page="final">Final</button>
-        </nav>
-        <div class="header-right">
-            <button id="gmailStatus" class="gmail-btn disconnected" onclick="handleGmailClick()">📧 Connect Gmail</button>
         </div>
-    </header>
 
-    <main>
         <!-- ================= PAGE 1: ASSIST ================= -->
         <section id="page-assist" class="page active">
-            <div class="dictaphone-bar" id="dictaphoneSetup">
-                <span id="setupIcon">🎙️</span>
-                <span id="setupText">Connect your dictaphone (optional)</span>
-                <button id="setupBtn">Connect</button>
-                <span class="mic-indicator" id="micIndicator"></span>
-                <span id="micStatus">Click mic to record</span>
-            </div>
-
-            <div id="chatContainer" class="chat">
+            <div class="chat-container" id="chatContainer">
                 <div class="welcome-message">
-                    <h2>Assist</h2>
-                    Use a quick action below, or just type.<br>
-                    <b>Describe</b> a finding · <b>Reword</b> text · <b>Proofread</b> · <b>Generate Impression</b>
+                    <h2>What would you like to do?</h2>
+                    <p>Pick a quick option, or just start typing.</p>
+                    <div class="example-prompts">
+                        <div class="example-prompt" data-action="describe">
+                            <strong>Describe a Finding</strong>
+                            <span>Get Findings + Impression wording</span>
+                        </div>
+                        <div class="example-prompt" data-action="reword">
+                            <strong>Reword</strong>
+                            <span>Improve clarity and flow</span>
+                        </div>
+                        <div class="example-prompt" data-action="proofread">
+                            <strong>Proofread</strong>
+                            <span>Fix typos and dictation errors</span>
+                        </div>
+                        <div class="example-prompt" data-action="impression">
+                            <strong>Generate Impression</strong>
+                            <span>Numbered impression from a report body</span>
+                        </div>
+                    </div>
                 </div>
             </div>
-
-            <div class="quick-actions">
-                <button class="qa-btn" data-action="describe">Describe</button>
-                <button class="qa-btn" data-action="reword">Reword</button>
-                <button class="qa-btn" data-action="proofread">Proofread</button>
-                <button class="qa-btn" data-action="impression">Generate Impression</button>
-                <span class="qa-note" id="qaNote" style="display:none">Rate the last response (or skip) to continue</span>
-            </div>
-
-            <div class="input-row">
-                <textarea id="userInput" placeholder="Type or dictate here… (Enter to send, Shift+Enter for new line)"></textarea>
-                <button id="voiceBtn" class="round-btn" title="Record">🎤</button>
-                <button id="sendBtn" class="primary">Send</button>
+            <div class="input-container">
+                <div class="input-wrapper">
+                    <textarea id="userInput" placeholder="Describe what you want to do…" rows="1"></textarea>
+                    <button id="sendBtn" title="Send message">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.59 5.58L20 12l-8-8z" fill="#d0d0d0" stroke="none"/>
+                        </svg>
+                    </button>
+                </div>
             </div>
         </section>
 
@@ -384,7 +492,7 @@
         <section id="page-draft" class="page">
             <div class="draft-layout">
                 <div class="draft-left">
-                    <textarea id="draftText" placeholder="Paste or dictate your full report here…"></textarea>
+                    <textarea id="draftText" placeholder="Paste your full report here…"></textarea>
                     <div id="draftPreview" class="report-preview" style="display:none"></div>
                 </div>
                 <div class="draft-right">
@@ -426,59 +534,48 @@
 
         <!-- ================= PAGE 3: FINAL ================= -->
         <section id="page-final" class="page">
-            <div class="final-toolbar">
-                <label style="font-size:13px; font-weight:600;">Shift</label>
-                <select id="shiftSelect"></select>
-            </div>
-            <div id="reportList" class="report-list"></div>
-            <div id="finalDetail" style="display:none">
-                <div class="final-columns">
-                    <div class="final-col">
-                        <div class="col-title">Draft — <span id="finalReportId"></span></div>
-                        <pre id="finalDraftView"></pre>
-                    </div>
-                    <div class="final-col">
-                        <div class="col-title">Final report (attending-corrected)</div>
-                        <textarea id="finalText" placeholder="Paste the finalized report here…"></textarea>
-                        <div class="final-save-row">
-                            <button class="primary" id="saveFinalBtn">Save Final</button>
-                            <span class="status" id="finalStatus"></span>
+            <div class="final-scroll">
+                <div class="final-toolbar">
+                    <label>Shift</label>
+                    <select id="shiftSelect"></select>
+                </div>
+                <div id="reportList" class="report-list"></div>
+                <div id="finalDetail" style="display:none">
+                    <div class="final-columns">
+                        <div class="final-col">
+                            <div class="col-title">Draft — <span id="finalReportId"></span></div>
+                            <pre id="finalDraftView"></pre>
+                        </div>
+                        <div class="final-col">
+                            <div class="col-title">Final report (attending-corrected)</div>
+                            <textarea id="finalText" placeholder="Paste the finalized report here…"></textarea>
+                            <div class="final-save-row">
+                                <button class="primary" id="saveFinalBtn">Save Final</button>
+                                <span class="status" id="finalStatus"></span>
+                            </div>
                         </div>
                     </div>
-                </div>
-                <div class="panel" id="gradePanel" style="display:none">
-                    <div class="panel-title">RPR Grade — attending comparison</div>
-                    <div class="grade-row">
-                        <span id="gradeBadge" class="rpr-badge"></span>
-                        <span id="gradeRationale" class="grade-rationale"></span>
+                    <div class="panel" id="gradePanel" style="display:none">
+                        <div class="panel-title">RPR Grade — attending comparison</div>
+                        <div class="grade-row">
+                            <span id="gradeBadge" class="rpr-badge"></span>
+                            <span id="gradeRationale" class="grade-rationale"></span>
+                        </div>
+                        <div class="grade-actions">
+                            <span style="font-size:12px; color:#808080">Override:</span>
+                            <button class="ghost grade-btn" data-g="RPR1" title="Concordant — no meaningful changes">RPR1</button>
+                            <button class="ghost grade-btn" data-g="RPR2" title="Minor discrepancy — little or no clinical significance">RPR2</button>
+                            <button class="ghost grade-btn" data-g="RPR3" title="Moderate discrepancy — possible clinical significance">RPR3</button>
+                            <button class="ghost grade-btn" data-g="RPR4" title="Major discrepancy — clinically significant">RPR4</button>
+                            <button class="ghost" id="regradeBtn" title="Re-run automatic grading">↻ Re-grade</button>
+                            <span class="status" id="gradeStatus"></span>
+                        </div>
                     </div>
-                    <div class="grade-actions">
-                        <span class="opt" style="font-size:12px; color:var(--text-dim)">Override:</span>
-                        <button class="ghost grade-btn" data-g="RPR1" title="Concordant — no meaningful changes">RPR1</button>
-                        <button class="ghost grade-btn" data-g="RPR2" title="Minor discrepancy — little or no clinical significance">RPR2</button>
-                        <button class="ghost grade-btn" data-g="RPR3" title="Moderate discrepancy — possible clinical significance">RPR3</button>
-                        <button class="ghost grade-btn" data-g="RPR4" title="Major discrepancy — clinically significant">RPR4</button>
-                        <button class="ghost" id="regradeBtn" title="Re-run automatic grading">↻ Re-grade</button>
-                        <span class="status" id="gradeStatus"></span>
-                    </div>
+                    <div class="col-title">Corrections (<span class="diff-add" style="font-size:11px">added/changed</span> · <span class="diff-del" style="font-size:11px">removed</span>)</div>
+                    <div id="finalDiffView" class="diff-view"></div>
                 </div>
-                <div class="col-title">Corrections (<span class="diff-add" style="font-size:11px">added/changed</span> · <span class="diff-del" style="font-size:11px">removed</span>)</div>
-                <div id="finalDiffView" class="diff-view"></div>
             </div>
         </section>
-    </main>
-
-    <!-- Email modal (Gmail) -->
-    <div class="modal-overlay" id="emailModal">
-        <div class="modal">
-            <h3>📧 Email Report</h3>
-            <input type="email" id="emailTo" placeholder="Recipient email address">
-            <input type="text" id="emailSubject" placeholder="Subject" value="Radiology Report">
-            <div class="modal-buttons">
-                <button class="ghost" onclick="closeEmailModal()">Cancel</button>
-                <button class="primary" id="sendEmailBtn" onclick="sendEmail()">Send</button>
-            </div>
-        </div>
     </div>
 
     <!-- New shift name confirmation -->
@@ -537,12 +634,10 @@
         }
 
         // Word-level LCS diff. Tokens include whitespace so line breaks survive.
-        // Returns [{type: 'same'|'del'|'add', text}]
         function diffWords(a, b) {
             const ta = a.split(/(\s+)/).filter(s => s.length);
             const tb = b.split(/(\s+)/).filter(s => s.length);
             const n = ta.length, m = tb.length;
-            // LCS DP table (typed array, row-major)
             const W = m + 1;
             const dp = new Int32Array((n + 1) * W);
             for (let i = n - 1; i >= 0; i--) {
@@ -575,18 +670,16 @@
                 if (btn) {
                     const orig = btn.textContent;
                     btn.textContent = '✓ Copied';
-                    btn.classList.add('copied');
-                    setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1800);
+                    btn.classList.add('success');
+                    setTimeout(() => { btn.textContent = orig; btn.classList.remove('success'); }, 1800);
                 }
             }).catch(() => showToast('Copy failed — select the text manually'));
         }
 
         function pad2(n) { return String(n).padStart(2, '0'); }
-
         function fmtDate(d) {
             return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
         }
-
         function makeReportId(d = new Date()) {
             return '' + d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + pad2(d.getHours()) + pad2(d.getMinutes());
         }
@@ -622,19 +715,10 @@
         const chatContainer = document.getElementById('chatContainer');
         const userInput = document.getElementById('userInput');
         const sendBtn = document.getElementById('sendBtn');
-        const voiceBtn = document.getElementById('voiceBtn');
-        const micIndicator = document.getElementById('micIndicator');
-        const micStatus = document.getElementById('micStatus');
-        const setupBtn = document.getElementById('setupBtn');
-        const setupText = document.getElementById('setupText');
-        const setupIcon = document.getElementById('setupIcon');
-        const dictaphoneSetup = document.getElementById('dictaphoneSetup');
-        const gmailStatusEl = document.getElementById('gmailStatus');
-        const qaNote = document.getElementById('qaNote');
 
-        let pendingAction = null;          // armed quick action
-        let awaitingFeedback = false;      // gates the next quick action
-        let currentReportText = '';        // for the email modal
+        let pendingAction = null;       // armed quick action
+        let awaitingFeedback = false;   // response must be rated/skipped before next quick option grid works
+        let chatHistory = [];           // [{role, content}] sent with each request for follow-up intelligence
 
         const ACTION_HINTS = {
             describe: 'Describe the finding you’re struggling to word — I’ll suggest Findings wording and matching Impression wording.',
@@ -642,29 +726,17 @@
             proofread: 'Paste the text to proofread — corrections will be shown in bold (copies as plain text).',
             impression: 'Paste the report body — I’ll generate a numbered Impression.'
         };
-        const ACTION_LABELS = { describe: 'Describe', reword: 'Reword', proofread: 'Proofread', impression: 'Generate Impression' };
+        const ACTION_LABELS = { describe: 'Describe a Finding', reword: 'Reword', proofread: 'Proofread', impression: 'Generate Impression' };
 
-        function updateQaState() {
-            document.querySelectorAll('.qa-btn').forEach(b => {
-                b.disabled = awaitingFeedback;
-                b.classList.toggle('armed', b.dataset.action === pendingAction);
-            });
-            qaNote.style.display = awaitingFeedback ? '' : 'none';
+        function armAction(action) {
+            pendingAction = action;
+            addHintMessage(ACTION_LABELS[action] + ' — ' + ACTION_HINTS[action]);
+            userInput.focus();
         }
 
-        document.querySelectorAll('.qa-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                if (awaitingFeedback) return;
-                if (pendingAction === btn.dataset.action) {
-                    pendingAction = null;
-                    updateQaState();
-                    return;
-                }
-                pendingAction = btn.dataset.action;
-                updateQaState();
-                addHintMessage('[' + ACTION_LABELS[pendingAction] + '] ' + ACTION_HINTS[pendingAction]);
-                userInput.focus();
-            });
+        // Welcome-grid quick options
+        document.querySelectorAll('.example-prompt').forEach(card => {
+            card.addEventListener('click', () => armAction(card.dataset.action));
         });
 
         function clearWelcome() {
@@ -672,62 +744,82 @@
             if (w) w.remove();
         }
 
+        function scrollChat() { chatContainer.scrollTop = chatContainer.scrollHeight; }
+
         function addHintMessage(text) {
             clearWelcome();
             const div = document.createElement('div');
-            div.className = 'msg hint assistant';
-            div.innerHTML = '<div class="avatar">FD</div><div class="bubble">' + escapeHtml(text) + '</div>';
+            div.className = 'message hint assistant';
+            div.innerHTML = '<div class="message-content">' + escapeHtml(text) + '</div>';
             chatContainer.appendChild(div);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
+            scrollChat();
         }
 
         function addUserMessage(text) {
             clearWelcome();
             const div = document.createElement('div');
-            div.className = 'msg user';
-            div.innerHTML = '<div class="avatar">Y</div><div class="bubble">' + escapeHtml(text) + '</div>';
+            div.className = 'message user';
+            div.innerHTML = '<div class="message-content">' + escapeHtml(text) + '</div>';
             chatContainer.appendChild(div);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
-            return div;
+            scrollChat();
         }
 
         function addLoadingMessage() {
             clearWelcome();
             const div = document.createElement('div');
-            div.className = 'msg assistant';
-            div.innerHTML = '<div class="avatar">FD</div><div class="bubble"><span class="spinner"></span>Thinking…</div>';
+            div.className = 'message assistant';
+            div.innerHTML = '<div class="message-content"><span class="spinner"></span>Thinking…</div>';
             chatContainer.appendChild(div);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
+            scrollChat();
             return div;
+        }
+
+        // In-chat "next task" grid, shown once feedback on the previous response is resolved
+        function showNextOptions() {
+            const div = document.createElement('div');
+            div.className = 'message nav assistant';
+            const content = document.createElement('div');
+            content.className = 'message-content';
+            const label = document.createElement('div');
+            label.style.cssText = 'font-size:12px; color:#909090; margin-bottom:2px;';
+            label.textContent = 'Anything else?';
+            const grid = document.createElement('div');
+            grid.className = 'nav-prompts';
+            for (const [action, title] of Object.entries(ACTION_LABELS)) {
+                const card = document.createElement('div');
+                card.className = 'nav-prompt';
+                card.innerHTML = '<strong>' + escapeHtml(title) + '</strong>';
+                card.addEventListener('click', () => {
+                    div.remove();
+                    armAction(action);
+                });
+                grid.appendChild(card);
+            }
+            content.appendChild(label);
+            content.appendChild(grid);
+            div.appendChild(content);
+            chatContainer.appendChild(div);
+            scrollChat();
         }
 
         // Render an assistant response. plainText is EXACTLY what Copy places on the clipboard.
         function addAssistantResponse({ html, plainText, actionType, userText }) {
             const div = document.createElement('div');
-            div.className = 'msg assistant';
+            div.className = 'message assistant';
+            const content = document.createElement('div');
+            content.className = 'message-content';
+            content.innerHTML = html;
 
-            const bubble = document.createElement('div');
-            bubble.className = 'bubble';
-            bubble.innerHTML = html;
-
-            // Tools row: copy (plain text only) + email
             const tools = document.createElement('div');
-            tools.className = 'bubble-tools';
+            tools.className = 'response-buttons';
             const copyBtn = document.createElement('button');
-            copyBtn.className = 'tool-btn';
-            copyBtn.textContent = '📋 Copy';
+            copyBtn.className = 'action-btn';
+            copyBtn.textContent = 'Copy';
             copyBtn.addEventListener('click', () => copyPlainText(plainText, copyBtn));
             tools.appendChild(copyBtn);
-            if (gmailConnected) {
-                const emailBtn = document.createElement('button');
-                emailBtn.className = 'tool-btn';
-                emailBtn.textContent = '📧 Email';
-                emailBtn.addEventListener('click', () => { currentReportText = plainText; openEmailModal(); });
-                tools.appendChild(emailBtn);
-            }
-            bubble.appendChild(tools);
+            content.appendChild(tools);
 
-            // Feedback UI
+            // Feedback UI — required (or skipped) before the next quick option grid appears
             const fb = document.createElement('div');
             fb.className = 'feedback-bar';
             fb.innerHTML =
@@ -737,7 +829,7 @@
                 '<input class="fb-comment" placeholder="Optional comment…">' +
                 '<button class="fb-submit primary" style="display:none">Submit</button>' +
                 '<button class="fb-skip">Skip feedback</button>';
-            bubble.appendChild(fb);
+            content.appendChild(fb);
 
             let rating = null;
             const submitBtn = fb.querySelector('.fb-submit');
@@ -754,9 +846,9 @@
                 const done = document.createElement('div');
                 done.className = 'fb-done';
                 done.textContent = note;
-                bubble.appendChild(done);
+                content.appendChild(done);
                 awaitingFeedback = false;
-                updateQaState();
+                showNextOptions();
             }
 
             submitBtn.addEventListener('click', async () => {
@@ -779,13 +871,10 @@
             });
             fb.querySelector('.fb-skip').addEventListener('click', () => finishFeedback('Feedback skipped.'));
 
-            div.innerHTML = '<div class="avatar">FD</div>';
-            div.appendChild(bubble);
+            div.appendChild(content);
             chatContainer.appendChild(div);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
-
+            scrollChat();
             awaitingFeedback = true;
-            updateQaState();
         }
 
         // Bold only the changed/added words of the proofread output; copy stays plain.
@@ -797,42 +886,49 @@
         }
 
         async function sendMessage() {
-            if (isRecording) stopRecording();
-
             const message = userInput.value.trim();
             if (!message) return;
 
             const actionType = pendingAction;
             pendingAction = null;
-            updateQaState();
 
             addUserMessage(message);
             userInput.value = '';
             userInput.style.height = 'auto';
-            finalTranscript = '';
 
+            const historyToSend = chatHistory.slice(-12);
             const loading = addLoadingMessage();
             try {
-                const data = await api('/api/assist', { method: 'POST', body: { action: actionType, message } });
+                const data = await api('/api/assist', {
+                    method: 'POST',
+                    body: { action: actionType, message, history: historyToSend }
+                });
                 loading.remove();
 
+                let plainText;
                 if (data.type === 'describe') {
-                    const plain = 'FINDINGS:\n' + data.findings + '\n\nIMPRESSION:\n' + data.impression;
+                    plainText = 'FINDINGS:\n' + data.findings + '\n\nIMPRESSION:\n' + data.impression;
                     const html =
                         '<span class="section-label">FINDINGS</span>' + escapeHtml(data.findings) +
                         '\n\n<span class="section-label">IMPRESSION</span>' + escapeHtml(data.impression);
-                    addAssistantResponse({ html, plainText: plain, actionType, userText: message });
+                    addAssistantResponse({ html, plainText, actionType, userText: message });
                 } else if (actionType === 'proofread') {
+                    plainText = data.text;
                     addAssistantResponse({
                         html: proofreadHtml(message, data.text),
-                        plainText: data.text,
-                        actionType, userText: message
+                        plainText, actionType, userText: message
                     });
                 } else {
-                    addAssistantResponse({ html: escapeHtml(data.text), plainText: data.text, actionType, userText: message });
+                    plainText = data.text;
+                    addAssistantResponse({ html: escapeHtml(data.text), plainText, actionType, userText: message });
                 }
+
+                chatHistory.push({ role: 'user', content: message });
+                chatHistory.push({ role: 'assistant', content: plainText });
+                if (chatHistory.length > 24) chatHistory = chatHistory.slice(-24);
             } catch (e) {
-                loading.querySelector('.bubble').innerHTML = '<span style="color:var(--red)">⚠️ ' + escapeHtml(e.message) + '</span>';
+                loading.querySelector('.message-content').innerHTML =
+                    '<span style="color:#dc7a7a">⚠️ ' + escapeHtml(e.message) + '</span>';
             }
             userInput.focus();
         }
@@ -848,364 +944,6 @@
             this.style.height = 'auto';
             this.style.height = Math.min(this.scrollHeight, 240) + 'px';
         });
-
-        // ==================== Gmail ====================
-
-        let gmailConnected = false;
-
-        async function checkGmailStatus() {
-            try {
-                const data = await api('/api/gmail/status');
-                gmailConnected = data.connected;
-                updateGmailUI();
-            } catch (e) { console.error('Gmail status:', e); }
-        }
-        function updateGmailUI() {
-            if (gmailConnected) {
-                gmailStatusEl.textContent = '✅ Gmail Connected';
-                gmailStatusEl.classList.add('connected');
-            } else {
-                gmailStatusEl.textContent = '📧 Connect Gmail';
-                gmailStatusEl.classList.remove('connected');
-            }
-        }
-        function handleGmailClick() {
-            if (gmailConnected) {
-                if (confirm('Disconnect Gmail?')) {
-                    fetch('/api/gmail/disconnect').then(() => { gmailConnected = false; updateGmailUI(); });
-                }
-            } else {
-                window.location.href = '/auth/google';
-            }
-        }
-        checkGmailStatus();
-        const urlParams = new URLSearchParams(window.location.search);
-        if (urlParams.get('gmail') === 'connected') {
-            gmailConnected = true;
-            updateGmailUI();
-            window.history.replaceState({}, document.title, window.location.pathname);
-        }
-
-        function openEmailModal() {
-            if (!gmailConnected) { alert('Connect Gmail first via the header button.'); return; }
-            document.getElementById('emailModal').classList.add('active');
-            document.getElementById('emailTo').focus();
-        }
-        function closeEmailModal() {
-            document.getElementById('emailModal').classList.remove('active');
-            document.getElementById('emailTo').value = '';
-        }
-        async function sendEmail() {
-            const to = document.getElementById('emailTo').value.trim();
-            const subject = document.getElementById('emailSubject').value.trim();
-            const btn = document.getElementById('sendEmailBtn');
-            if (!to) { alert('Enter a recipient email address.'); return; }
-            btn.disabled = true; btn.textContent = 'Sending…';
-            try {
-                await api('/api/gmail/send', { method: 'POST', body: { to, subject, report: currentReportText } });
-                showToast('Email sent to ' + to);
-                closeEmailModal();
-            } catch (e) {
-                alert('Failed to send email: ' + e.message);
-            } finally {
-                btn.disabled = false; btn.textContent = 'Send';
-            }
-        }
-        document.getElementById('emailModal').addEventListener('click', function (e) {
-            if (e.target === this) closeEmailModal();
-        });
-        document.addEventListener('keydown', function (e) {
-            if (e.key === 'Escape') closeEmailModal();
-        });
-
-        // ==================== Dictation (PowerMic / WebHID) — preserved ====================
-
-        let ws = null;
-        let audioContext = null;
-        let mediaStream = null;
-        let audioWorkletNode = null;
-        let isRecording = false;
-        let finalTranscript = '';
-        let selectedMic = null;
-        let hidDevice = null;
-
-        const supportsHID = 'hid' in navigator;
-        if (!supportsHID) {
-            setupText.textContent = 'WebHID not supported - use Chrome/Edge';
-            setupBtn.style.display = 'none';
-        }
-
-        setupBtn.addEventListener('click', async () => {
-            try {
-                const devices = await navigator.hid.requestDevice({
-                    filters: [
-                        { vendorId: 0x0911 },  // Philips
-                        { vendorId: 0x095d },  // Philips
-                        { vendorId: 0x0554 },  // Nuance PowerMic III/IV
-                        { vendorId: 0x1532 }   // Nuance PowerMic (alternate)
-                    ]
-                });
-
-                if (devices.length === 0) {
-                    alert('No dictaphone found. Make sure your Philips or Nuance device is plugged in.');
-                    return;
-                }
-
-                hidDevice = devices[0];
-                await hidDevice.open();
-
-                const isNuance = hidDevice.vendorId === 0x0554 || hidDevice.vendorId === 0x1532;
-                const brand = isNuance ? 'Nuance' : 'Philips';
-                setupText.textContent = 'Connected: ' + hidDevice.productName + ' (' + brand + ')';
-                setupIcon.textContent = '✅';
-                setupBtn.textContent = 'Connected';
-                setupBtn.classList.add('connected');
-                setupBtn.disabled = true;
-                dictaphoneSetup.classList.add('connected');
-
-                hidDevice.addEventListener('inputreport', handleDictaphoneButton);
-
-                console.log(brand + ' dictaphone connected:', hidDevice.productName);
-                micStatus.textContent = 'Press dictaphone button to record';
-            } catch (error) {
-                console.error('Error connecting dictaphone:', error);
-                alert('Failed to connect dictaphone: ' + error.message);
-            }
-        });
-
-        function handleDictaphoneButton(event) {
-            const { data } = event;
-            const bytes = [];
-            for (let i = 0; i < data.byteLength; i++) {
-                bytes.push('0x' + data.getUint8(i).toString(16).padStart(2, '0'));
-            }
-            console.log('HID Event - All bytes:', bytes.join(', '), '| Raw:', Array.from(new Uint8Array(data.buffer)));
-
-            const byte0 = data.getUint8(0);
-            const byte1 = data.byteLength > 1 ? data.getUint8(1) : 0;
-            const byte2 = data.byteLength > 2 ? data.getUint8(2) : 0;
-
-            const anyButtonPressed = byte0 !== 0 || byte1 !== 0 || byte2 !== 0;
-            const allReleased = byte0 === 0 && byte1 === 0 && byte2 === 0;
-
-            if (anyButtonPressed && !isRecording) {
-                startRecording();
-            } else if (allReleased && isRecording) {
-                stopRecording();
-            }
-        }
-
-        async function detectMicrophone() {
-            try {
-                const devices = await navigator.mediaDevices.enumerateDevices();
-                const audioDevices = devices.filter(device => device.kind === 'audioinput');
-                selectedMic = audioDevices.find(device =>
-                    device.label.toLowerCase().includes('philips') ||
-                    device.label.toLowerCase().includes('speechmike') ||
-                    device.label.toLowerCase().includes('precision') ||
-                    device.label.toLowerCase().includes('nuance') ||
-                    device.label.toLowerCase().includes('powermic')
-                ) || audioDevices[0];
-                if (selectedMic) {
-                    micIndicator.classList.add('connected');
-                    micStatus.textContent = 'Microphone ready';
-                }
-            } catch (error) {
-                console.error('Error detecting microphone:', error);
-            }
-        }
-        detectMicrophone();
-
-        voiceBtn.addEventListener('click', () => {
-            if (isRecording) {
-                stopRecording();
-            } else {
-                finalTranscript = userInput.value || '';
-                startRecording();
-                setTimeout(() => userInput.focus(), 100);
-            }
-        });
-
-        function replacePunctuation(text) {
-            if (!text) return text;
-
-            text = text.replace(/(\d+)\.\s+(\d+)/g, '$1.DECIMAL.$2');
-            text = text.replace(/(\d+)\s+point\s+(\d+)/gi, '$1.DECIMAL.$2');
-
-            text = text
-                .replace(/\bP\./g, '.')
-                .replace(/\bP\b(?=[\s,;:!?]|$)/g, '.')
-                .replace(/\bPer\b(?=[\s,;:!?]|$)/g, '.')
-                .replace(/\s+\./g, '.')
-                .replace(/\bperiod\b/gi, '.')
-                .replace(/,(\s+[A-Z])/g, '.$1')
-                .replace(/\.{2,}/g, '.');
-
-            text = text
-                .replace(/\b(open|opening|left)\s+(paren|parenthesis|parentheses)\b/gi, '(')
-                .replace(/\b(close|closing|right)\s+(paren|parenthesis|parentheses)\b/gi, ')');
-
-            text = text
-                .replace(/\s+,/g, ',')
-                .replace(/\bcomma\b/gi, ',')
-                .replace(/\s+:/g, ':')
-                .replace(/\bcolon\b/gi, ':')
-                .replace(/\s+;/g, ';')
-                .replace(/\bsemicolon\b/gi, ';')
-                .replace(/\b(question\s+mark|questionmark)\b/gi, '?')
-                .replace(/\b(exclamation\s+mark|exclamation\s+point)\b/gi, '!')
-                .replace(/\b(dash|hyphen)\b/gi, '-')
-                .replace(/\bslash\b/gi, '/')
-                .replace(/\b(new\s+line|newline)\b/gi, '\n')
-                .replace(/\b(new\s+paragraph|newparagraph)\b/gi, '\n\n');
-
-            text = text.replace(/\.DECIMAL\./g, '.');
-
-            text = text
-                .replace(/([.,;:!?])\s*\1+/g, '$1')
-                .replace(/,\s*\./g, '.')
-                .replace(/\.\s*,/g, '.')
-                .replace(/;\s*[.,]/g, ';')
-                .replace(/:\s*[.,]/g, ':')
-                .replace(/\s+([.,;:!?])/g, '$1')
-                .replace(/([.,;:!?])(?![\s\d]|$)/g, '$1 ')
-                .replace(/\(\s+/g, '(')
-                .replace(/\s+\)/g, ')')
-                .replace(/\s+/g, ' ')
-                .trim();
-
-            return text;
-        }
-
-        // Dictation targets whichever text field last had focus (Assist input or Draft textarea)
-        function dictationTarget() {
-            const draftPage = document.getElementById('page-draft');
-            if (draftPage.classList.contains('active')) return document.getElementById('draftText');
-            return userInput;
-        }
-
-        async function startRecording() {
-            try {
-                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                ws = new WebSocket(protocol + '//' + window.location.host);
-
-                ws.onopen = async () => {
-                    const constraints = {
-                        audio: {
-                            deviceId: selectedMic ? { exact: selectedMic.deviceId } : undefined,
-                            channelCount: 1,
-                            sampleRate: 16000,
-                            echoCancellation: true,
-                            noiseSuppression: true,
-                            autoGainControl: true
-                        }
-                    };
-
-                    mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-
-                    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-                    const source = audioContext.createMediaStreamSource(mediaStream);
-
-                    const processorCode = 'class AudioProcessor extends AudioWorkletProcessor { process(inputs) { const input = inputs[0]; if (input.length > 0) { const samples = input[0]; const pcm = new Int16Array(samples.length); for (let i = 0; i < samples.length; i++) { pcm[i] = Math.max(-32768, Math.min(32767, samples[i] * 32768)); } this.port.postMessage(pcm.buffer); } return true; } } registerProcessor("audio-processor", AudioProcessor);';
-
-                    await audioContext.audioWorklet.addModule('data:text/javascript,' + encodeURIComponent(processorCode));
-
-                    audioWorkletNode = new AudioWorkletNode(audioContext, 'audio-processor');
-                    audioWorkletNode.port.onmessage = (event) => {
-                        if (ws && ws.readyState === WebSocket.OPEN) {
-                            ws.send(event.data);
-                        }
-                    };
-
-                    source.connect(audioWorkletNode);
-                    audioWorkletNode.connect(audioContext.destination);
-
-                    isRecording = true;
-                    voiceBtn.classList.add('recording');
-                    micIndicator.classList.add('recording');
-                    micStatus.textContent = 'Recording... Click to stop';
-                };
-
-                ws.onmessage = (event) => {
-                    const data = JSON.parse(event.data);
-
-                    if (data.type === 'transcript') {
-                        const target = dictationTarget();
-                        const selectionStart = target.selectionStart;
-                        const selectionEnd = target.selectionEnd;
-                        const hasSelection = selectionStart !== selectionEnd;
-
-                        if (data.is_final) {
-                            const newText = replacePunctuation((data.text || '').trim());
-                            if (newText) {
-                                let currentValue = target.value.replace(/\[.*?\]/g, '');
-                                let updatedValue;
-                                let newCursorPos;
-
-                                if (hasSelection) {
-                                    updatedValue = currentValue.substring(0, selectionStart) +
-                                                  newText + ' ' +
-                                                  currentValue.substring(selectionEnd);
-                                    newCursorPos = selectionStart + newText.length + 1;
-                                } else {
-                                    if (currentValue.length === 0) {
-                                        updatedValue = newText;
-                                        newCursorPos = newText.length;
-                                    } else if (selectionStart >= currentValue.length) {
-                                        updatedValue = currentValue + ' ' + newText;
-                                        newCursorPos = updatedValue.length;
-                                    } else {
-                                        updatedValue = currentValue.substring(0, selectionStart) +
-                                                      newText + ' ' +
-                                                      currentValue.substring(selectionStart);
-                                        newCursorPos = selectionStart + newText.length + 1;
-                                    }
-                                }
-
-                                target.value = updatedValue;
-                                finalTranscript = updatedValue;
-
-                                target.setSelectionRange(newCursorPos, newCursorPos);
-                                target.focus();
-                            }
-                        }
-
-                        if (target === userInput) {
-                            target.style.height = 'auto';
-                            target.style.height = Math.min(target.scrollHeight, 240) + 'px';
-                        }
-                    } else if (data.type === 'error') {
-                        console.error('Transcription error:', data.message);
-                        stopRecording();
-                    }
-                };
-
-                ws.onerror = (error) => {
-                    console.error('WebSocket error:', error);
-                    stopRecording();
-                };
-            } catch (error) {
-                console.error('Error starting recording:', error);
-                alert('Could not start recording: ' + error.message);
-            }
-        }
-
-        function stopRecording() {
-            isRecording = false;
-            voiceBtn.classList.remove('recording');
-            micIndicator.classList.remove('recording');
-            micStatus.textContent = hidDevice ? 'Press dictaphone button to record' : 'Click mic to record';
-
-            if (audioWorkletNode) audioWorkletNode.disconnect();
-            if (audioContext) audioContext.close();
-            if (mediaStream) mediaStream.getTracks().forEach(track => track.stop());
-            if (ws) ws.close();
-
-            audioWorkletNode = null;
-            audioContext = null;
-            mediaStream = null;
-            ws = null;
-        }
 
         // ==================== Modal helpers (promise-based) ====================
 
@@ -1261,8 +999,8 @@
         let currentShift = null;
         let reportType = 'complete';
         let studyTypes = [];
-        let currentEdits = [];        // [{original_text, suggested_text, reason, category, status, pos}]
-        let reviewedRaw = '';         // the text the review ran against
+        let currentEdits = [];
+        let reviewedRaw = '';
         let draftInited = false;
         let saving = false;
 
@@ -1299,7 +1037,6 @@
             }
         }
 
-        // --- Study type combobox ---
         function renderStudyTypeDropdown() {
             const q = studyTypeInput.value.trim().toLowerCase();
             const matches = studyTypes.filter(t => !q || t.name.toLowerCase().includes(q));
@@ -1327,7 +1064,6 @@
         studyTypeInput.addEventListener('input', renderStudyTypeDropdown);
         studyTypeInput.addEventListener('blur', () => setTimeout(() => { studyTypeDropdown.style.display = 'none'; }, 150));
 
-        // --- Report type toggle ---
         document.getElementById('segPrelim').addEventListener('click', function () {
             reportType = 'prelim';
             this.classList.add('active');
@@ -1339,7 +1075,6 @@
             document.getElementById('segPrelim').classList.remove('active');
         });
 
-        // --- Start New Shift (only manual way to create a shift) ---
         document.getElementById('newShiftBtn').addEventListener('click', async () => {
             const name = await askShiftName(autoShiftName());
             if (!name) return;
@@ -1353,9 +1088,7 @@
             }
         });
 
-        // --- Shift smart-prompt logic (ask, never auto-create) ---
         function shiftBoundaryCrossed(last, now) {
-            // Boundaries at 08:00 and 17:00 local time between last and now
             const d = new Date(last.getFullYear(), last.getMonth(), last.getDate());
             for (; d <= now; d.setDate(d.getDate() + 1)) {
                 for (const h of [8, 17]) {
@@ -1366,12 +1099,10 @@
             return false;
         }
 
-        // Resolves to the shift the report should save to, or null if the user cancelled.
         async function resolveShiftForSave() {
             await loadCurrentShift();
             const now = new Date();
 
-            // First ever use / fresh database: create the first shift silently
             if (!currentShift) {
                 const data = await api('/api/shifts', { method: 'POST', body: { name: autoShiftName(now) } });
                 currentShift = data.shift;
@@ -1390,18 +1121,15 @@
                 const choice = await askNewShift(detail);
                 if (choice === 'new') {
                     const name = await askShiftName(autoShiftName(now));
-                    if (name === null) return null; // cancelled — abort the save
+                    if (name === null) return null;
                     const data = await api('/api/shifts', { method: 'POST', body: { name } });
                     currentShift = data.shift;
                     document.getElementById('currentShiftName').textContent = currentShift.name;
                 }
-                // 'same' → fall through; last_activity_at updates on save, so we
-                // won't ask again until the next 4-hour gap / boundary crossing.
             }
             return currentShift;
         }
 
-        // --- Review flow ---
         document.getElementById('reviewSaveBtn').addEventListener('click', async () => {
             const text = draftText.value.trim();
             if (!text) { setDraftStatus('Paste a report first.', 'error'); return; }
@@ -1414,7 +1142,6 @@
                 currentEdits = locateEdits(reviewedRaw, data.edits || []);
                 setDraftStatus('');
                 if (currentEdits.length === 0) {
-                    // Nothing to review — save directly
                     await persistReport();
                 } else {
                     enterReviewMode();
@@ -1442,10 +1169,9 @@
             metaPanel.appendChild(b);
         }
 
-        // Locate each edit's position in the text (first occurrence, sequential, non-overlapping)
         function locateEdits(text, edits) {
             const located = [];
-            const used = []; // occupied [start, end) ranges
+            const used = [];
             for (const e of edits) {
                 let from = 0, pos = -1;
                 while (true) {
@@ -1455,7 +1181,7 @@
                     if (!used.some(([s, en]) => pos < en && end > s)) break;
                     from = pos + 1;
                 }
-                if (pos === -1) continue; // can't locate — drop
+                if (pos === -1) continue;
                 used.push([pos, pos + e.original_text.length]);
                 located.push({ ...e, pos, status: 'pending' });
             }
@@ -1480,7 +1206,6 @@
         document.getElementById('cancelReviewBtn').addEventListener('click', exitReviewMode);
 
         function renderReview() {
-            // Preview with inline highlights
             let html = '';
             let cursor = 0;
             for (const e of currentEdits) {
@@ -1498,18 +1223,17 @@
             html += escapeHtml(reviewedRaw.slice(cursor));
             draftPreview.innerHTML = html;
 
-            // Cards
             const pending = currentEdits.filter(e => e.status === 'pending').length;
             document.getElementById('editsCount').textContent =
                 currentEdits.length + ' total, ' + pending + ' undecided';
             editsList.innerHTML = '';
-            currentEdits.forEach((e, idx) => {
+            currentEdits.forEach((e) => {
                 const ctxBefore = reviewedRaw.slice(Math.max(0, e.pos - 40), e.pos);
                 const ctxAfter = reviewedRaw.slice(e.pos + e.original_text.length, e.pos + e.original_text.length + 40);
                 const card = document.createElement('div');
                 card.className = 'edit-card ' + e.status;
                 card.innerHTML =
-                    '<span class="edit-cat ' + e.category + '">' + e.category + '</span>' +
+                    '<span class="edit-cat">' + e.category + '</span>' +
                     '<div class="edit-context"><span class="ctx">…' + escapeHtml(ctxBefore) + '</span>' +
                     '<span class="edit-orig">' + escapeHtml(e.original_text) + '</span> → ' +
                     '<span class="edit-sugg">' + escapeHtml(e.suggested_text) + '</span>' +
@@ -1610,7 +1334,7 @@
         const finalStatusEl = document.getElementById('finalStatus');
 
         let finalShifts = [];
-        let finalReport = null;      // full row of selected report
+        let finalReport = null;
         let finalDataStale = true;
 
         async function initFinalPage() {
@@ -1628,7 +1352,6 @@
                 shiftSelect.innerHTML = finalShifts.map(s =>
                     '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'
                 ).join('');
-                // Default: last selected this session, else the current (newest) shift
                 const remembered = sessionStorage.getItem('finalShiftId');
                 shiftSelect.value = (remembered && finalShifts.some(s => s.id === remembered))
                     ? remembered
@@ -1698,12 +1421,11 @@
             }
         }
 
-        // Word-level LCS diff: additions/changes amber bold, deletions faint strikethrough
         function renderFinalDiff() {
             if (!finalReport) return;
             const finalVal = finalTextEl.value;
             if (!finalVal.trim()) {
-                finalDiffView.innerHTML = '<span style="color:var(--text-dim); font-style:italic">Paste the final report above to see corrections.</span>';
+                finalDiffView.innerHTML = '<span style="color:#808080; font-style:italic">Paste the final report above to see corrections.</span>';
                 return;
             }
             finalDiffView.innerHTML = diffWords(finalReport.draft_text, finalVal).map(p => {

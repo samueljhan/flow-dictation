@@ -3,20 +3,9 @@ const Anthropic = require('@anthropic-ai/sdk');
 const { createClient } = require('@supabase/supabase-js');
 const { google } = require('googleapis');
 const cors = require('cors');
-const multer = require('multer');
-const fs = require('fs');
-const http = require('http');
-const WebSocket = require('ws');
-const crypto = require('crypto');
-const { TranscribeStreamingClient, StartMedicalStreamTranscriptionCommand } = require("@aws-sdk/client-transcribe-streaming");
-const { PassThrough } = require('stream');
 require('dotenv').config();
 
 const app = express();
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
-
-const upload = multer({ dest: 'uploads/' });
 const PORT = process.env.PORT || 8080;
 
 app.use(cors());
@@ -55,33 +44,21 @@ const oauth2Client = new google.auth.OAuth2(
 // Simple in-memory token storage (for single user)
 let userTokens = null;
 
-// AWS Transcribe Medical configuration
-const transcribeClient = new TranscribeStreamingClient({
-  region: process.env.AWS_REGION || 'us-east-1',
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-  }
-});
-
 console.log('=== Environment Check ===');
 console.log('Anthropic:', !!process.env.ANTHROPIC_API_KEY ? '✓' : '✗');
 console.log('Supabase:', !!supabase ? '✓' : '✗');
 console.log('Google Client ID:', !!process.env.GOOGLE_CLIENT_ID ? '✓' : '✗');
 console.log('Google Client Secret:', !!process.env.GOOGLE_CLIENT_SECRET ? '✓' : '✗');
-console.log('AWS Access Key:', !!process.env.AWS_ACCESS_KEY_ID ? '✓' : '✗');
-console.log('AWS Secret Key:', !!process.env.AWS_SECRET_ACCESS_KEY ? '✓' : '✗');
-console.log('AWS Region:', process.env.AWS_REGION || 'us-east-1');
 console.log('========================');
 
 // ============ Claude helpers ============
 
-async function claudeText({ model, system, message, maxTokens }) {
+async function claudeText({ model, system, message, messages, maxTokens }) {
   const response = await anthropic.messages.create({
     model,
     max_tokens: maxTokens,
     system,
-    messages: [{ role: 'user', content: message }]
+    messages: messages || [{ role: 'user', content: message }]
   });
   return response.content
     .filter(block => block.type === 'text')
@@ -119,7 +96,8 @@ Rules:
 - Preserve the clinical meaning of anything you rewrite. Never invent findings, measurements, or comparisons that were not provided.
 - Preserve line breaks where they exist in the user's text.
 - Never include patient names, MRNs, dates of birth, or other PHI.
-- No preamble, no commentary, no sign-off — return only the requested content.`;
+- No preamble, no commentary, no sign-off — return only the requested content.
+- You may be given recent conversation history. Use it to interpret follow-ups naturally: "make it shorter", "more formal", "now do the impression", "same but for the left side" all refer to your previous answer. When the user moves on to a new, unrelated request, treat it as a fresh task and do not carry over earlier content.`;
 
 const ASSIST_ACTIONS = {
   describe: `The user is describing an imaging finding they are struggling to word. Suggest professional report wording for it.
@@ -248,7 +226,7 @@ DO NOT include: Patient names, MRNs, dates of birth, exam dates, physician names
 
 app.post('/api/assist', async (req, res) => {
   try {
-    const { action, message } = req.body;
+    const { action, message, history } = req.body;
     if (!message || !message.trim()) {
       return res.status(400).json({ error: 'Message is required' });
     }
@@ -256,10 +234,22 @@ app.post('/api/assist', async (req, res) => {
     const instruction = action && ASSIST_ACTIONS[action] ? ASSIST_ACTIONS[action] : null;
     const userMessage = instruction ? `${instruction}\n\n${message}` : message;
 
+    // Recent conversation history so follow-ups ("shorter", "now the impression") work
+    const messages = [];
+    if (Array.isArray(history)) {
+      for (const h of history.slice(-12)) {
+        if ((h.role === 'user' || h.role === 'assistant') &&
+            typeof h.content === 'string' && h.content.trim()) {
+          messages.push({ role: h.role, content: h.content.slice(0, 20000) });
+        }
+      }
+    }
+    messages.push({ role: 'user', content: userMessage });
+
     const text = await claudeText({
       model: SONNET,
       system: ASSIST_SYSTEM,
-      message: userMessage,
+      messages,
       maxTokens: 4000
     });
 
@@ -724,138 +714,6 @@ app.post('/api/gmail/send', async (req, res) => {
   }
 });
 
-// ============ WebSocket for Transcription (PowerMic / dictation) ============
-
-wss.on('connection', async (clientWs) => {
-  console.log('Client connected for AWS Transcribe Medical');
-
-  let transcribeStream = null;
-  let audioStream = null;
-  let isTranscribing = false;
-  let sessionCount = 0;
-
-  clientWs.on('message', async (message) => {
-    if (!Buffer.isBuffer(message)) return;
-
-    if (!isTranscribing && !transcribeStream) {
-      try {
-        isTranscribing = true;
-        sessionCount++;
-        console.log(`Starting session #${sessionCount}`);
-
-        audioStream = new PassThrough();
-        audioStream.setMaxListeners(0);
-
-        const sessionId = crypto.randomBytes(16).toString('hex');
-
-        const audioBuffer = Buffer.isBuffer(message) ? message : Buffer.from(message);
-        audioStream.write(audioBuffer);
-
-        const command = new StartMedicalStreamTranscriptionCommand({
-          LanguageCode: 'en-US',
-          MediaSampleRateHertz: 16000,
-          MediaEncoding: 'pcm',
-          Specialty: 'RADIOLOGY',
-          Type: 'DICTATION',
-          AudioStream: (async function* () {
-            for await (const chunk of audioStream) {
-              yield { AudioEvent: { AudioChunk: chunk } };
-            }
-          })()
-        });
-
-        const response = await transcribeClient.send(command);
-        transcribeStream = response.TranscriptResultStream;
-
-        console.log('✅ AWS Transcribe Medical session started:', sessionId);
-
-        (async () => {
-          try {
-            for await (const event of transcribeStream) {
-              if (event.TranscriptEvent) {
-                const results = event.TranscriptEvent.Transcript.Results;
-                for (const result of results) {
-                  if (!result.IsPartial) {
-                    const transcript = result.Alternatives[0].Transcript;
-                    if (transcript && transcript.trim()) {
-                      console.log('Final transcript:', transcript);
-                      if (clientWs.readyState === WebSocket.OPEN) {
-                        clientWs.send(JSON.stringify({
-                          type: 'transcript',
-                          text: transcript,
-                          is_final: true,
-                          confidence: result.Alternatives[0].Items?.[0]?.Confidence
-                        }));
-                      }
-                    }
-                  } else {
-                    const transcript = result.Alternatives[0].Transcript;
-                    if (transcript && transcript.trim()) {
-                      if (clientWs.readyState === WebSocket.OPEN) {
-                        clientWs.send(JSON.stringify({
-                          type: 'transcript',
-                          text: transcript,
-                          is_final: false
-                        }));
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          } catch (error) {
-            if (error.name !== 'AbortError') {
-              console.error('Transcription stream error:', error.message);
-            }
-          } finally {
-            console.log('Transcription stream ended');
-            isTranscribing = false;
-            transcribeStream = null;
-          }
-        })();
-
-      } catch (error) {
-        console.error('Error starting AWS Transcribe Medical:', error);
-        isTranscribing = false;
-        transcribeStream = null;
-        if (clientWs.readyState === WebSocket.OPEN) {
-          clientWs.send(JSON.stringify({
-            type: 'error',
-            message: 'Transcription error: ' + error.message
-          }));
-        }
-      }
-    } else if (audioStream && isTranscribing) {
-      try {
-        const audioBuffer = Buffer.isBuffer(message) ? message : Buffer.from(message);
-        audioStream.write(audioBuffer);
-      } catch (error) {
-        console.error('Error sending audio to AWS:', error);
-      }
-    }
-  });
-
-  clientWs.on('close', () => {
-    console.log('Client disconnected');
-    isTranscribing = false;
-    if (audioStream) {
-      audioStream.end();
-      audioStream = null;
-    }
-    transcribeStream = null;
-  });
-
-  clientWs.on('error', (error) => {
-    console.error('WebSocket error:', error);
-    isTranscribing = false;
-    if (audioStream) {
-      audioStream.end();
-      audioStream = null;
-    }
-    transcribeStream = null;
-  });
-});
-
 // ============ Legacy Report Generation (nuclear medicine) ============
 
 app.post('/api/generate-report', async (req, res) => {
@@ -882,17 +740,13 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     service: 'Flow Dictation API',
-    transcription: 'AWS Transcribe Medical',
     llm: `${SONNET} + ${HAIKU}`,
-    supabase: supabase ? 'configured' : 'not configured',
-    gmail: userTokens ? 'connected' : 'not connected'
+    supabase: supabase ? 'configured' : 'not configured'
   });
 });
 
-server.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🏥 Flow Dictation running on port ${PORT}`);
-  console.log(`🩺 AWS Transcribe Medical enabled`);
   console.log(`✨ Claude: ${SONNET} (reports) + ${HAIKU} (lightweight)`);
   console.log(`🗄️  Supabase: ${supabase ? 'connected' : 'NOT CONFIGURED'}`);
-  console.log(`📧 Gmail integration ready`);
 });

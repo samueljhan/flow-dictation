@@ -161,6 +161,17 @@ Radiopaedia (radiopaedia.org) is the preferred source. Search it first, and incl
 
 Do not search for questions you can answer completely from knowledge (basic anatomy, simple definitions) — in those cases include no references rather than padding. Never fabricate a URL: only include links returned by search.`;
 
+// Opus writes noticeably longer than Fable by default. Length responds to
+// prompting, not to max_tokens or effort — so nudge it when Opus is answering.
+const RAD_QA_BREVITY_ADDENDUM = `Keep this answer tight — a few short paragraphs, and shorter still for simple questions. Lead with the direct answer, then only the detail that changes what the reader would do next. Skip preamble, restating the question, exhaustive differentials, and drop-in report templates unless the resident explicitly asks for them. Prefer prose over stacked headers and bullet lists.`;
+
+function buildRadQaSystem(model, searchEnabled) {
+  let s = RAD_QA_SYSTEM_PROMPT;
+  if (/opus/i.test(model)) s += '\n' + RAD_QA_BREVITY_ADDENDUM;
+  if (searchEnabled) s += '\n' + RAD_QA_REFERENCES_ADDENDUM;
+  return s;
+}
+
 const RAD_QA_SEARCH_TOOL = {
   type: 'web_search_20250305',
   name: 'web_search',
@@ -412,9 +423,6 @@ app.post('/api/assist', async (req, res) => {
     // injection). Optionally search a whitelist of radiology references.
     if (action === 'radqa') {
       const useRefs = req.body.references !== false; // default ON
-      const system = useRefs
-        ? RAD_QA_SYSTEM_PROMPT + '\n' + RAD_QA_REFERENCES_ADDENDUM
-        : RAD_QA_SYSTEM_PROMPT;
 
       let msgs = messages;
       let text = '';
@@ -442,7 +450,7 @@ app.post('/api/assist', async (req, res) => {
           // Referenced answers run long, and the References line comes last —
           // too low a ceiling truncates it away.
           max_tokens: 8000,
-          system: searchEnabled ? system : RAD_QA_SYSTEM_PROMPT,
+          system: buildRadQaSystem(model, searchEnabled),
           messages: msgs,
           betas: ['server-side-fallback-2026-07-01'],
           fallbacks: 'default',

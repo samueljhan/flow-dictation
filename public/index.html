@@ -179,6 +179,13 @@
         .message.nav .message-content { max-width: 100%; flex: 1; background: transparent; border: none; padding: 0; }
 
         .message-content strong { color: #ffffff; font-weight: 700; }
+        .message-content a { color: #d0d0d0; text-decoration: underline; word-break: break-all; }
+        .message-content a:hover { color: #ffffff; }
+        .ref-toggle {
+            display: flex; align-items: center; gap: 7px;
+            font-size: 12px; color: #909090; padding: 0 8px 10px; cursor: pointer;
+        }
+        .ref-toggle input { accent-color: #909090; }
         .section-label {
             display: block; font-weight: 700; color: #909090; font-size: 11px;
             letter-spacing: 0.8px; margin-bottom: 2px;
@@ -467,6 +474,9 @@
                 </div>
             </div>
             <div class="input-container">
+                <label class="ref-toggle" id="refToggle" style="display:none">
+                    <input type="checkbox" id="refCheckbox" checked> Include references (searches Radiopaedia, ACR, RadioGraphics…)
+                </label>
                 <div class="input-wrapper">
                     <textarea id="userInput" placeholder="Describe what you want to do…" rows="1"></textarea>
                     <button id="sendBtn" title="Send message">
@@ -749,6 +759,7 @@
 
         function armAction(action) {
             pendingAction = action;
+            document.getElementById('refToggle').style.display = action === 'radqa' ? 'flex' : 'none';
             addHintMessage(ACTION_LABELS[action] + ' — ' + ACTION_HINTS[action]);
             userInput.focus();
         }
@@ -904,12 +915,20 @@
                 .join('');
         }
 
+        // Turn escaped URLs into clickable links (new tab); trailing punctuation stays outside
+        function linkifyEscaped(escapedHtml) {
+            return escapedHtml.replace(/(https?:\/\/[^\s<>"']+?)([.,;:!?)\]]*)(?=\s|$)/g,
+                '<a href="$1" target="_blank" rel="noopener">$1</a>$2');
+        }
+
         async function sendMessage() {
             const message = userInput.value.trim();
             if (!message) return;
 
             const actionType = pendingAction;
             pendingAction = null;
+            const includeRefs = document.getElementById('refCheckbox').checked;
+            document.getElementById('refToggle').style.display = 'none';
 
             addUserMessage(message);
             userInput.value = '';
@@ -920,7 +939,7 @@
             try {
                 const data = await api('/api/assist', {
                     method: 'POST',
-                    body: { action: actionType, message, history: historyToSend }
+                    body: { action: actionType, message, history: historyToSend, references: includeRefs }
                 });
                 loading.remove();
 
@@ -938,12 +957,21 @@
                         plainText, actionType, userText: message
                     });
                 } else if (actionType === 'radqa') {
-                    // Teaching answers may use **bold** — render it; copy stays plain
+                    // Teaching answers may use **bold**; URLs become clickable links.
+                    // Cited URLs not already written into the answer are appended.
+                    const extraCites = (data.citations || []).filter(c => c.url && !data.text.includes(c.url));
                     plainText = data.text.replace(/\*\*(.+?)\*\*/g, '$1');
-                    addAssistantResponse({
-                        html: escapeHtml(data.text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>'),
-                        plainText, actionType, userText: message
-                    });
+                    let html = linkifyEscaped(escapeHtml(data.text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>'));
+                    if (extraCites.length) {
+                        plainText += '\n\nReferences:\n' +
+                            extraCites.map(c => c.url + (c.title ? ' — ' + c.title : '')).join('\n');
+                        html += '\n\n<span class="section-label">REFERENCES</span>' +
+                            extraCites.map(c =>
+                                '<a href="' + escapeHtml(c.url) + '" target="_blank" rel="noopener">' + escapeHtml(c.url) + '</a>' +
+                                (c.title ? ' — ' + escapeHtml(c.title) : '')
+                            ).join('\n');
+                    }
+                    addAssistantResponse({ html, plainText, actionType, userText: message });
                 } else {
                     plainText = data.text;
                     addAssistantResponse({ html: escapeHtml(data.text), plainText, actionType, userText: message });

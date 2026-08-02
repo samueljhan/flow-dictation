@@ -2,973 +2,623 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Flow Dictation - Medical Report Generator</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flow Dictation</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --bg: #1a1a1a;
+            --panel: #2a2a2a;
+            --panel-2: #333333;
+            --border: #3d3d3d;
+            --text: #e8e8e8;
+            --text-dim: #9a9a9a;
+            --accent: #4a9eff;
+            --accent-dim: #2d6db3;
+            --green: #4caf7d;
+            --red: #e05c5c;
+            --amber: #e0a832;
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: #1a1a1a;
-            min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
-        }
-
-        .container {
-            background: #2a2a2a;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.5);
-            max-width: 1000px;
-            width: 100%;
-            height: 90vh;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            height: 100vh;
             display: flex;
             flex-direction: column;
-            overflow: hidden;
         }
 
-        .header {
-            background: #1f1f1f;
-            color: #e0e0e0;
-            padding: 25px 30px;
-            border-radius: 20px 20px 0 0;
-            border-bottom: 1px solid #3a3a3a;
+        /* ---------- Header ---------- */
+        header {
             display: flex;
             align-items: center;
-            gap: 12px;
-        }
-        
-        .header-logo {
-            width: 48px;
-            height: 48px;
-            object-fit: contain;
-            flex-shrink: 0;
-            user-select: none;
-            -webkit-user-select: none;
-            -moz-user-select: none;
-            -ms-user-select: none;
-            pointer-events: none;
-            -webkit-user-drag: none;
-            -khtml-user-drag: none;
-            -moz-user-drag: none;
-            -o-user-drag: none;
-            user-drag: none;
-        }
-        
-        .header-text {
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-            flex: 1;
-        }
-
-        .header h1 { 
-            color: #b0b0b0;
-            font-size: 26px;
-            font-weight: 600;
-            margin: 0;
-            line-height: 1.1;
-        }
-
-        .header p {
-            opacity: 0.7;
-            font-size: 13px;
-            margin: 0;
-            line-height: 1.2;
-        }
-
-        .gmail-status {
-            font-size: 12px;
-            padding: 6px 12px;
-            border-radius: 6px;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-
-        .gmail-status.connected {
-            background: #1f3a2e;
-            color: #a0e0b0;
-        }
-
-        .gmail-status.disconnected {
-            background: #3a3a3a;
-            color: #909090;
-        }
-
-        .gmail-status:hover {
-            opacity: 0.8;
-        }
-
-        .dictaphone-setup {
-            padding: 12px 30px;
-            background: #1f4a2e;
-            border-bottom: 1px solid #3a3a3a;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-
-        .dictaphone-setup.connected {
-            background: #1f3a2e;
-        }
-
-        .setup-info {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-size: 13px;
-            color: #a0e0b0;
-        }
-
-        .setup-btn {
-            background: #28a745;
-            color: white;
-            border: none;
-            padding: 7px 14px;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 13px;
-            transition: all 0.3s;
-        }
-
-        .setup-btn:hover {
-            background: #218838;
-        }
-
-        .setup-btn.connected {
-            background: #666;
-        }
-
-        .microphone-status {
-            padding: 8px 30px;
-            background: #242424;
-            border-bottom: 1px solid #3a3a3a;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-size: 12px;
-            color: #909090;
-        }
-
-        .mic-indicator {
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            background: #666;
-        }
-
-        .mic-indicator.connected {
-            background: #28a745;
-            animation: pulse-green 2s infinite;
-        }
-
-        .mic-indicator.recording {
-            background: #dc3545;
-            animation: pulse-red 1s infinite;
-        }
-
-        @keyframes pulse-green {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-
-        @keyframes pulse-red {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.7; transform: scale(1.2); }
-        }
-
-        .specialty-selector {
-            padding: 10px 30px;
-            background: #242424;
-            border-bottom: 1px solid #3a3a3a;
-        }
-
-        .specialty-selector label {
-            font-weight: 400;
-            color: #909090;
-            margin-right: 10px;
-            font-size: 12px;
-        }
-
-        .specialty-selector select {
-            padding: 5px 10px;
-            border: 1px solid #3a3a3a;
-            border-radius: 6px;
-            font-size: 12px;
-            background: #2a2a2a;
-            color: #909090;
-            cursor: pointer;
-        }
-
-        .chat-container {
-            flex: 1;
-            overflow-y: auto;
-            padding: 30px;
-            padding-bottom: 20px;
-            background: #2a2a2a;
-        }
-
-        .message {
-            margin-bottom: 20px;
-            display: flex;
-            gap: 15px;
-            animation: slideIn 0.3s ease-out;
-        }
-
-        @keyframes slideIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .message.user { flex-direction: row-reverse; }
-
-        .avatar {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 600;
-            font-size: 14px;
-            flex-shrink: 0;
-        }
-
-        .user .avatar { background: #404040; color: #e0e0e0; }
-        .assistant .avatar { background: #353535; color: #b0b0b0; }
-
-        .message-content {
-            max-width: 70%;
-            padding: 12px 18px;
-            border-radius: 18px;
-            line-height: 1.5;
-            font-size: 14px;
-        }
-
-        .user .message-content {
-            background: #3a3a3a;
-            color: #e0e0e0;
-            border-radius: 18px 18px 4px 18px;
-        }
-
-        .assistant .message-content {
-            background: #333333;
-            color: #d0d0d0;
-            border: 1px solid #404040;
-            border-radius: 18px 18px 18px 4px;
-        }
-
-        .report-section { margin: 15px 0; }
-
-        .report-section h3 {
-            font-size: 13px;
-            font-weight: 700;
-            color: #909090;
-            margin-bottom: 8px;
-            text-transform: uppercase;
-        }
-
-        .report-buttons {
-            display: flex;
-            gap: 8px;
-            margin-top: 10px;
-            flex-wrap: wrap;
-        }
-
-        .copy-btn, .email-btn {
-            background: #404040;
-            color: #e0e0e0;
-            border: none;
-            padding: 7px 14px;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 12px;
-            transition: all 0.3s;
-        }
-
-        .copy-btn:hover, .email-btn:hover { background: #505050; }
-        .copy-btn.copied { background: #28a745; }
-        .email-btn.sent { background: #28a745; }
-        .email-btn:disabled { 
-            background: #333; 
-            color: #666; 
-            cursor: not-allowed; 
-        }
-
-        /* Email Modal */
-        .modal-overlay {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.7);
-            z-index: 1000;
-            justify-content: center;
-            align-items: center;
-        }
-
-        .modal-overlay.active {
-            display: flex;
-        }
-
-        .modal {
-            background: #2a2a2a;
-            border-radius: 12px;
-            padding: 24px;
-            width: 90%;
-            max-width: 400px;
-            border: 1px solid #404040;
-        }
-
-        .modal h3 {
-            color: #e0e0e0;
-            margin-bottom: 16px;
-            font-size: 18px;
-        }
-
-        .modal input {
-            width: 100%;
-            padding: 12px;
-            border: 1px solid #404040;
-            border-radius: 8px;
-            background: #333;
-            color: #e0e0e0;
-            font-size: 14px;
-            margin-bottom: 12px;
-        }
-
-        .modal input:focus {
-            outline: none;
-            border-color: #505050;
-        }
-
-        .modal-buttons {
-            display: flex;
-            gap: 10px;
-            justify-content: flex-end;
-        }
-
-        .modal-btn {
+            gap: 24px;
             padding: 10px 20px;
-            border-radius: 6px;
-            border: none;
-            cursor: pointer;
-            font-size: 14px;
-            transition: all 0.2s;
-        }
-
-        .modal-btn.cancel {
-            background: #404040;
-            color: #e0e0e0;
-        }
-
-        .modal-btn.send {
-            background: #28a745;
-            color: white;
-        }
-
-        .modal-btn:hover {
-            opacity: 0.9;
-        }
-
-        .modal-btn:disabled {
-            background: #333;
-            color: #666;
-            cursor: not-allowed;
-        }
-
-        /* ChatGPT-style input container */
-        .input-container {
-            padding: 15px 20px 20px;
-            background: #242424;
-            border-top: 1px solid #3a3a3a;
-        }
-
-        .input-wrapper {
-            background: #3a3a3a;
-            border: 1px solid #4a4a4a;
-            border-radius: 28px;
-            padding: 8px 16px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            transition: border-color 0.2s;
-        }
-
-        .input-wrapper:focus-within {
-            border-color: #606060;
-        }
-
-        .attach-btn {
-            background: none;
-            border: none;
-            cursor: pointer;
-            padding: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 50%;
-            transition: background 0.2s;
+            background: var(--panel);
+            border-bottom: 1px solid var(--border);
             flex-shrink: 0;
         }
-
-        .attach-btn:hover {
-            background: #4a4a4a;
+        .brand { font-size: 17px; font-weight: 700; letter-spacing: 0.3px; }
+        .brand span { color: var(--accent); }
+        .tabs { display: flex; gap: 4px; }
+        .tab {
+            background: none; border: none; color: var(--text-dim);
+            font-size: 14px; font-weight: 600; padding: 8px 18px;
+            border-radius: 8px; cursor: pointer;
         }
-
-        .attach-btn svg {
-            width: 20px;
-            height: 20px;
-            stroke: #909090;
+        .tab:hover { color: var(--text); background: var(--panel-2); }
+        .tab.active { color: #fff; background: var(--accent-dim); }
+        .header-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+        .gmail-btn {
+            background: var(--panel-2); border: 1px solid var(--border); color: var(--text-dim);
+            font-size: 12px; padding: 6px 12px; border-radius: 6px; cursor: pointer;
         }
+        .gmail-btn.connected { color: var(--green); border-color: var(--green); }
 
+        main { flex: 1; overflow: hidden; }
+        .page { display: none; height: 100%; }
+        .page.active { display: flex; flex-direction: column; }
+
+        button { font-family: inherit; }
+        textarea, input, select {
+            font-family: inherit; background: var(--bg); color: var(--text);
+            border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 14px;
+        }
+        textarea:focus, input:focus, select:focus { outline: none; border-color: var(--accent); }
+        textarea { resize: none; line-height: 1.55; }
+
+        .primary {
+            background: var(--accent); color: #fff; border: none; border-radius: 8px;
+            padding: 10px 16px; font-size: 14px; font-weight: 600; cursor: pointer;
+        }
+        .primary:hover { background: #5aa9ff; }
+        .primary:disabled { opacity: 0.5; cursor: not-allowed; }
+        .ghost {
+            background: none; border: 1px solid var(--border); color: var(--text-dim);
+            border-radius: 8px; padding: 9px 14px; font-size: 13px; cursor: pointer;
+        }
+        .ghost:hover { color: var(--text); border-color: var(--text-dim); }
+
+        /* ---------- Assist page ---------- */
+        #page-assist { max-width: 900px; width: 100%; margin: 0 auto; padding: 0 16px; }
+
+        .dictaphone-bar {
+            display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+            padding: 8px 14px; margin-top: 10px;
+            background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+            font-size: 12px; color: var(--text-dim);
+        }
+        .dictaphone-bar button {
+            background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+            padding: 4px 12px; border-radius: 6px; font-size: 12px; cursor: pointer;
+        }
+        .dictaphone-bar button.connected { color: var(--green); border-color: var(--green); }
+        .mic-indicator {
+            width: 8px; height: 8px; border-radius: 50%; background: #555; display: inline-block;
+        }
+        .mic-indicator.connected { background: var(--green); }
+        .mic-indicator.recording { background: var(--red); animation: pulse 1s infinite; }
+        @keyframes pulse { 50% { opacity: 0.35; } }
+
+        .chat {
+            flex: 1; overflow-y: auto; padding: 18px 4px;
+            display: flex; flex-direction: column; gap: 14px;
+        }
+        .welcome-message { color: var(--text-dim); text-align: center; margin-top: 60px; font-size: 14px; line-height: 1.8; }
+        .welcome-message h2 { color: var(--text); font-size: 18px; margin-bottom: 8px; }
+
+        .msg { display: flex; gap: 10px; max-width: 100%; }
+        .msg .avatar {
+            width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 11px; font-weight: 700;
+        }
+        .msg.user .avatar { background: var(--accent-dim); color: #fff; }
+        .msg.assistant .avatar { background: var(--panel-2); color: var(--accent); }
+        .bubble {
+            background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+            padding: 12px 14px; font-size: 14px; line-height: 1.6;
+            white-space: pre-wrap; word-break: break-word;
+            user-select: text; -webkit-user-select: text; max-width: 100%; overflow-x: auto; flex: 1;
+        }
+        .msg.user .bubble { background: #24344a; border-color: #31517a; }
+        .msg.hint .bubble { color: var(--text-dim); font-style: italic; background: none; border-style: dashed; }
+        .bubble strong { color: #ffd57e; font-weight: 700; }
+        .bubble .section-label {
+            display: block; font-weight: 700; color: var(--accent); font-size: 12px;
+            letter-spacing: 0.5px; margin-bottom: 2px;
+        }
+        .bubble-tools { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+        .tool-btn {
+            background: var(--panel-2); border: 1px solid var(--border); color: var(--text-dim);
+            padding: 4px 10px; border-radius: 6px; font-size: 12px; cursor: pointer;
+        }
+        .tool-btn:hover { color: var(--text); border-color: var(--text-dim); }
+        .tool-btn.copied { color: var(--green); border-color: var(--green); }
+
+        .feedback-bar {
+            display: flex; align-items: center; gap: 8px; margin-top: 10px; padding-top: 10px;
+            border-top: 1px dashed var(--border); flex-wrap: wrap;
+        }
+        .fb-label { font-size: 12px; color: var(--text-dim); }
+        .fb-thumb {
+            background: none; border: 1px solid var(--border); border-radius: 6px;
+            font-size: 14px; padding: 3px 9px; cursor: pointer; opacity: 0.7;
+        }
+        .fb-thumb.selected { opacity: 1; border-color: var(--accent); background: var(--panel-2); }
+        .fb-comment { flex: 1; min-width: 140px; font-size: 12px; padding: 5px 9px; }
+        .fb-submit { font-size: 12px; padding: 5px 12px; }
+        .fb-skip { background: none; border: none; color: var(--text-dim); font-size: 12px; cursor: pointer; text-decoration: underline; }
+        .fb-done { font-size: 12px; color: var(--text-dim); margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
+
+        .quick-actions { display: flex; gap: 8px; padding: 8px 0; flex-wrap: wrap; }
+        .qa-btn {
+            background: var(--panel); border: 1px solid var(--border); color: var(--text);
+            padding: 7px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; cursor: pointer;
+        }
+        .qa-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+        .qa-btn.armed { background: var(--accent-dim); border-color: var(--accent); color: #fff; }
+        .qa-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .qa-note { font-size: 11px; color: var(--amber); align-self: center; }
+
+        .input-row { display: flex; gap: 8px; align-items: flex-end; padding-bottom: 14px; }
         #userInput {
-            flex: 1;
-            background: transparent;
-            border: none;
-            font-size: 15px;
-            color: #e0e0e0;
-            font-family: inherit;
-            resize: none;
-            outline: none;
-            line-height: 24px;
-            min-height: 24px;
-            max-height: 240px;
-            padding: 0;
+            flex: 1; min-height: 46px; max-height: 240px; font-size: 14px;
         }
-
-        #userInput::placeholder {
-            color: #707070;
+        .round-btn {
+            width: 46px; height: 46px; border-radius: 10px; border: 1px solid var(--border);
+            background: var(--panel); color: var(--text); font-size: 17px; cursor: pointer; flex-shrink: 0;
         }
-
-        .voice-btn {
-            background: #333333;
-            border: 1px solid #404040;
-            cursor: pointer;
-            padding: 0;
-            width: 36px;
-            height: 36px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 50%;
-            transition: all 0.3s;
-            flex-shrink: 0;
-        }
-        .voice-btn:hover {
-            background: #3a3a3a;
-            border-color: #505050;
-        }
-        .voice-btn svg {
-            width: 20px;
-            height: 20px;
-            fill: none;
-            stroke: #d0d0d0;
-            stroke-width: 2;
-            stroke-linecap: round;
-            stroke-linejoin: round;
-        }
-        .voice-btn.recording {
-            background: #dc3545;
-        }
-        .voice-btn.recording:hover {
-            background: #c82333;
-        }
-
-        .voice-btn.recording svg {
-            stroke: white;
-            animation: pulse-mic 1.5s infinite;
-        }
-
-        @keyframes pulse-mic {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.05); }
-        }
-
+        .round-btn:hover { border-color: var(--accent); }
+        .round-btn.recording { background: var(--red); border-color: var(--red); animation: pulse 1s infinite; }
         #sendBtn {
-            background: #333333;
-            border: 1px solid #404040;
-            color: #d0d0d0;
-            cursor: pointer;
-            padding: 0;
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            transition: all 0.3s;
-            flex-shrink: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        #sendBtn:hover {
-            background: #3a3a3a;
-            border-color: #505050;
+            height: 46px; padding: 0 20px; flex-shrink: 0;
         }
 
-        #sendBtn svg {
-            width: 20px;
-            height: 20px;
-            stroke: #d0d0d0;
-            stroke-width: 2.5;
-            fill: none;
+        /* ---------- Draft page ---------- */
+        #page-draft { padding: 16px 20px; }
+        .draft-layout { display: flex; gap: 16px; flex: 1; overflow: hidden; }
+        .draft-left { flex: 1.6; display: flex; flex-direction: column; min-width: 0; }
+        #draftText { flex: 1; font-size: 14px; }
+        .report-preview {
+            flex: 1; overflow-y: auto; background: var(--bg); border: 1px solid var(--border);
+            border-radius: 8px; padding: 14px; font-size: 14px; line-height: 1.6; white-space: pre-wrap;
         }
+        .edit-span-original { background: rgba(224, 92, 92, 0.18); text-decoration: line-through; color: #d99; border-radius: 3px; }
+        .edit-span-suggested { background: rgba(76, 175, 125, 0.18); color: #8fd8b0; border-radius: 3px; }
+        .draft-right { flex: 1; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; min-width: 300px; max-width: 420px; }
+        .panel {
+            background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px;
+            display: flex; flex-direction: column; gap: 10px; flex-shrink: 0;
+        }
+        .panel-title { font-size: 13px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.6px; }
+        .panel label { font-size: 13px; font-weight: 600; }
+        .panel .opt { font-weight: 400; color: var(--text-dim); font-size: 11px; }
+        .shift-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+        #currentShiftName { font-size: 14px; font-weight: 600; color: var(--green); }
+        .combobox { position: relative; display: flex; flex-direction: column; }
+        .combobox input { width: 100%; }
+        .dropdown {
+            position: absolute; top: 100%; left: 0; right: 0; z-index: 30;
+            background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+            max-height: 220px; overflow-y: auto; margin-top: 4px;
+        }
+        .dropdown-item { padding: 8px 12px; font-size: 13px; cursor: pointer; }
+        .dropdown-item:hover { background: var(--accent-dim); }
+        .dropdown-empty { padding: 8px 12px; font-size: 12px; color: var(--text-dim); font-style: italic; }
+        .segmented { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+        .seg {
+            flex: 1; background: none; border: none; color: var(--text-dim);
+            padding: 9px 0; font-size: 13px; font-weight: 600; cursor: pointer;
+        }
+        .seg.active { background: var(--accent-dim); color: #fff; }
+        .status { font-size: 12px; color: var(--text-dim); min-height: 16px; }
+        .status.error { color: var(--red); }
+        .status.ok { color: var(--green); }
 
-        .disclaimer {
-            padding: 8px 30px;
-            background: transparent;
-            color: #707070;
-            font-size: 11px;
-            text-align: center;
+        .edit-card {
+            background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+            padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; font-size: 13px;
         }
+        .edit-card.accepted { border-color: var(--green); }
+        .edit-card.rejected { opacity: 0.5; }
+        .edit-cat {
+            display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase;
+            padding: 1px 7px; border-radius: 8px; letter-spacing: 0.5px; width: fit-content;
+        }
+        .edit-cat.typo { background: rgba(224, 92, 92, 0.2); color: #e88; }
+        .edit-cat.style { background: rgba(74, 158, 255, 0.2); color: #7bb8ff; }
+        .edit-context { line-height: 1.5; word-break: break-word; }
+        .edit-context .ctx { color: var(--text-dim); }
+        .edit-orig { text-decoration: line-through; color: #d99; }
+        .edit-sugg { color: #8fd8b0; font-weight: 600; }
+        .edit-reason { font-size: 12px; color: var(--text-dim); font-style: italic; }
+        .edit-actions { display: flex; gap: 8px; }
+        .edit-actions button {
+            flex: 1; padding: 5px 0; font-size: 12px; font-weight: 600; border-radius: 6px;
+            border: 1px solid var(--border); background: none; color: var(--text-dim); cursor: pointer;
+        }
+        .edit-actions .accept-btn.on { background: rgba(76, 175, 125, 0.2); border-color: var(--green); color: var(--green); }
+        .edit-actions .reject-btn.on { background: rgba(224, 92, 92, 0.15); border-color: var(--red); color: var(--red); }
 
-        .welcome-message {
-            text-align: center;
-            padding: 60px 20px;
-            color: #909090;
+        /* ---------- Final page ---------- */
+        #page-final { padding: 16px 20px; overflow-y: auto; }
+        #page-final.active { display: block; }
+        .final-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+        .final-toolbar select { min-width: 260px; }
+        .report-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 18px; }
+        .report-row {
+            display: flex; align-items: center; gap: 14px; padding: 10px 14px;
+            background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+            cursor: pointer; font-size: 13px;
         }
+        .report-row:hover { border-color: var(--accent); }
+        .report-row.selected { border-color: var(--accent); background: var(--panel-2); }
+        .rr-id { font-family: 'SF Mono', Menlo, Consolas, monospace; font-weight: 600; color: var(--accent); }
+        .rr-study { font-weight: 600; }
+        .rr-label { color: var(--text-dim); }
+        .rr-time { color: var(--text-dim); margin-left: auto; }
+        .rr-final { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 8px; }
+        .rr-final.yes { background: rgba(76, 175, 125, 0.2); color: var(--green); }
+        .rr-final.no { background: var(--panel-2); color: var(--text-dim); }
+        .rr-type { font-size: 11px; color: var(--amber); text-transform: uppercase; font-weight: 700; }
+        .list-empty { color: var(--text-dim); font-size: 13px; font-style: italic; padding: 12px; }
 
-        .welcome-message h2 {
-            font-size: 22px;
-            margin-bottom: 12px;
-            color: #b0b0b0;
-            font-weight: 500;
-        }
+        .rpr-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 8px; letter-spacing: 0.3px; }
+        .rpr-badge.rpr1 { background: rgba(76, 175, 125, 0.2); color: var(--green); }
+        .rpr-badge.rpr2 { background: rgba(74, 158, 255, 0.2); color: #7bb8ff; }
+        .rpr-badge.rpr3 { background: rgba(224, 168, 50, 0.2); color: var(--amber); }
+        .rpr-badge.rpr4 { background: rgba(224, 92, 92, 0.22); color: var(--red); }
+        #gradePanel { margin-bottom: 16px; }
+        .grade-row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+        .grade-rationale { font-size: 13px; color: var(--text-dim); line-height: 1.5; }
+        .grade-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+        .grade-btn { padding: 4px 10px; font-size: 12px; }
+        .grade-btn.on { border-color: var(--accent); color: var(--accent); }
 
-        .example-prompts {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 12px;
-            margin-top: 25px;
+        .final-columns { display: flex; gap: 16px; margin-bottom: 16px; }
+        .final-col { flex: 1; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+        .col-title { font-size: 13px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.6px; }
+        #finalDraftView {
+            background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+            padding: 14px; font-size: 13px; line-height: 1.6; white-space: pre-wrap;
+            font-family: inherit; max-height: 420px; overflow-y: auto; user-select: text;
         }
+        #finalText { min-height: 300px; max-height: 420px; font-size: 13px; }
+        .final-save-row { display: flex; align-items: center; gap: 10px; }
+        .diff-view {
+            background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+            padding: 14px; font-size: 14px; line-height: 1.7; white-space: pre-wrap; user-select: text;
+            margin-top: 8px; margin-bottom: 24px;
+        }
+        .diff-add { color: var(--amber); font-weight: 700; }
+        .diff-del { color: #777; text-decoration: line-through; opacity: 0.6; }
 
-        .example-prompt {
-            background: #333333;
-            padding: 14px;
-            border-radius: 12px;
-            border: 1px solid #404040;
-            cursor: pointer;
-            transition: all 0.2s;
-            text-align: left;
+        /* ---------- Modals ---------- */
+        .modal-overlay {
+            display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+            z-index: 100; align-items: center; justify-content: center;
         }
+        .modal-overlay.active { display: flex; }
+        .modal {
+            background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+            padding: 22px; width: 92%; max-width: 440px; display: flex; flex-direction: column; gap: 14px;
+        }
+        .modal h3 { font-size: 16px; }
+        .modal p { font-size: 13px; color: var(--text-dim); line-height: 1.5; }
+        .modal-buttons { display: flex; gap: 10px; justify-content: flex-end; }
 
-        .example-prompt:hover {
-            border-color: #505050;
-            background: #363636;
+        .toast {
+            position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+            background: var(--panel-2); border: 1px solid var(--accent); color: var(--text);
+            padding: 10px 20px; border-radius: 10px; font-size: 13px; z-index: 200;
+            opacity: 0; transition: opacity 0.25s; pointer-events: none; white-space: pre-line; text-align: center;
         }
+        .toast.show { opacity: 1; }
 
-        .example-prompt strong {
-            display: block;
-            margin-bottom: 6px;
-            font-size: 13px;
+        .spinner {
+            display: inline-block; width: 13px; height: 13px; border: 2px solid var(--text-dim);
+            border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite;
+            vertical-align: -2px; margin-right: 6px;
         }
+        @keyframes spin { to { transform: rotate(360deg); } }
 
-        .example-prompt span {
-            font-size: 12px;
-            color: #808080;
-            line-height: 1.4;
+        @media (max-width: 900px) {
+            .draft-layout { flex-direction: column; overflow-y: auto; }
+            .draft-right { max-width: none; }
+            .draft-left { min-height: 300px; }
+            .final-columns { flex-direction: column; }
         }
-
-        /* Dictate button style */
-        .dictate-btn {
-            position: absolute;
-            right: 20px;
-            bottom: 8px;
-            background: #2a2a2a;
-            color: #e0e0e0;
-            border: 1px solid #4a4a4a;
-            padding: 6px 12px;
-            border-radius: 8px;
-            font-size: 13px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.2s;
-            display: none;
-        }
-
-        .dictate-btn:hover {
-            background: #333333;
-            border-color: #505050;
-        }
-
-        .dictate-btn.visible {
-            display: block;
-        }
-
-        
-        /* Prevent body scroll */
-        html, body {
-            overflow: hidden;
-            position: fixed;
-            width: 100%;
-            height: 100%;
-        }
-        
-        
-        /* Prevent body scroll */
-        html, body {
-            overflow: hidden;
-            position: fixed;
-            width: 100%;
-            height: 100%;
-        }
-        
-        /* Mobile responsive styles */
-        @media (max-width: 768px) {
-            .example-prompts {
-                margin-top: 15px;
-                gap: 8px;
-                display: grid;
-                grid-template-columns: 1fr;
-            }
-            
-            .example-prompt {
-                padding: 10px;
-                font-size: 11px;
-            }
-            html, body {
-                margin: 0;
-                padding: 0;
-                overflow: hidden;
-                position: fixed;
-                width: 100%;
-                height: 100%;
-                -webkit-overflow-scrolling: touch;
-            }
-            
-            .container {
-                position: fixed;
-                top: 0;
-                left: 0;
-                right: 0;
-                bottom: 0;
-                border-radius: 0;
-                height: 100vh;
-                height: 100dvh;
-                max-width: 100%;
-                width: 100%;
-                box-shadow: none;
-                display: flex;
-                flex-direction: column;
-                overflow: hidden;
-            }
-            
-            .header {
-                border-radius: 0;
-                padding: 12px 15px;
-                flex-shrink: 0;
-            }
-            
-            
-            .header h1 {
-                font-size: 20px;
-                margin: 0;
-                line-height: 1.2;
-                color: #b0b0b0;
-            }
-            
-            
-            .header p {
-                font-size: 11px;
-                margin: 0;
-                line-height: 1.2;
-                opacity: 0.7;
-            }
-
-            .gmail-status {
-                font-size: 10px;
-                padding: 4px 8px;
-            }
-            
-            
-
-            .header-logo {
-                width: 42px;
-                height: 42px;
-                object-fit: contain;
-                flex-shrink: 0;
-                user-select: none;
-                -webkit-user-select: none;
-                -moz-user-select: none;
-                -ms-user-select: none;
-                pointer-events: none;
-                -webkit-user-drag: none;
-                -khtml-user-drag: none;
-                -moz-user-drag: none;
-                -o-user-drag: none;
-                user-drag: none;
-            }
-            
-            .dictaphone-setup { display: none !important; }
-            
-            .setup-btn {
-                padding: 5px 10px;
-                font-size: 11px;
-            }
-            
-            .microphone-status {
-                padding: 5px 15px;
-                flex-shrink: 0;
-                font-size: 11px;
-            }
-            
-            .specialty-selector {
-                padding: 6px 15px;
-                flex-shrink: 0;
-                font-size: 11px;
-            }
-            
-            .chat-container {
-                flex: 1;
-                min-height: 0; /* Important for flex child scrolling */
-                overflow-y: auto;
-                -webkit-overflow-scrolling: touch;
-                padding: 15px;
-            }
-            
-            .welcome-message {
-                padding: 20px 10px;
-            }
-            
-            .welcome-message h2 {
-                font-size: 18px;
-                margin-bottom: 8px;
-            }
-            
-            .welcome-message p {
-                font-size: 12px;
-            }
-            
-            .example-prompts {
-                margin-top: 15px;
-                gap: 8px;
-            }
-            
-            .example-prompt {
-                padding: 10px;
-                font-size: 11px;
-            }
-            
-            .example-prompt strong {
-                font-size: 12px;
-                margin-bottom: 4px;
-            }
-            
-            .input-container {
-                padding: 12px 15px 15px;
-                flex-shrink: 0;
-            }
-            
-            .input-wrapper {
-                padding: 6px 12px;
-            }
-            
-            #userInput {
-                font-size: 14px;
-                min-height: 20px;
-                max-height: 80px;
-            }
-            
-            .voice-btn,
-            #sendBtn {
-                width: 32px;
-                height: 32px;
-            }
-            
-            .voice-btn svg,
-            #sendBtn svg {
-                width: 16px;
-                height: 16px;
-            }
-            
-            .disclaimer {
-                padding: 4px 15px;
-                font-size: 9px;
-            }
-            
-            .message-content {
-                max-width: 85%;
-                font-size: 13px;
-                padding: 8px 12px;
-            }
-            
-            .avatar {
-                width: 28px;
-                height: 28px;
-                font-size: 11px;
-            }
-            
-            .report-section {
-                margin: 10px 0;
-            }
-            
-            .report-section h3 {
-                font-size: 11px;
-            }
-            
-            .report-section p {
-                font-size: 12px;
-                line-height: 1.4;
-            }
-            
-            .copy-btn, .email-btn {
-                padding: 5px 10px;
-                font-size: 11px;
-            }
-            
-            /* Hide dictaphone on very small phones */
-            @media (max-height: 550px) {
-                .dictaphone-setup {
-                    display: none;
-                }
-            }
-            
-            /* Adjust for small phones */
-            @media (max-height: 650px) {
-                
-                .header {
-                    padding: 10px 15px;
-                }
-                
-                .chat-container {
-                    padding: 10px;
-                }
-            }
-        }
-        
-        /* Landscape orientation */
-        @media (max-width: 768px) and (orientation: landscape) {
-            .header {
-                padding: 8px 15px;
-            }
-            
-            .header h1 {
-                font-size: 18px;
-            }
-            
-            .dictaphone-setup,
-            .microphone-status,
-            .specialty-selector {
-                padding: 4px 15px;
-                font-size: 10px;
-            }
-            
-            .chat-container {
-                padding: 8px 10px;
-            }
-            
-            .input-container {
-                padding: 8px 15px 10px;
-            }
-            
-            .example-prompts {
-                display: none;
-            }
-        }</style>
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <img src="/images/dictaphone-button.png" alt="Logo" class="header-logo" draggable="false">
-            <div class="header-text">
-                <h1>Flow Dictation</h1>
-                <p>AI-Powered Medical Transcription</p>
+    <header>
+        <div class="brand">Flow<span>Dictation</span></div>
+        <nav class="tabs">
+            <button class="tab active" data-page="assist">Assist</button>
+            <button class="tab" data-page="draft">Draft</button>
+            <button class="tab" data-page="final">Final</button>
+        </nav>
+        <div class="header-right">
+            <button id="gmailStatus" class="gmail-btn disconnected" onclick="handleGmailClick()">📧 Connect Gmail</button>
+        </div>
+    </header>
+
+    <main>
+        <!-- ================= PAGE 1: ASSIST ================= -->
+        <section id="page-assist" class="page active">
+            <div class="dictaphone-bar" id="dictaphoneSetup">
+                <span id="setupIcon">🎙️</span>
+                <span id="setupText">Connect your dictaphone (optional)</span>
+                <button id="setupBtn">Connect</button>
+                <span class="mic-indicator" id="micIndicator"></span>
+                <span id="micStatus">Click mic to record</span>
             </div>
-            <div class="gmail-status disconnected" id="gmailStatus" onclick="handleGmailClick()">
-                📧 Connect Gmail
+
+            <div id="chatContainer" class="chat">
+                <div class="welcome-message">
+                    <h2>Assist</h2>
+                    Use a quick action below, or just type.<br>
+                    <b>Describe</b> a finding · <b>Reword</b> text · <b>Proofread</b> · <b>Generate Impression</b>
+                </div>
             </div>
-        </div>
 
-        <div class="dictaphone-setup" id="dictaphoneSetup">
-            <div class="setup-info">
-                <span id="setupIcon">🎤</span>
-                <span id="setupText">Connect your Philips or Nuance dictaphone for hands-free recording</span>
+            <div class="quick-actions">
+                <button class="qa-btn" data-action="describe">Describe</button>
+                <button class="qa-btn" data-action="reword">Reword</button>
+                <button class="qa-btn" data-action="proofread">Proofread</button>
+                <button class="qa-btn" data-action="impression">Generate Impression</button>
+                <span class="qa-note" id="qaNote" style="display:none">Rate the last response (or skip) to continue</span>
             </div>
-            <button class="setup-btn" id="setupBtn">Connect Dictaphone</button>
-        </div>
 
-        <div class="microphone-status">
-            <div class="mic-indicator" id="micIndicator"></div>
-            <span id="micStatus">Ready to transcribe</span>
-        </div>
+            <div class="input-row">
+                <textarea id="userInput" placeholder="Type or dictate here… (Enter to send, Shift+Enter for new line)"></textarea>
+                <button id="voiceBtn" class="round-btn" title="Record">🎤</button>
+                <button id="sendBtn" class="primary">Send</button>
+            </div>
+        </section>
 
-        <div class="specialty-selector">
-            <label for="specialty">Specialty:</label>
-            <select id="specialty">
-                <option value="radiology">Nuclear Medicine</option>
-            </select>
-        </div>
-
-        <div class="chat-container" id="chatContainer">
-            <div class="welcome-message">
-                <h2>Welcome to Flow Dictation</h2>
-                <p>Real-time AI assistance for clinical documentation</p>
-                
-                <div class="example-prompts">
-                    <div class="example-prompt" onclick="useExample(this)">
-                        <strong>☢️ PET/CT Oncology</strong>
-                        <span>"PET CT shows hypermetabolic right lower lobe mass with max SUV of 12.4"</span>
+        <!-- ================= PAGE 2: DRAFT ================= -->
+        <section id="page-draft" class="page">
+            <div class="draft-layout">
+                <div class="draft-left">
+                    <textarea id="draftText" placeholder="Paste or dictate your full report here…"></textarea>
+                    <div id="draftPreview" class="report-preview" style="display:none"></div>
+                </div>
+                <div class="draft-right">
+                    <div class="panel">
+                        <div class="panel-title">Shift</div>
+                        <div class="shift-row">
+                            <div id="currentShiftName">Loading…</div>
+                            <button class="ghost" id="newShiftBtn">Start New Shift</button>
+                        </div>
                     </div>
-                    <div class="example-prompt" onclick="useExample(this)">
-                        <strong>🧠 Brain PET</strong>
-                        <span>"FDG PET brain shows decreased uptake in bilateral parietal lobes"</span>
+                    <div class="panel" id="metaPanel">
+                        <div class="panel-title">Study</div>
+                        <label>Study Type <span class="opt">(optional — auto-detected if blank)</span></label>
+                        <div class="combobox">
+                            <input id="studyTypeInput" autocomplete="off" placeholder="e.g. MRI knee">
+                            <div id="studyTypeDropdown" class="dropdown" style="display:none"></div>
+                        </div>
+                        <label>Study ID <span class="opt">(optional — helps you find it later)</span></label>
+                        <input id="studyIdInput" autocomplete="off" placeholder="Accession, initials, room…">
+                        <label>Report Type</label>
+                        <div class="segmented">
+                            <button class="seg" id="segPrelim">Prelim</button>
+                            <button class="seg active" id="segComplete">Complete</button>
+                        </div>
+                        <button class="primary" id="reviewSaveBtn">Review &amp; Save</button>
+                        <div class="status" id="draftStatus"></div>
                     </div>
-                    <div class="example-prompt" onclick="useExample(this)">
-                        <strong>🦴 Bone Scan</strong>
-                        <span>"Bone scan demonstrates increased uptake at L3 vertebra"</span>
+                    <div class="panel" id="editsPanel" style="display:none">
+                        <div class="panel-title">Suggested Edits — <span id="editsCount"></span></div>
+                        <div id="editsList" style="display:flex; flex-direction:column; gap:8px;"></div>
+                        <button class="primary" id="saveReviewedBtn">Save</button>
+                        <button class="ghost" id="rejectAllSaveBtn">Reject All &amp; Save</button>
+                        <button class="ghost" id="cancelReviewBtn">Back to editing</button>
+                        <div class="status" id="reviewStatus"></div>
                     </div>
                 </div>
             </div>
-        </div>
+        </section>
 
-        <div class="input-container">
-            <div class="input-wrapper">
-                <button class="attach-btn" title="Attach file" style="display:none;">
-                    <svg viewBox="0 0 24 24">
-                        <path d="M12 2L2 7v10c0 5.5 3.8 10.7 10 12 6.2-1.3 10-6.5 10-12V7l-10-5z"/>
-                    </svg>
-                </button>
-                <textarea id="userInput" placeholder="Dictate findings here..." rows="1"></textarea>
-                <button class="voice-btn" id="voiceBtn" title="Start recording">
-                    <svg viewBox="0 0 24 24">
-                        <path d="M12 1a4 4 0 0 1 4 4v7a4 4 0 1 1-8 0V5a4 4 0 0 1 4-4z"/>
-                        <path d="M8 11v1a4 4 0 1 0 8 0v-1M12 16v5M8 21h8"/>
-                    </svg>
-                </button>
-                <button id="sendBtn" title="Generate report">
-                    <svg viewBox="0 0 24 24">
-                        <path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.59 5.58L20 12l-8-8z" fill="#d0d0d0" stroke="none"/>
-                    </svg>
-                </button>
+        <!-- ================= PAGE 3: FINAL ================= -->
+        <section id="page-final" class="page">
+            <div class="final-toolbar">
+                <label style="font-size:13px; font-weight:600;">Shift</label>
+                <select id="shiftSelect"></select>
             </div>
-            <div class="disclaimer">
-                Not HIPAA compliant - do not enter PHI. Clinician review required.
+            <div id="reportList" class="report-list"></div>
+            <div id="finalDetail" style="display:none">
+                <div class="final-columns">
+                    <div class="final-col">
+                        <div class="col-title">Draft — <span id="finalReportId"></span></div>
+                        <pre id="finalDraftView"></pre>
+                    </div>
+                    <div class="final-col">
+                        <div class="col-title">Final report (attending-corrected)</div>
+                        <textarea id="finalText" placeholder="Paste the finalized report here…"></textarea>
+                        <div class="final-save-row">
+                            <button class="primary" id="saveFinalBtn">Save Final</button>
+                            <span class="status" id="finalStatus"></span>
+                        </div>
+                    </div>
+                </div>
+                <div class="panel" id="gradePanel" style="display:none">
+                    <div class="panel-title">RPR Grade — attending comparison</div>
+                    <div class="grade-row">
+                        <span id="gradeBadge" class="rpr-badge"></span>
+                        <span id="gradeRationale" class="grade-rationale"></span>
+                    </div>
+                    <div class="grade-actions">
+                        <span class="opt" style="font-size:12px; color:var(--text-dim)">Override:</span>
+                        <button class="ghost grade-btn" data-g="RPR1" title="Concordant — no meaningful changes">RPR1</button>
+                        <button class="ghost grade-btn" data-g="RPR2" title="Minor discrepancy — little or no clinical significance">RPR2</button>
+                        <button class="ghost grade-btn" data-g="RPR3" title="Moderate discrepancy — possible clinical significance">RPR3</button>
+                        <button class="ghost grade-btn" data-g="RPR4" title="Major discrepancy — clinically significant">RPR4</button>
+                        <button class="ghost" id="regradeBtn" title="Re-run automatic grading">↻ Re-grade</button>
+                        <span class="status" id="gradeStatus"></span>
+                    </div>
+                </div>
+                <div class="col-title">Corrections (<span class="diff-add" style="font-size:11px">added/changed</span> · <span class="diff-del" style="font-size:11px">removed</span>)</div>
+                <div id="finalDiffView" class="diff-view"></div>
             </div>
-        </div>
-    </div>
+        </section>
+    </main>
 
-    <!-- Email Modal -->
+    <!-- Email modal (Gmail) -->
     <div class="modal-overlay" id="emailModal">
         <div class="modal">
             <h3>📧 Email Report</h3>
             <input type="email" id="emailTo" placeholder="Recipient email address">
-            <input type="text" id="emailSubject" placeholder="Subject" value="PET/CT Report">
+            <input type="text" id="emailSubject" placeholder="Subject" value="Radiology Report">
             <div class="modal-buttons">
-                <button class="modal-btn cancel" onclick="closeEmailModal()">Cancel</button>
-                <button class="modal-btn send" id="sendEmailBtn" onclick="sendEmail()">Send</button>
+                <button class="ghost" onclick="closeEmailModal()">Cancel</button>
+                <button class="primary" id="sendEmailBtn" onclick="sendEmail()">Send</button>
             </div>
         </div>
     </div>
 
+    <!-- New shift name confirmation -->
+    <div class="modal-overlay" id="shiftNameModal">
+        <div class="modal">
+            <h3>Start New Shift</h3>
+            <p>Edit the shift name if needed, then create.</p>
+            <input type="text" id="shiftNameInput">
+            <div class="modal-buttons">
+                <button class="ghost" id="shiftNameCancel">Cancel</button>
+                <button class="primary" id="shiftNameCreate">Create Shift</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- "Is this a new shift?" prompt -->
+    <div class="modal-overlay" id="shiftPromptModal">
+        <div class="modal">
+            <h3>Is this a new shift?</h3>
+            <p id="shiftPromptDetail"></p>
+            <div class="modal-buttons">
+                <button class="ghost" id="shiftPromptSame">Same Shift</button>
+                <button class="primary" id="shiftPromptNew">New Shift</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
     <script>
+        // ==================== Shared utilities ====================
+
+        function escapeHtml(s) {
+            return String(s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        function showToast(msg, ms = 2600) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.classList.add('show');
+            clearTimeout(t._timer);
+            t._timer = setTimeout(() => t.classList.remove('show'), ms);
+        }
+
+        async function api(path, opts = {}) {
+            const res = await fetch(path, {
+                headers: { 'Content-Type': 'application/json' },
+                ...opts,
+                body: opts.body ? JSON.stringify(opts.body) : undefined
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+            return data;
+        }
+
+        // Word-level LCS diff. Tokens include whitespace so line breaks survive.
+        // Returns [{type: 'same'|'del'|'add', text}]
+        function diffWords(a, b) {
+            const ta = a.split(/(\s+)/).filter(s => s.length);
+            const tb = b.split(/(\s+)/).filter(s => s.length);
+            const n = ta.length, m = tb.length;
+            // LCS DP table (typed array, row-major)
+            const W = m + 1;
+            const dp = new Int32Array((n + 1) * W);
+            for (let i = n - 1; i >= 0; i--) {
+                for (let j = m - 1; j >= 0; j--) {
+                    dp[i * W + j] = ta[i] === tb[j]
+                        ? dp[(i + 1) * W + j + 1] + 1
+                        : Math.max(dp[(i + 1) * W + j], dp[i * W + j + 1]);
+                }
+            }
+            const out = [];
+            const push = (type, text) => {
+                if (!text) return;
+                const last = out[out.length - 1];
+                if (last && last.type === type) last.text += text;
+                else out.push({ type, text });
+            };
+            let i = 0, j = 0;
+            while (i < n && j < m) {
+                if (ta[i] === tb[j]) { push('same', ta[i]); i++; j++; }
+                else if (dp[(i + 1) * W + j] >= dp[i * W + j + 1]) { push('del', ta[i]); i++; }
+                else { push('add', tb[j]); j++; }
+            }
+            while (i < n) { push('del', ta[i]); i++; }
+            while (j < m) { push('add', tb[j]); j++; }
+            return out;
+        }
+
+        function copyPlainText(text, btn) {
+            navigator.clipboard.writeText(text).then(() => {
+                if (btn) {
+                    const orig = btn.textContent;
+                    btn.textContent = '✓ Copied';
+                    btn.classList.add('copied');
+                    setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1800);
+                }
+            }).catch(() => showToast('Copy failed — select the text manually'));
+        }
+
+        function pad2(n) { return String(n).padStart(2, '0'); }
+
+        function fmtDate(d) {
+            return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+        }
+
+        function makeReportId(d = new Date()) {
+            return '' + d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + pad2(d.getHours()) + pad2(d.getMinutes());
+        }
+
+        // Auto shift name: date + Day/Night. 06:00–17:59 = Day; otherwise Night.
+        // Night shifts starting after midnight (00:00–05:59) use the previous calendar date.
+        function autoShiftName(d = new Date()) {
+            const h = d.getHours();
+            if (h >= 6 && h < 18) return fmtDate(d) + ' Day';
+            if (h < 6) {
+                const prev = new Date(d);
+                prev.setDate(prev.getDate() - 1);
+                return fmtDate(prev) + ' Night';
+            }
+            return fmtDate(d) + ' Night';
+        }
+
+        // ==================== Tabs ====================
+
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById('page-' + tab.dataset.page).classList.add('active');
+                if (tab.dataset.page === 'draft') initDraftPage();
+                if (tab.dataset.page === 'final') initFinalPage();
+            });
+        });
+
+        // ==================== ASSIST PAGE ====================
+
         const chatContainer = document.getElementById('chatContainer');
         const userInput = document.getElementById('userInput');
         const sendBtn = document.getElementById('sendBtn');
@@ -980,7 +630,296 @@
         const setupIcon = document.getElementById('setupIcon');
         const dictaphoneSetup = document.getElementById('dictaphoneSetup');
         const gmailStatusEl = document.getElementById('gmailStatus');
-        
+        const qaNote = document.getElementById('qaNote');
+
+        let pendingAction = null;          // armed quick action
+        let awaitingFeedback = false;      // gates the next quick action
+        let currentReportText = '';        // for the email modal
+
+        const ACTION_HINTS = {
+            describe: 'Describe the finding you’re struggling to word — I’ll suggest Findings wording and matching Impression wording.',
+            reword: 'Paste the sentence, section, or entire report you’d like reworded.',
+            proofread: 'Paste the text to proofread — corrections will be shown in bold (copies as plain text).',
+            impression: 'Paste the report body — I’ll generate a numbered Impression.'
+        };
+        const ACTION_LABELS = { describe: 'Describe', reword: 'Reword', proofread: 'Proofread', impression: 'Generate Impression' };
+
+        function updateQaState() {
+            document.querySelectorAll('.qa-btn').forEach(b => {
+                b.disabled = awaitingFeedback;
+                b.classList.toggle('armed', b.dataset.action === pendingAction);
+            });
+            qaNote.style.display = awaitingFeedback ? '' : 'none';
+        }
+
+        document.querySelectorAll('.qa-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (awaitingFeedback) return;
+                if (pendingAction === btn.dataset.action) {
+                    pendingAction = null;
+                    updateQaState();
+                    return;
+                }
+                pendingAction = btn.dataset.action;
+                updateQaState();
+                addHintMessage('[' + ACTION_LABELS[pendingAction] + '] ' + ACTION_HINTS[pendingAction]);
+                userInput.focus();
+            });
+        });
+
+        function clearWelcome() {
+            const w = chatContainer.querySelector('.welcome-message');
+            if (w) w.remove();
+        }
+
+        function addHintMessage(text) {
+            clearWelcome();
+            const div = document.createElement('div');
+            div.className = 'msg hint assistant';
+            div.innerHTML = '<div class="avatar">FD</div><div class="bubble">' + escapeHtml(text) + '</div>';
+            chatContainer.appendChild(div);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function addUserMessage(text) {
+            clearWelcome();
+            const div = document.createElement('div');
+            div.className = 'msg user';
+            div.innerHTML = '<div class="avatar">Y</div><div class="bubble">' + escapeHtml(text) + '</div>';
+            chatContainer.appendChild(div);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            return div;
+        }
+
+        function addLoadingMessage() {
+            clearWelcome();
+            const div = document.createElement('div');
+            div.className = 'msg assistant';
+            div.innerHTML = '<div class="avatar">FD</div><div class="bubble"><span class="spinner"></span>Thinking…</div>';
+            chatContainer.appendChild(div);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            return div;
+        }
+
+        // Render an assistant response. plainText is EXACTLY what Copy places on the clipboard.
+        function addAssistantResponse({ html, plainText, actionType, userText }) {
+            const div = document.createElement('div');
+            div.className = 'msg assistant';
+
+            const bubble = document.createElement('div');
+            bubble.className = 'bubble';
+            bubble.innerHTML = html;
+
+            // Tools row: copy (plain text only) + email
+            const tools = document.createElement('div');
+            tools.className = 'bubble-tools';
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'tool-btn';
+            copyBtn.textContent = '📋 Copy';
+            copyBtn.addEventListener('click', () => copyPlainText(plainText, copyBtn));
+            tools.appendChild(copyBtn);
+            if (gmailConnected) {
+                const emailBtn = document.createElement('button');
+                emailBtn.className = 'tool-btn';
+                emailBtn.textContent = '📧 Email';
+                emailBtn.addEventListener('click', () => { currentReportText = plainText; openEmailModal(); });
+                tools.appendChild(emailBtn);
+            }
+            bubble.appendChild(tools);
+
+            // Feedback UI
+            const fb = document.createElement('div');
+            fb.className = 'feedback-bar';
+            fb.innerHTML =
+                '<span class="fb-label">Helpful?</span>' +
+                '<button class="fb-thumb" data-r="up">👍</button>' +
+                '<button class="fb-thumb" data-r="down">👎</button>' +
+                '<input class="fb-comment" placeholder="Optional comment…">' +
+                '<button class="fb-submit primary" style="display:none">Submit</button>' +
+                '<button class="fb-skip">Skip feedback</button>';
+            bubble.appendChild(fb);
+
+            let rating = null;
+            const submitBtn = fb.querySelector('.fb-submit');
+            fb.querySelectorAll('.fb-thumb').forEach(t => {
+                t.addEventListener('click', () => {
+                    rating = t.dataset.r;
+                    fb.querySelectorAll('.fb-thumb').forEach(x => x.classList.toggle('selected', x === t));
+                    submitBtn.style.display = '';
+                });
+            });
+
+            function finishFeedback(note) {
+                fb.remove();
+                const done = document.createElement('div');
+                done.className = 'fb-done';
+                done.textContent = note;
+                bubble.appendChild(done);
+                awaitingFeedback = false;
+                updateQaState();
+            }
+
+            submitBtn.addEventListener('click', async () => {
+                if (!rating) return;
+                const comment = fb.querySelector('.fb-comment').value.trim();
+                submitBtn.disabled = true;
+                try {
+                    await api('/api/assist/feedback', { method: 'POST', body: {
+                        action_type: actionType || 'freeform',
+                        user_input: userText,
+                        model_response: plainText,
+                        rating,
+                        comment
+                    }});
+                    finishFeedback('Feedback recorded — thanks.');
+                } catch (e) {
+                    console.error('Feedback save failed:', e);
+                    finishFeedback('Feedback could not be saved (' + e.message + ').');
+                }
+            });
+            fb.querySelector('.fb-skip').addEventListener('click', () => finishFeedback('Feedback skipped.'));
+
+            div.innerHTML = '<div class="avatar">FD</div>';
+            div.appendChild(bubble);
+            chatContainer.appendChild(div);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+
+            awaitingFeedback = true;
+            updateQaState();
+        }
+
+        // Bold only the changed/added words of the proofread output; copy stays plain.
+        function proofreadHtml(original, corrected) {
+            return diffWords(original, corrected)
+                .filter(p => p.type !== 'del')
+                .map(p => p.type === 'add' ? '<strong>' + escapeHtml(p.text) + '</strong>' : escapeHtml(p.text))
+                .join('');
+        }
+
+        async function sendMessage() {
+            if (isRecording) stopRecording();
+
+            const message = userInput.value.trim();
+            if (!message) return;
+
+            const actionType = pendingAction;
+            pendingAction = null;
+            updateQaState();
+
+            addUserMessage(message);
+            userInput.value = '';
+            userInput.style.height = 'auto';
+            finalTranscript = '';
+
+            const loading = addLoadingMessage();
+            try {
+                const data = await api('/api/assist', { method: 'POST', body: { action: actionType, message } });
+                loading.remove();
+
+                if (data.type === 'describe') {
+                    const plain = 'FINDINGS:\n' + data.findings + '\n\nIMPRESSION:\n' + data.impression;
+                    const html =
+                        '<span class="section-label">FINDINGS</span>' + escapeHtml(data.findings) +
+                        '\n\n<span class="section-label">IMPRESSION</span>' + escapeHtml(data.impression);
+                    addAssistantResponse({ html, plainText: plain, actionType, userText: message });
+                } else if (actionType === 'proofread') {
+                    addAssistantResponse({
+                        html: proofreadHtml(message, data.text),
+                        plainText: data.text,
+                        actionType, userText: message
+                    });
+                } else {
+                    addAssistantResponse({ html: escapeHtml(data.text), plainText: data.text, actionType, userText: message });
+                }
+            } catch (e) {
+                loading.querySelector('.bubble').innerHTML = '<span style="color:var(--red)">⚠️ ' + escapeHtml(e.message) + '</span>';
+            }
+            userInput.focus();
+        }
+
+        sendBtn.addEventListener('click', sendMessage);
+        userInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+        userInput.addEventListener('input', function () {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 240) + 'px';
+        });
+
+        // ==================== Gmail ====================
+
+        let gmailConnected = false;
+
+        async function checkGmailStatus() {
+            try {
+                const data = await api('/api/gmail/status');
+                gmailConnected = data.connected;
+                updateGmailUI();
+            } catch (e) { console.error('Gmail status:', e); }
+        }
+        function updateGmailUI() {
+            if (gmailConnected) {
+                gmailStatusEl.textContent = '✅ Gmail Connected';
+                gmailStatusEl.classList.add('connected');
+            } else {
+                gmailStatusEl.textContent = '📧 Connect Gmail';
+                gmailStatusEl.classList.remove('connected');
+            }
+        }
+        function handleGmailClick() {
+            if (gmailConnected) {
+                if (confirm('Disconnect Gmail?')) {
+                    fetch('/api/gmail/disconnect').then(() => { gmailConnected = false; updateGmailUI(); });
+                }
+            } else {
+                window.location.href = '/auth/google';
+            }
+        }
+        checkGmailStatus();
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('gmail') === 'connected') {
+            gmailConnected = true;
+            updateGmailUI();
+            window.history.replaceState({}, document.title, window.location.pathname);
+        }
+
+        function openEmailModal() {
+            if (!gmailConnected) { alert('Connect Gmail first via the header button.'); return; }
+            document.getElementById('emailModal').classList.add('active');
+            document.getElementById('emailTo').focus();
+        }
+        function closeEmailModal() {
+            document.getElementById('emailModal').classList.remove('active');
+            document.getElementById('emailTo').value = '';
+        }
+        async function sendEmail() {
+            const to = document.getElementById('emailTo').value.trim();
+            const subject = document.getElementById('emailSubject').value.trim();
+            const btn = document.getElementById('sendEmailBtn');
+            if (!to) { alert('Enter a recipient email address.'); return; }
+            btn.disabled = true; btn.textContent = 'Sending…';
+            try {
+                await api('/api/gmail/send', { method: 'POST', body: { to, subject, report: currentReportText } });
+                showToast('Email sent to ' + to);
+                closeEmailModal();
+            } catch (e) {
+                alert('Failed to send email: ' + e.message);
+            } finally {
+                btn.disabled = false; btn.textContent = 'Send';
+            }
+        }
+        document.getElementById('emailModal').addEventListener('click', function (e) {
+            if (e.target === this) closeEmailModal();
+        });
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') closeEmailModal();
+        });
+
+        // ==================== Dictation (PowerMic / WebHID) — preserved ====================
+
         let ws = null;
         let audioContext = null;
         let mediaStream = null;
@@ -989,78 +928,12 @@
         let finalTranscript = '';
         let selectedMic = null;
         let hidDevice = null;
-        let recordButton = null;
-        let gmailConnected = false;
-        let currentReportText = '';
 
         const supportsHID = 'hid' in navigator;
-
         if (!supportsHID) {
             setupText.textContent = 'WebHID not supported - use Chrome/Edge';
             setupBtn.style.display = 'none';
         }
-
-        // Check Gmail status on load
-        async function checkGmailStatus() {
-            try {
-                const response = await fetch('/api/gmail/status');
-                const data = await response.json();
-                gmailConnected = data.connected;
-                updateGmailUI();
-            } catch (error) {
-                console.error('Error checking Gmail status:', error);
-            }
-        }
-
-        function updateGmailUI() {
-            if (gmailConnected) {
-                gmailStatusEl.textContent = '✅ Gmail Connected';
-                gmailStatusEl.classList.remove('disconnected');
-                gmailStatusEl.classList.add('connected');
-            } else {
-                gmailStatusEl.textContent = '📧 Connect Gmail';
-                gmailStatusEl.classList.remove('connected');
-                gmailStatusEl.classList.add('disconnected');
-            }
-        }
-
-        function handleGmailClick() {
-            if (gmailConnected) {
-                if (confirm('Disconnect Gmail?')) {
-                    fetch('/api/gmail/disconnect')
-                        .then(() => {
-                            gmailConnected = false;
-                            updateGmailUI();
-                        });
-                }
-            } else {
-                window.location.href = '/auth/google';
-            }
-        }
-
-        // Check for Gmail connection on page load
-        checkGmailStatus();
-
-        // Check URL params for Gmail connection status
-        const urlParams = new URLSearchParams(window.location.search);
-        if (urlParams.get('gmail') === 'connected') {
-            gmailConnected = true;
-            updateGmailUI();
-            // Clean URL
-            window.history.replaceState({}, document.title, window.location.pathname);
-        }
-
-        // Auto-resize textarea
-        userInput.addEventListener('input', function() {
-            this.style.height = 'auto';
-            this.style.height = Math.min(this.scrollHeight, 240) + 'px';
-        });
-
-        // Enable/disable send button based on input
-        userInput.addEventListener('input', function() {
-            // sendBtn.disabled = !this.value.trim();
-        });
-        sendBtn.disabled = false;
 
         setupBtn.addEventListener('click', async () => {
             try {
@@ -1094,7 +967,6 @@
 
                 console.log(brand + ' dictaphone connected:', hidDevice.productName);
                 micStatus.textContent = 'Press dictaphone button to record';
-
             } catch (error) {
                 console.error('Error connecting dictaphone:', error);
                 alert('Failed to connect dictaphone: ' + error.message);
@@ -1103,27 +975,23 @@
 
         function handleDictaphoneButton(event) {
             const { data } = event;
-            const value = data.getUint8(0);
-            const isNuance = hidDevice && (hidDevice.vendorId === 0x0554 || hidDevice.vendorId === 0x1532);
+            const bytes = [];
+            for (let i = 0; i < data.byteLength; i++) {
+                bytes.push('0x' + data.getUint8(i).toString(16).padStart(2, '0'));
+            }
+            console.log('HID Event - All bytes:', bytes.join(', '), '| Raw:', Array.from(new Uint8Array(data.buffer)));
 
-            console.log('Dictaphone button event:', value, 'byte1:', data.byteLength > 1 ? data.getUint8(1) : 'N/A');
+            const byte0 = data.getUint8(0);
+            const byte1 = data.byteLength > 1 ? data.getUint8(1) : 0;
+            const byte2 = data.byteLength > 2 ? data.getUint8(2) : 0;
 
-            if (isNuance) {
-                // Nuance PowerMic: record button sends 0x01 or 0x02, release sends 0x00
-                if ((value === 0x01 || value === 0x02) && !isRecording) {
-                    recordButton = value;
-                    startRecording();
-                } else if (value === 0x00 && isRecording) {
-                    stopRecording();
-                }
-            } else {
-                // Philips: any non-zero press starts, 0x00 release stops
-                if (value !== 0x00 && !isRecording) {
-                    recordButton = value;
-                    startRecording();
-                } else if (value === 0x00 && isRecording) {
-                    stopRecording();
-                }
+            const anyButtonPressed = byte0 !== 0 || byte1 !== 0 || byte2 !== 0;
+            const allReleased = byte0 === 0 && byte1 === 0 && byte2 === 0;
+
+            if (anyButtonPressed && !isRecording) {
+                startRecording();
+            } else if (allReleased && isRecording) {
+                stopRecording();
             }
         }
 
@@ -1131,7 +999,6 @@
             try {
                 const devices = await navigator.mediaDevices.enumerateDevices();
                 const audioDevices = devices.filter(device => device.kind === 'audioinput');
-                
                 selectedMic = audioDevices.find(device =>
                     device.label.toLowerCase().includes('philips') ||
                     device.label.toLowerCase().includes('speechmike') ||
@@ -1139,7 +1006,6 @@
                     device.label.toLowerCase().includes('nuance') ||
                     device.label.toLowerCase().includes('powermic')
                 ) || audioDevices[0];
-
                 if (selectedMic) {
                     micIndicator.classList.add('connected');
                     micStatus.textContent = 'Microphone ready';
@@ -1148,39 +1014,24 @@
                 console.error('Error detecting microphone:', error);
             }
         }
-
         detectMicrophone();
-
-        function useExample(element) {
-            const text = element.querySelector('span').textContent.replace(/['"]/g, '');
-            userInput.value = text;
-            userInput.style.height = 'auto';
-            userInput.style.height = userInput.scrollHeight + 'px';
-            sendBtn.disabled = false;
-            userInput.focus();
-        }
 
         voiceBtn.addEventListener('click', () => {
             if (isRecording) {
                 stopRecording();
             } else {
-                // Save current state before recording
                 finalTranscript = userInput.value || '';
                 startRecording();
-                // Keep focus on input
                 setTimeout(() => userInput.focus(), 100);
             }
         });
 
         function replacePunctuation(text) {
             if (!text) return text;
-            
-            console.log('Raw input:', text);
-            
-            // Fix decimal numbers first (protect these)
+
             text = text.replace(/(\d+)\.\s+(\d+)/g, '$1.DECIMAL.$2');
             text = text.replace(/(\d+)\s+point\s+(\d+)/gi, '$1.DECIMAL.$2');
-            
+
             text = text
                 .replace(/\bP\./g, '.')
                 .replace(/\bP\b(?=[\s,;:!?]|$)/g, '.')
@@ -1189,11 +1040,11 @@
                 .replace(/\bperiod\b/gi, '.')
                 .replace(/,(\s+[A-Z])/g, '.$1')
                 .replace(/\.{2,}/g, '.');
-            
+
             text = text
                 .replace(/\b(open|opening|left)\s+(paren|parenthesis|parentheses)\b/gi, '(')
                 .replace(/\b(close|closing|right)\s+(paren|parenthesis|parentheses)\b/gi, ')');
-            
+
             text = text
                 .replace(/\s+,/g, ',')
                 .replace(/\bcomma\b/gi, ',')
@@ -1207,9 +1058,9 @@
                 .replace(/\bslash\b/gi, '/')
                 .replace(/\b(new\s+line|newline)\b/gi, '\n')
                 .replace(/\b(new\s+paragraph|newparagraph)\b/gi, '\n\n');
-            
+
             text = text.replace(/\.DECIMAL\./g, '.');
-            
+
             text = text
                 .replace(/([.,;:!?])\s*\1+/g, '$1')
                 .replace(/,\s*\./g, '.')
@@ -1222,17 +1073,22 @@
                 .replace(/\s+\)/g, ')')
                 .replace(/\s+/g, ' ')
                 .trim();
-            
-            console.log('Processed:', text);
-            
+
             return text;
+        }
+
+        // Dictation targets whichever text field last had focus (Assist input or Draft textarea)
+        function dictationTarget() {
+            const draftPage = document.getElementById('page-draft');
+            if (draftPage.classList.contains('active')) return document.getElementById('draftText');
+            return userInput;
         }
 
         async function startRecording() {
             try {
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 ws = new WebSocket(protocol + '//' + window.location.host);
-                
+
                 ws.onopen = async () => {
                     const constraints = {
                         audio: {
@@ -1246,47 +1102,48 @@
                     };
 
                     mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
-                    
+
                     audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
                     const source = audioContext.createMediaStreamSource(mediaStream);
-                    
+
                     const processorCode = 'class AudioProcessor extends AudioWorkletProcessor { process(inputs) { const input = inputs[0]; if (input.length > 0) { const samples = input[0]; const pcm = new Int16Array(samples.length); for (let i = 0; i < samples.length; i++) { pcm[i] = Math.max(-32768, Math.min(32767, samples[i] * 32768)); } this.port.postMessage(pcm.buffer); } return true; } } registerProcessor("audio-processor", AudioProcessor);';
-                    
+
                     await audioContext.audioWorklet.addModule('data:text/javascript,' + encodeURIComponent(processorCode));
-                    
+
                     audioWorkletNode = new AudioWorkletNode(audioContext, 'audio-processor');
                     audioWorkletNode.port.onmessage = (event) => {
                         if (ws && ws.readyState === WebSocket.OPEN) {
                             ws.send(event.data);
                         }
                     };
-                    
+
                     source.connect(audioWorkletNode);
                     audioWorkletNode.connect(audioContext.destination);
-                    
+
                     isRecording = true;
                     voiceBtn.classList.add('recording');
                     micIndicator.classList.add('recording');
                     micStatus.textContent = 'Recording... Click to stop';
                 };
-                
+
                 ws.onmessage = (event) => {
                     const data = JSON.parse(event.data);
-                    
+
                     if (data.type === 'transcript') {
-                        const selectionStart = userInput.selectionStart;
-                        const selectionEnd = userInput.selectionEnd;
+                        const target = dictationTarget();
+                        const selectionStart = target.selectionStart;
+                        const selectionEnd = target.selectionEnd;
                         const hasSelection = selectionStart !== selectionEnd;
-                        
+
                         if (data.is_final) {
                             const newText = replacePunctuation((data.text || '').trim());
                             if (newText) {
-                                let currentValue = userInput.value.replace(/\[.*?\]/g, '');
+                                let currentValue = target.value.replace(/\[.*?\]/g, '');
                                 let updatedValue;
                                 let newCursorPos;
-                                
+
                                 if (hasSelection) {
-                                    updatedValue = currentValue.substring(0, selectionStart) + 
+                                    updatedValue = currentValue.substring(0, selectionStart) +
                                                   newText + ' ' +
                                                   currentValue.substring(selectionEnd);
                                     newCursorPos = selectionStart + newText.length + 1;
@@ -1298,39 +1155,35 @@
                                         updatedValue = currentValue + ' ' + newText;
                                         newCursorPos = updatedValue.length;
                                     } else {
-                                        updatedValue = currentValue.substring(0, selectionStart) + 
+                                        updatedValue = currentValue.substring(0, selectionStart) +
                                                       newText + ' ' +
                                                       currentValue.substring(selectionStart);
                                         newCursorPos = selectionStart + newText.length + 1;
                                     }
                                 }
-                                
-                                userInput.value = updatedValue;
+
+                                target.value = updatedValue;
                                 finalTranscript = updatedValue;
-                                
-                                userInput.setSelectionRange(newCursorPos, newCursorPos);
-                                userInput.focus();
-                            }
-                        } else {
-                            const partialText = data.text || '';
-                            if (partialText) {
-                                console.log('Partial:', partialText);
+
+                                target.setSelectionRange(newCursorPos, newCursorPos);
+                                target.focus();
                             }
                         }
-                        
-                        userInput.style.height = 'auto';
-                        userInput.style.height = Math.min(userInput.scrollHeight, 240) + 'px';
+
+                        if (target === userInput) {
+                            target.style.height = 'auto';
+                            target.style.height = Math.min(target.scrollHeight, 240) + 'px';
+                        }
                     } else if (data.type === 'error') {
                         console.error('Transcription error:', data.message);
                         stopRecording();
                     }
                 };
-                
+
                 ws.onerror = (error) => {
                     console.error('WebSocket error:', error);
                     stopRecording();
                 };
-                
             } catch (error) {
                 console.error('Error starting recording:', error);
                 alert('Could not start recording: ' + error.message);
@@ -1342,207 +1195,608 @@
             voiceBtn.classList.remove('recording');
             micIndicator.classList.remove('recording');
             micStatus.textContent = hidDevice ? 'Press dictaphone button to record' : 'Click mic to record';
-            
-            finalTranscript = userInput.value || '';
-            setTimeout(() => userInput.focus(), 100);
-            
+
             if (audioWorkletNode) audioWorkletNode.disconnect();
             if (audioContext) audioContext.close();
             if (mediaStream) mediaStream.getTracks().forEach(track => track.stop());
             if (ws) ws.close();
-            
+
             audioWorkletNode = null;
             audioContext = null;
             mediaStream = null;
             ws = null;
         }
 
-        function addMessage(text, isUser) {
-            const welcomeMsg = chatContainer.querySelector('.welcome-message');
-            if (welcomeMsg) welcomeMsg.remove();
+        // ==================== Modal helpers (promise-based) ====================
 
-            const messageDiv = document.createElement('div');
-            messageDiv.className = 'message ' + (isUser ? 'user' : 'assistant');
-            
-            const avatar = document.createElement('div');
-            avatar.className = 'avatar';
-            avatar.textContent = isUser ? 'Y' : 'FD';
-            
-            const content = document.createElement('div');
-            content.className = 'message-content';
-            content.innerHTML = text;
-            
-            messageDiv.appendChild(avatar);
-            messageDiv.appendChild(content);
-            chatContainer.appendChild(messageDiv);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
-        }
-
-        async function generateReport(findings) {
-            try {
-                const response = await fetch('/api/generate-report', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ findings: findings, specialty: 'radiology' })
-                });
-
-                if (!response.ok) throw new Error('HTTP error! status: ' + response.status);
-                const data = await response.json();
-                return formatReportHTML(data.report);
-                
-            } catch (error) {
-                console.error('Error:', error);
-                return '<p style="color: #ff6b6b;">⚠️ Error generating report.</p>';
-            }
-        }
-
-        function formatReportHTML(reportText) {
-            // Store the plain text for emailing
-            currentReportText = reportText;
-            
-            const sections = reportText.split('\n\n');
-            let html = '';
-            
-            sections.forEach(section => {
-                const lines = section.split('\n');
-                const heading = lines[0];
-                const content = lines.slice(1).join('\n');
-                
-                if (heading.match(/^[A-Z\s]+:?$/)) {
-                    html += '<div class="report-section"><h3>' + heading.replace(':', '') + '</h3><p>' + content.trim() + '</p></div>';
-                } else {
-                    html += '<div class="report-section"><p>' + section + '</p></div>';
+        function askShiftName(defaultName) {
+            return new Promise(resolve => {
+                const modal = document.getElementById('shiftNameModal');
+                const input = document.getElementById('shiftNameInput');
+                const create = document.getElementById('shiftNameCreate');
+                const cancel = document.getElementById('shiftNameCancel');
+                input.value = defaultName;
+                modal.classList.add('active');
+                input.focus();
+                function cleanup(v) {
+                    modal.classList.remove('active');
+                    create.onclick = cancel.onclick = null;
+                    resolve(v);
                 }
-            });
-            
-            html += '<div class="report-buttons">';
-            html += '<button class="copy-btn" onclick="copyReport(this)">📋 Copy Report</button>';
-            html += '<button class="email-btn" onclick="openEmailModal()" ' + (gmailConnected ? '' : 'disabled title="Connect Gmail first"') + '>📧 Email Report</button>';
-            html += '</div>';
-            
-            return html;
-        }
-
-        function copyReport(button) {
-            navigator.clipboard.writeText(currentReportText).then(() => {
-                button.textContent = '✅ Copied!';
-                button.classList.add('copied');
-                setTimeout(() => {
-                    button.textContent = '📋 Copy Report';
-                    button.classList.remove('copied');
-                }, 2000);
+                create.onclick = () => cleanup(input.value.trim() || defaultName);
+                cancel.onclick = () => cleanup(null);
             });
         }
 
-        // Email modal functions
-        function openEmailModal() {
-            if (!gmailConnected) {
-                alert('Please connect Gmail first by clicking the button in the header.');
-                return;
-            }
-            document.getElementById('emailModal').classList.add('active');
-            document.getElementById('emailTo').focus();
-        }
-
-        function closeEmailModal() {
-            document.getElementById('emailModal').classList.remove('active');
-            document.getElementById('emailTo').value = '';
-        }
-
-        async function sendEmail() {
-            const to = document.getElementById('emailTo').value.trim();
-            const subject = document.getElementById('emailSubject').value.trim();
-            const sendBtn = document.getElementById('sendEmailBtn');
-            
-            if (!to) {
-                alert('Please enter a recipient email address.');
-                return;
-            }
-            
-            sendBtn.disabled = true;
-            sendBtn.textContent = 'Sending...';
-            
-            try {
-                const response = await fetch('/api/gmail/send', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        to: to,
-                        subject: subject,
-                        report: currentReportText
-                    })
-                });
-                
-                const data = await response.json();
-                
-                if (response.ok) {
-                    alert('Email sent successfully!');
-                    closeEmailModal();
-                } else {
-                    if (response.status === 401) {
-                        gmailConnected = false;
-                        updateGmailUI();
-                        alert('Gmail session expired. Please reconnect.');
-                    } else {
-                        alert('Failed to send email: ' + (data.error || 'Unknown error'));
-                    }
+        function askNewShift(detail) {
+            return new Promise(resolve => {
+                const modal = document.getElementById('shiftPromptModal');
+                document.getElementById('shiftPromptDetail').textContent = detail;
+                const yes = document.getElementById('shiftPromptNew');
+                const no = document.getElementById('shiftPromptSame');
+                modal.classList.add('active');
+                function cleanup(v) {
+                    modal.classList.remove('active');
+                    yes.onclick = no.onclick = null;
+                    resolve(v);
                 }
-            } catch (error) {
-                console.error('Error sending email:', error);
-                alert('Error sending email. Please try again.');
+                yes.onclick = () => cleanup('new');
+                no.onclick = () => cleanup('same');
+            });
+        }
+
+        // ==================== DRAFT PAGE ====================
+
+        const draftText = document.getElementById('draftText');
+        const draftPreview = document.getElementById('draftPreview');
+        const draftStatus = document.getElementById('draftStatus');
+        const reviewStatus = document.getElementById('reviewStatus');
+        const editsPanel = document.getElementById('editsPanel');
+        const metaPanel = document.getElementById('metaPanel');
+        const editsList = document.getElementById('editsList');
+        const studyTypeInput = document.getElementById('studyTypeInput');
+        const studyTypeDropdown = document.getElementById('studyTypeDropdown');
+        const studyIdInput = document.getElementById('studyIdInput');
+
+        let currentShift = null;
+        let reportType = 'complete';
+        let studyTypes = [];
+        let currentEdits = [];        // [{original_text, suggested_text, reason, category, status, pos}]
+        let reviewedRaw = '';         // the text the review ran against
+        let draftInited = false;
+        let saving = false;
+
+        function setDraftStatus(msg, cls) {
+            draftStatus.textContent = msg || '';
+            draftStatus.className = 'status' + (cls ? ' ' + cls : '');
+        }
+
+        async function initDraftPage() {
+            if (draftInited) return;
+            draftInited = true;
+            await Promise.all([loadCurrentShift(), loadStudyTypes()]);
+        }
+
+        async function loadCurrentShift() {
+            try {
+                const data = await api('/api/shifts/current');
+                currentShift = data.shift;
+                document.getElementById('currentShiftName').textContent =
+                    currentShift ? currentShift.name : 'No shift yet — created on first save';
+            } catch (e) {
+                document.getElementById('currentShiftName').textContent = 'Unavailable';
+                setDraftStatus(e.message, 'error');
+            }
+        }
+
+        async function loadStudyTypes() {
+            try {
+                const data = await api('/api/study-types');
+                studyTypes = data.study_types || [];
+            } catch (e) {
+                console.error('Study types load failed:', e);
+                studyTypes = [];
+            }
+        }
+
+        // --- Study type combobox ---
+        function renderStudyTypeDropdown() {
+            const q = studyTypeInput.value.trim().toLowerCase();
+            const matches = studyTypes.filter(t => !q || t.name.toLowerCase().includes(q));
+            if (matches.length === 0 && !q) {
+                studyTypeDropdown.style.display = 'none';
+                return;
+            }
+            let html = matches.slice(0, 30).map(t =>
+                '<div class="dropdown-item" data-name="' + escapeHtml(t.name) + '">' + escapeHtml(t.name) + '</div>'
+            ).join('');
+            if (q && !studyTypes.some(t => t.name.toLowerCase() === q)) {
+                html += '<div class="dropdown-empty">New study type — will be saved on save</div>';
+            }
+            studyTypeDropdown.innerHTML = html || '<div class="dropdown-empty">No matches</div>';
+            studyTypeDropdown.style.display = '';
+            studyTypeDropdown.querySelectorAll('.dropdown-item').forEach(item => {
+                item.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    studyTypeInput.value = item.dataset.name;
+                    studyTypeDropdown.style.display = 'none';
+                });
+            });
+        }
+        studyTypeInput.addEventListener('focus', renderStudyTypeDropdown);
+        studyTypeInput.addEventListener('input', renderStudyTypeDropdown);
+        studyTypeInput.addEventListener('blur', () => setTimeout(() => { studyTypeDropdown.style.display = 'none'; }, 150));
+
+        // --- Report type toggle ---
+        document.getElementById('segPrelim').addEventListener('click', function () {
+            reportType = 'prelim';
+            this.classList.add('active');
+            document.getElementById('segComplete').classList.remove('active');
+        });
+        document.getElementById('segComplete').addEventListener('click', function () {
+            reportType = 'complete';
+            this.classList.add('active');
+            document.getElementById('segPrelim').classList.remove('active');
+        });
+
+        // --- Start New Shift (only manual way to create a shift) ---
+        document.getElementById('newShiftBtn').addEventListener('click', async () => {
+            const name = await askShiftName(autoShiftName());
+            if (!name) return;
+            try {
+                const data = await api('/api/shifts', { method: 'POST', body: { name } });
+                currentShift = data.shift;
+                document.getElementById('currentShiftName').textContent = currentShift.name;
+                showToast('Shift started: ' + currentShift.name);
+            } catch (e) {
+                setDraftStatus('Failed to create shift: ' + e.message, 'error');
+            }
+        });
+
+        // --- Shift smart-prompt logic (ask, never auto-create) ---
+        function shiftBoundaryCrossed(last, now) {
+            // Boundaries at 08:00 and 17:00 local time between last and now
+            const d = new Date(last.getFullYear(), last.getMonth(), last.getDate());
+            for (; d <= now; d.setDate(d.getDate() + 1)) {
+                for (const h of [8, 17]) {
+                    const b = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, 0, 0);
+                    if (b > last && b <= now) return true;
+                }
+            }
+            return false;
+        }
+
+        // Resolves to the shift the report should save to, or null if the user cancelled.
+        async function resolveShiftForSave() {
+            await loadCurrentShift();
+            const now = new Date();
+
+            // First ever use / fresh database: create the first shift silently
+            if (!currentShift) {
+                const data = await api('/api/shifts', { method: 'POST', body: { name: autoShiftName(now) } });
+                currentShift = data.shift;
+                document.getElementById('currentShiftName').textContent = currentShift.name;
+                return currentShift;
+            }
+
+            const last = new Date(currentShift.last_activity_at);
+            const hoursSince = (now - last) / 3600000;
+            const needsPrompt = hoursSince > 4 || shiftBoundaryCrossed(last, now);
+
+            if (needsPrompt) {
+                const detail = hoursSince > 4
+                    ? 'It’s been ' + hoursSince.toFixed(1) + ' hours since the last save on “' + currentShift.name + '”.'
+                    : 'A shift transition boundary (08:00/17:00) has passed since the last save on “' + currentShift.name + '”.';
+                const choice = await askNewShift(detail);
+                if (choice === 'new') {
+                    const name = await askShiftName(autoShiftName(now));
+                    if (name === null) return null; // cancelled — abort the save
+                    const data = await api('/api/shifts', { method: 'POST', body: { name } });
+                    currentShift = data.shift;
+                    document.getElementById('currentShiftName').textContent = currentShift.name;
+                }
+                // 'same' → fall through; last_activity_at updates on save, so we
+                // won't ask again until the next 4-hour gap / boundary crossing.
+            }
+            return currentShift;
+        }
+
+        // --- Review flow ---
+        document.getElementById('reviewSaveBtn').addEventListener('click', async () => {
+            const text = draftText.value.trim();
+            if (!text) { setDraftStatus('Paste a report first.', 'error'); return; }
+            const btn = document.getElementById('reviewSaveBtn');
+            btn.disabled = true;
+            setDraftStatus('Reviewing with Claude…');
+            try {
+                reviewedRaw = draftText.value;
+                const data = await api('/api/draft/review', { method: 'POST', body: { report: reviewedRaw } });
+                currentEdits = locateEdits(reviewedRaw, data.edits || []);
+                setDraftStatus('');
+                if (currentEdits.length === 0) {
+                    // Nothing to review — save directly
+                    await persistReport();
+                } else {
+                    enterReviewMode();
+                }
+            } catch (e) {
+                setDraftStatus('Review failed: ' + e.message + ' — you can retry, or Save without review below.', 'error');
+                offerSaveWithoutReview();
             } finally {
-                sendBtn.disabled = false;
-                sendBtn.textContent = 'Send';
+                btn.disabled = false;
             }
+        });
+
+        function offerSaveWithoutReview() {
+            if (document.getElementById('saveNoReviewBtn')) return;
+            const b = document.createElement('button');
+            b.id = 'saveNoReviewBtn';
+            b.className = 'ghost';
+            b.textContent = 'Save without review';
+            b.addEventListener('click', async () => {
+                reviewedRaw = draftText.value;
+                currentEdits = [];
+                await persistReport();
+                b.remove();
+            });
+            metaPanel.appendChild(b);
         }
 
-        // Close modal on overlay click
-        document.getElementById('emailModal').addEventListener('click', function(e) {
-            if (e.target === this) {
-                closeEmailModal();
+        // Locate each edit's position in the text (first occurrence, sequential, non-overlapping)
+        function locateEdits(text, edits) {
+            const located = [];
+            const used = []; // occupied [start, end) ranges
+            for (const e of edits) {
+                let from = 0, pos = -1;
+                while (true) {
+                    pos = text.indexOf(e.original_text, from);
+                    if (pos === -1) break;
+                    const end = pos + e.original_text.length;
+                    if (!used.some(([s, en]) => pos < en && end > s)) break;
+                    from = pos + 1;
+                }
+                if (pos === -1) continue; // can't locate — drop
+                used.push([pos, pos + e.original_text.length]);
+                located.push({ ...e, pos, status: 'pending' });
             }
-        });
+            return located.sort((a, b) => a.pos - b.pos);
+        }
 
-        // Close modal on Escape key
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape') {
-                closeEmailModal();
+        function enterReviewMode() {
+            draftText.style.display = 'none';
+            draftPreview.style.display = '';
+            metaPanel.style.display = 'none';
+            editsPanel.style.display = '';
+            renderReview();
+        }
+
+        function exitReviewMode() {
+            draftText.style.display = '';
+            draftPreview.style.display = 'none';
+            metaPanel.style.display = '';
+            editsPanel.style.display = 'none';
+            reviewStatus.textContent = '';
+        }
+        document.getElementById('cancelReviewBtn').addEventListener('click', exitReviewMode);
+
+        function renderReview() {
+            // Preview with inline highlights
+            let html = '';
+            let cursor = 0;
+            for (const e of currentEdits) {
+                html += escapeHtml(reviewedRaw.slice(cursor, e.pos));
+                if (e.status === 'accepted') {
+                    html += '<span class="edit-span-suggested">' + escapeHtml(e.suggested_text) + '</span>';
+                } else if (e.status === 'rejected') {
+                    html += escapeHtml(e.original_text);
+                } else {
+                    html += '<span class="edit-span-original">' + escapeHtml(e.original_text) + '</span>' +
+                            '<span class="edit-span-suggested"> ' + escapeHtml(e.suggested_text) + '</span>';
+                }
+                cursor = e.pos + e.original_text.length;
             }
-        });
+            html += escapeHtml(reviewedRaw.slice(cursor));
+            draftPreview.innerHTML = html;
 
-        function sendMessage() {
-            if (isRecording) {
-                stopRecording();
-            }
-            
-            const message = userInput.value.trim();
-            if (!message) return;
-
-            addMessage(message, true);
-            
-            userInput.value = '';
-            userInput.style.height = 'auto';
-            finalTranscript = '';
-
-            addMessage('Generating report...', false);
-
-            generateReport(message).then(report => {
-                const messages = chatContainer.querySelectorAll('.message');
-                messages[messages.length - 1].remove();
-                
-                addMessage(report, false);
-                userInput.focus();
+            // Cards
+            const pending = currentEdits.filter(e => e.status === 'pending').length;
+            document.getElementById('editsCount').textContent =
+                currentEdits.length + ' total, ' + pending + ' undecided';
+            editsList.innerHTML = '';
+            currentEdits.forEach((e, idx) => {
+                const ctxBefore = reviewedRaw.slice(Math.max(0, e.pos - 40), e.pos);
+                const ctxAfter = reviewedRaw.slice(e.pos + e.original_text.length, e.pos + e.original_text.length + 40);
+                const card = document.createElement('div');
+                card.className = 'edit-card ' + e.status;
+                card.innerHTML =
+                    '<span class="edit-cat ' + e.category + '">' + e.category + '</span>' +
+                    '<div class="edit-context"><span class="ctx">…' + escapeHtml(ctxBefore) + '</span>' +
+                    '<span class="edit-orig">' + escapeHtml(e.original_text) + '</span> → ' +
+                    '<span class="edit-sugg">' + escapeHtml(e.suggested_text) + '</span>' +
+                    '<span class="ctx">' + escapeHtml(ctxAfter) + '…</span></div>' +
+                    (e.reason ? '<div class="edit-reason">' + escapeHtml(e.reason) + '</div>' : '') +
+                    '<div class="edit-actions">' +
+                    '<button class="accept-btn' + (e.status === 'accepted' ? ' on' : '') + '">✓ Accept</button>' +
+                    '<button class="reject-btn' + (e.status === 'rejected' ? ' on' : '') + '">✗ Reject</button>' +
+                    '</div>';
+                card.querySelector('.accept-btn').addEventListener('click', () => {
+                    e.status = e.status === 'accepted' ? 'pending' : 'accepted';
+                    renderReview();
+                });
+                card.querySelector('.reject-btn').addEventListener('click', () => {
+                    e.status = e.status === 'rejected' ? 'pending' : 'rejected';
+                    renderReview();
+                });
+                editsList.appendChild(card);
             });
         }
 
-        sendBtn.addEventListener('click', sendMessage);
-        userInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-            }
+        document.getElementById('saveReviewedBtn').addEventListener('click', () => persistReport());
+        document.getElementById('rejectAllSaveBtn').addEventListener('click', () => {
+            currentEdits.forEach(e => { e.status = 'rejected'; });
+            persistReport();
         });
 
-        </script>
+        function applyAcceptedEdits() {
+            // Any edit without an explicit accept defaults to REJECTED
+            let out = '';
+            let cursor = 0;
+            for (const e of currentEdits) {
+                out += reviewedRaw.slice(cursor, e.pos);
+                out += e.status === 'accepted' ? e.suggested_text : e.original_text;
+                cursor = e.pos + e.original_text.length;
+            }
+            out += reviewedRaw.slice(cursor);
+            return out;
+        }
+
+        async function persistReport() {
+            if (saving) return;
+            saving = true;
+            const statusEl = editsPanel.style.display === 'none' ? draftStatus : reviewStatus;
+            try {
+                statusEl.textContent = 'Saving…';
+                statusEl.className = 'status';
+
+                const shift = await resolveShiftForSave();
+                if (!shift) { statusEl.textContent = 'Save cancelled.'; return; }
+
+                const editsRecord = currentEdits.map(e => ({
+                    original_text: e.original_text,
+                    suggested_text: e.suggested_text,
+                    reason: e.reason,
+                    category: e.category,
+                    status: e.status === 'accepted' ? 'accepted' : 'rejected'
+                }));
+
+                const body = {
+                    proposed_id: makeReportId(),
+                    shift_id: shift.id,
+                    study_type: studyTypeInput.value.trim(),
+                    study_id_label: studyIdInput.value.trim(),
+                    report_type: reportType,
+                    raw_text: reviewedRaw,
+                    draft_text: applyAcceptedEdits(),
+                    edits_json: editsRecord
+                };
+                const data = await api('/api/reports', { method: 'POST', body });
+
+                exitReviewMode();
+                draftText.value = '';
+                studyTypeInput.value = '';
+                studyIdInput.value = '';
+                currentEdits = [];
+                reviewedRaw = '';
+                await Promise.all([loadStudyTypes(), loadCurrentShift()]);
+                finalDataStale = true;
+                setDraftStatus('', '');
+                showToast('Saved report ' + data.report.id + '\n' + (data.report.study_type || ''));
+            } catch (e) {
+                statusEl.textContent = 'Save failed: ' + e.message;
+                statusEl.className = 'status error';
+            } finally {
+                saving = false;
+            }
+        }
+
+        // ==================== FINAL PAGE ====================
+
+        const shiftSelect = document.getElementById('shiftSelect');
+        const reportList = document.getElementById('reportList');
+        const finalDetail = document.getElementById('finalDetail');
+        const finalDraftView = document.getElementById('finalDraftView');
+        const finalTextEl = document.getElementById('finalText');
+        const finalDiffView = document.getElementById('finalDiffView');
+        const finalStatusEl = document.getElementById('finalStatus');
+
+        let finalShifts = [];
+        let finalReport = null;      // full row of selected report
+        let finalDataStale = true;
+
+        async function initFinalPage() {
+            if (!finalDataStale) return;
+            finalDataStale = false;
+            try {
+                const data = await api('/api/shifts');
+                finalShifts = data.shifts || [];
+                if (finalShifts.length === 0) {
+                    shiftSelect.innerHTML = '<option value="">No shifts yet</option>';
+                    reportList.innerHTML = '<div class="list-empty">Save a report on the Draft page first.</div>';
+                    finalDetail.style.display = 'none';
+                    return;
+                }
+                shiftSelect.innerHTML = finalShifts.map(s =>
+                    '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'
+                ).join('');
+                // Default: last selected this session, else the current (newest) shift
+                const remembered = sessionStorage.getItem('finalShiftId');
+                shiftSelect.value = (remembered && finalShifts.some(s => s.id === remembered))
+                    ? remembered
+                    : finalShifts[0].id;
+                await loadFinalReports();
+            } catch (e) {
+                reportList.innerHTML = '<div class="list-empty">⚠️ ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        shiftSelect.addEventListener('change', () => {
+            sessionStorage.setItem('finalShiftId', shiftSelect.value);
+            finalDetail.style.display = 'none';
+            finalReport = null;
+            loadFinalReports();
+        });
+
+        async function loadFinalReports() {
+            const shiftId = shiftSelect.value;
+            if (!shiftId) return;
+            reportList.innerHTML = '<div class="list-empty"><span class="spinner"></span>Loading…</div>';
+            try {
+                const data = await api('/api/reports?shift_id=' + encodeURIComponent(shiftId));
+                const reports = data.reports || [];
+                if (reports.length === 0) {
+                    reportList.innerHTML = '<div class="list-empty">No reports in this shift.</div>';
+                    return;
+                }
+                reportList.innerHTML = '';
+                reports.forEach(r => {
+                    const row = document.createElement('div');
+                    row.className = 'report-row';
+                    row.dataset.id = r.id;
+                    const time = new Date(r.created_at);
+                    row.innerHTML =
+                        '<span class="rr-id">' + escapeHtml(r.id) + '</span>' +
+                        '<span class="rr-study">' + escapeHtml(r.study_type || '—') + '</span>' +
+                        (r.study_id_label ? '<span class="rr-label">' + escapeHtml(r.study_id_label) + '</span>' : '') +
+                        '<span class="rr-type">' + escapeHtml(r.report_type) + '</span>' +
+                        '<span class="rr-time">' + pad2(time.getHours()) + ':' + pad2(time.getMinutes()) + '</span>' +
+                        (r.rpr_grade ? '<span class="rpr-badge ' + r.rpr_grade.toLowerCase() + '">' + escapeHtml(r.rpr_grade) + '</span>' : '') +
+                        '<span class="rr-final ' + (r.final_saved_at ? 'yes' : 'no') + '">' + (r.final_saved_at ? '✓ Final' : 'No final') + '</span>';
+                    row.addEventListener('click', () => selectFinalReport(r.id, row));
+                    reportList.appendChild(row);
+                });
+            } catch (e) {
+                reportList.innerHTML = '<div class="list-empty">⚠️ ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        async function selectFinalReport(id, row) {
+            document.querySelectorAll('.report-row').forEach(r => r.classList.remove('selected'));
+            row.classList.add('selected');
+            finalStatusEl.textContent = '';
+            try {
+                const data = await api('/api/reports/' + encodeURIComponent(id));
+                finalReport = data.report;
+                document.getElementById('finalReportId').textContent = finalReport.id;
+                finalDraftView.textContent = finalReport.draft_text;
+                finalTextEl.value = finalReport.final_text || '';
+                finalDetail.style.display = '';
+                renderGrade();
+                renderFinalDiff();
+                finalDetail.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            } catch (e) {
+                showToast('Failed to load report: ' + e.message);
+            }
+        }
+
+        // Word-level LCS diff: additions/changes amber bold, deletions faint strikethrough
+        function renderFinalDiff() {
+            if (!finalReport) return;
+            const finalVal = finalTextEl.value;
+            if (!finalVal.trim()) {
+                finalDiffView.innerHTML = '<span style="color:var(--text-dim); font-style:italic">Paste the final report above to see corrections.</span>';
+                return;
+            }
+            finalDiffView.innerHTML = diffWords(finalReport.draft_text, finalVal).map(p => {
+                if (p.type === 'same') return escapeHtml(p.text);
+                if (p.type === 'add') return '<span class="diff-add">' + escapeHtml(p.text) + '</span>';
+                return '<span class="diff-del">' + escapeHtml(p.text) + '</span>';
+            }).join('');
+        }
+
+        // ---- RPR grading ----
+        const gradePanel = document.getElementById('gradePanel');
+        const gradeStatus = document.getElementById('gradeStatus');
+
+        function renderGrade() {
+            if (!finalReport || !finalReport.final_saved_at) {
+                gradePanel.style.display = 'none';
+                return;
+            }
+            gradePanel.style.display = '';
+            const badge = document.getElementById('gradeBadge');
+            const rationale = document.getElementById('gradeRationale');
+            if (finalReport.rpr_grade) {
+                badge.textContent = finalReport.rpr_grade;
+                badge.className = 'rpr-badge ' + finalReport.rpr_grade.toLowerCase();
+                rationale.textContent = finalReport.rpr_rationale || '';
+            } else {
+                badge.textContent = 'Ungraded';
+                badge.className = 'rpr-badge';
+                rationale.textContent = 'Automatic grading didn’t complete — use Re-grade or set manually.';
+            }
+            document.querySelectorAll('.grade-btn').forEach(b =>
+                b.classList.toggle('on', b.dataset.g === finalReport.rpr_grade));
+            gradeStatus.textContent = '';
+            gradeStatus.className = 'status';
+        }
+
+        async function postGrade(body, busyLabel) {
+            if (!finalReport) return;
+            gradeStatus.textContent = busyLabel;
+            gradeStatus.className = 'status';
+            try {
+                const data = await api('/api/reports/' + encodeURIComponent(finalReport.id) + '/grade', {
+                    method: 'POST', body: body || {}
+                });
+                finalReport = data.report;
+                renderGrade();
+                loadFinalReports();
+            } catch (e) {
+                gradeStatus.textContent = e.message;
+                gradeStatus.className = 'status error';
+            }
+        }
+
+        document.querySelectorAll('.grade-btn').forEach(btn => {
+            btn.addEventListener('click', () => postGrade({ manual_grade: btn.dataset.g }, 'Saving…'));
+        });
+        document.getElementById('regradeBtn').addEventListener('click', () => postGrade(null, 'Grading…'));
+
+        let diffDebounce = null;
+        finalTextEl.addEventListener('input', () => {
+            clearTimeout(diffDebounce);
+            diffDebounce = setTimeout(renderFinalDiff, 250);
+        });
+        finalTextEl.addEventListener('paste', () => {
+            clearTimeout(diffDebounce);
+            diffDebounce = setTimeout(renderFinalDiff, 100);
+        });
+
+        document.getElementById('saveFinalBtn').addEventListener('click', async () => {
+            if (!finalReport) return;
+            const text = finalTextEl.value.trim();
+            if (!text) { finalStatusEl.textContent = 'Paste the final report first.'; finalStatusEl.className = 'status error'; return; }
+            const btn = document.getElementById('saveFinalBtn');
+            btn.disabled = true;
+            finalStatusEl.textContent = 'Saving & grading…';
+            finalStatusEl.className = 'status';
+            try {
+                const data = await api('/api/reports/' + encodeURIComponent(finalReport.id) + '/final', {
+                    method: 'PUT', body: { final_text: finalTextEl.value }
+                });
+                finalReport = data.report;
+                finalStatusEl.textContent = 'Final saved ✓' + (finalReport.rpr_grade ? ' — graded ' + finalReport.rpr_grade : '');
+                finalStatusEl.className = 'status ok';
+                renderGrade();
+                renderFinalDiff();
+                loadFinalReports();
+            } catch (e) {
+                finalStatusEl.textContent = 'Save failed: ' + e.message;
+                finalStatusEl.className = 'status error';
+            } finally {
+                btn.disabled = false;
+            }
+        });
+    </script>
 </body>
 </html>

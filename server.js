@@ -17,7 +17,9 @@ app.use(express.urlencoded({ extended: false }));
 
 // Claude API configuration — models are env-configurable
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-const MODEL_DETECT = process.env.MODEL_DETECT || 'claude-fable-5';  // study type detection
+// Detection is a trivial classification that runs on nearly every action —
+// Haiku handles it at ~1/10 the price of the frontier models.
+const MODEL_DETECT = process.env.MODEL_DETECT || 'claude-haiku-4-5';  // study type detection
 const MODEL_REPORT = process.env.MODEL_REPORT || 'claude-fable-5';  // report actions + draft review
 const MODEL_CHAT = process.env.MODEL_CHAT || 'claude-fable-5';      // free-form Assist chat
 const MODEL_RADQA = process.env.MODEL_RADQA || 'claude-fable-5';    // Quick Rad Question
@@ -292,7 +294,15 @@ Text to reword:`,
 Text to proofread:`,
   impression: `Generate a numbered IMPRESSION for the following radiology report body. Order items by clinical significance, keep each item concise, and use standard radiology register. Return only the numbered impression lines (1. ... 2. ...), nothing else.
 
-Report body:`
+Report body:`,
+  fullreport: `Generate a complete radiology report from the user's dictated or summarized findings. Use standard report structure — EXAMINATION, CLINICAL HISTORY, TECHNIQUE, COMPARISON, FINDINGS, IMPRESSION — matching the structure and phrasing of any exemplar reports provided for this study type. Rules:
+- Include every finding the user stated, worded in standard radiology register. Never alter laterality, measurements, or meaning.
+- For structures the user did not mention, use the standard normal statements appropriate to this study type.
+- Use [bracketed placeholders] for details the user did not provide (e.g. [clinical history], [comparison date]) rather than inventing them.
+- Number the IMPRESSION by clinical significance.
+- Return only the report text, nothing else.
+
+User's findings / dictation:`
 };
 
 const DRAFT_REVIEW_SYSTEM = `You review radiology report drafts for a radiologist. Identify typo corrections (spelling, grammar, punctuation, dictation/speech-recognition errors) and small stylistic improvements (clarity, flow, standard radiology phrasing).
@@ -616,7 +626,9 @@ app.post('/api/assist', async (req, res) => {
     let system = ASSIST_SYSTEM;
     if (instruction) {
       let studyType = null;
-      if (looksLikeReport(message)) {
+      // fullreport inputs are often short dictations, but knowing the study type
+      // is what pulls in the right exemplars — always try to detect it.
+      if (action === 'fullreport' || looksLikeReport(message)) {
         try { studyType = await detectStudyType(message); } catch (e) { /* non-fatal */ }
       }
       system = await buildKnowledgeSystem(ASSIST_SYSTEM, studyType);
@@ -672,6 +684,50 @@ app.post('/api/assist/feedback', async (req, res) => {
   } catch (error) {
     console.error('Feedback error:', error);
     res.status(500).json({ error: 'Failed to save feedback', details: error.message });
+  }
+});
+
+// ============ Assist chat history (persistent, cross-device) ============
+
+// Last N messages, returned oldest-first for rendering. History lives in
+// Supabase so it follows the login across browsers/computers and is never
+// cleared by the app.
+app.get('/api/assist/messages', async (req, res) => {
+  if (!requireSupabase(res)) return;
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 300, 1000);
+    const { data, error } = await supabase
+      .from('assist_messages')
+      .select('id, role, content, action_type, created_at')
+      .order('id', { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    res.json({ messages: (data || []).reverse() });
+  } catch (error) {
+    console.error('Assist history error:', error);
+    res.status(500).json({ error: 'Failed to load chat history', details: error.message });
+  }
+});
+
+// Save one user+assistant exchange. Array insert preserves order, so the
+// identity ids keep the pair in sequence.
+app.post('/api/assist/messages', async (req, res) => {
+  if (!requireSupabase(res)) return;
+  try {
+    const { user_text, assistant_text, action_type } = req.body;
+    if (!user_text || !assistant_text) {
+      return res.status(400).json({ error: 'user_text and assistant_text are required' });
+    }
+    const at = action_type || 'freeform';
+    const { error } = await supabase.from('assist_messages').insert([
+      { role: 'user', content: user_text, action_type: at },
+      { role: 'assistant', content: assistant_text, action_type: at }
+    ]);
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Assist history save error:', error);
+    res.status(500).json({ error: 'Failed to save chat history', details: error.message });
   }
 });
 
@@ -801,19 +857,40 @@ app.get('/api/shifts', async (req, res) => {
   }
 });
 
-app.get('/api/shifts/current', async (req, res) => {
+// The active shift is server state, so every browser/device agrees on it.
+// supabase-js has no transactions; deactivate-then-activate is safe because the
+// one_active_shift partial unique index makes two active shifts impossible —
+// a lost race surfaces as an error here rather than corrupt state.
+async function activateShift(id) {
+  const { error: deactErr } = await supabase
+    .from('shifts')
+    .update({ is_active: false })
+    .eq('is_active', true)
+    .neq('id', id);
+  if (deactErr) throw deactErr;
+  const { data, error } = await supabase
+    .from('shifts')
+    .update({ is_active: true })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+app.get('/api/shifts/active', async (req, res) => {
   if (!requireSupabase(res)) return;
   try {
     const { data, error } = await supabase
       .from('shifts')
       .select('*')
-      .order('started_at', { ascending: false })
+      .eq('is_active', true)
       .limit(1);
     if (error) throw error;
     res.json({ shift: data && data.length ? data[0] : null });
   } catch (error) {
-    console.error('Current shift error:', error);
-    res.status(500).json({ error: 'Failed to load current shift', details: error.message });
+    console.error('Active shift error:', error);
+    res.status(500).json({ error: 'Failed to load active shift', details: error.message });
   }
 });
 
@@ -831,10 +908,28 @@ app.post('/api/shifts', async (req, res) => {
       .select()
       .single();
     if (error) throw error;
-    res.json({ shift: data });
+    // A newly started shift is always the active one
+    const shift = await activateShift(data.id);
+    res.json({ shift });
   } catch (error) {
     console.error('Create shift error:', error);
     res.status(500).json({ error: 'Failed to create shift', details: error.message });
+  }
+});
+
+// Manually switch the active shift (e.g. resuming an older shift)
+app.put('/api/shifts/:id/activate', async (req, res) => {
+  if (!requireSupabase(res)) return;
+  try {
+    const shift = await activateShift(req.params.id);
+    res.json({ shift });
+  } catch (error) {
+    // .single() on an update that matched no rows → PGRST116
+    if (error.code === 'PGRST116') {
+      return res.status(404).json({ error: 'Shift not found' });
+    }
+    console.error('Activate shift error:', error);
+    res.status(500).json({ error: 'Failed to activate shift', details: error.message });
   }
 });
 
@@ -1280,8 +1375,32 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// One-time backfill: if shifts exist but none is active (first deploy after
+// the is_active migration), activate the most recently started one. The SQL
+// migration also does this; this covers the case where the code deploys first.
+async function backfillActiveShift() {
+  if (!supabase) return;
+  try {
+    const { data: active, error: activeErr } = await supabase
+      .from('shifts').select('id').eq('is_active', true).limit(1);
+    if (activeErr) throw activeErr;
+    if (active && active.length) return;
+    const { data: latest, error: latestErr } = await supabase
+      .from('shifts').select('id, name').order('started_at', { ascending: false }).limit(1);
+    if (latestErr) throw latestErr;
+    if (latest && latest.length) {
+      await activateShift(latest[0].id);
+      console.log(`✅ Backfilled active shift: ${latest[0].name}`);
+    }
+  } catch (e) {
+    // Expected until the is_active migration has been run in Supabase
+    console.error('Active shift backfill skipped:', e.message);
+  }
+}
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🏥 Flow Dictation running on port ${PORT}`);
   console.log(`✨ Claude: ${MODEL_REPORT} (reports), fallback ${MODEL_FALLBACK}`);
   console.log(`🗄️  Supabase: ${supabase ? 'connected' : 'NOT CONFIGURED'}`);
+  backfillActiveShift();
 });

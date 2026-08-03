@@ -1,12 +1,15 @@
 -- Flow Dictation — Supabase schema
 -- Run this in the Supabase dashboard SQL editor.
 
--- Shifts: created only via "Start New Shift" (or silently on first-ever save)
+-- Shifts: created only via "Start New Shift" (or silently on first-ever save).
+-- is_active marks the current shift server-side (see the Active shift section
+-- below for the uniqueness index and backfill).
 create table if not exists shifts (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   started_at timestamptz not null default now(),
-  last_activity_at timestamptz not null default now()
+  last_activity_at timestamptz not null default now(),
+  is_active boolean not null default false
 );
 
 -- Historical study types for the Draft page combobox (ordered by most recently used)
@@ -63,6 +66,40 @@ alter table shifts enable row level security;
 alter table study_types enable row level security;
 alter table reports enable row level security;
 alter table assist_feedback enable row level security;
+
+-- ============================================================
+-- Active shift (added later — run this section on its own if the
+-- tables above already exist in your database)
+-- ============================================================
+
+-- The "current shift" selection lives server-side so every browser/device
+-- agrees on it. The partial unique index makes >1 active shift impossible
+-- at the database level.
+alter table shifts add column if not exists is_active boolean not null default false;
+create unique index if not exists one_active_shift on shifts (is_active) where is_active;
+
+-- Backfill: if nothing is active yet, activate the most recently started shift
+update shifts set is_active = true
+where id = (select id from shifts order by started_at desc limit 1)
+  and not exists (select 1 from shifts where is_active);
+
+-- ============================================================
+-- Assist chat history (added later — run this section on its own
+-- if the tables above already exist in your database)
+-- ============================================================
+
+-- Persistent Assist chat log. Server-side so history follows the login across
+-- browsers/devices. Never cleared by the app. bigint identity id gives a
+-- guaranteed insert order even when a user+assistant pair shares a timestamp.
+create table if not exists assist_messages (
+  id bigint generated always as identity primary key,
+  role text not null check (role in ('user', 'assistant')),
+  content text not null,
+  action_type text,          -- describe | reword | proofread | impression | fullreport | radqa | freeform
+  created_at timestamptz not null default now()
+);
+
+alter table assist_messages enable row level security;
 
 -- ============================================================
 -- Knowledge layer (added later — run this section on its own if

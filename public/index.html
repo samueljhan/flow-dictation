@@ -550,6 +550,10 @@
                             <strong>Generate Impression</strong>
                             <span>Numbered impression from a report body</span>
                         </div>
+                        <div class="example-prompt" data-action="fullreport">
+                            <strong>Generate Full Report</strong>
+                            <span>Complete report from dictated findings</span>
+                        </div>
                         <div class="example-prompt" data-action="radqa">
                             <strong>Quick Rad Question</strong>
                             <span>Anatomy, protocols, differentials, pitfalls</span>
@@ -880,9 +884,10 @@
             reword: 'Paste the sentence, section, or entire report you’d like reworded.',
             proofread: 'Paste the text to proofread — corrections will be shown in bold (copies as plain text).',
             impression: 'Paste the report body — I’ll generate a numbered Impression.',
+            fullreport: 'Dictate or paste your findings — I’ll generate a complete structured report with normals filled in. Review it carefully before use.',
             radqa: 'Ask a quick radiology question — anatomy, protocol selection, differentials, imaging pitfalls, or report language. Follow-ups work.'
         };
-        const ACTION_LABELS = { describe: 'Describe a Finding', reword: 'Reword', proofread: 'Proofread', impression: 'Generate Impression', radqa: 'Quick Rad Question' };
+        const ACTION_LABELS = { describe: 'Describe a Finding', reword: 'Reword', proofread: 'Proofread', impression: 'Generate Impression', fullreport: 'Generate Full Report', radqa: 'Quick Rad Question' };
 
         function armAction(action) {
             pendingAction = action;
@@ -1120,12 +1125,64 @@
                 chatHistory.push({ role: 'user', content: message });
                 chatHistory.push({ role: 'assistant', content: plainText });
                 if (chatHistory.length > 24) chatHistory = chatHistory.slice(-24);
+
+                // Persist the exchange server-side so history survives across
+                // sessions and devices. Fire-and-forget — a save failure never
+                // blocks the conversation.
+                api('/api/assist/messages', { method: 'POST', body: {
+                    user_text: message,
+                    assistant_text: plainText,
+                    action_type: actionType || 'freeform'
+                }}).catch(e => console.error('History save failed:', e));
             } catch (e) {
                 loading.querySelector('.message-content').innerHTML =
                     '<span style="color:#dc7a7a">⚠️ ' + escapeHtml(e.message) + '</span>';
             }
             userInput.focus();
         }
+
+        // Restored history renders as plain text with a Copy button — no feedback
+        // bar (that moment has passed) and no proofread bolding, but links still work.
+        function addStoredAssistantMessage(text) {
+            const div = document.createElement('div');
+            div.className = 'message assistant';
+            const content = document.createElement('div');
+            content.className = 'message-content';
+            content.innerHTML = linkifyEscaped(escapeHtml(text));
+            const tools = document.createElement('div');
+            tools.className = 'response-buttons';
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'action-btn';
+            copyBtn.textContent = 'Copy';
+            copyBtn.addEventListener('click', () => copyPlainText(text, copyBtn));
+            tools.appendChild(copyBtn);
+            content.appendChild(tools);
+            div.appendChild(content);
+            chatContainer.appendChild(div);
+        }
+
+        // Load persistent history on page open (last 300 messages; older stay in
+        // the database untouched). Follow-up context is seeded from the tail.
+        async function loadChatHistory() {
+            let msgs = [];
+            try {
+                const data = await api('/api/assist/messages?limit=300');
+                msgs = data.messages || [];
+            } catch (e) {
+                console.error('Chat history load failed:', e);
+                return;
+            }
+            if (!msgs.length) return;
+            clearWelcome();
+            for (const m of msgs) {
+                if (m.role === 'user') addUserMessage(m.content);
+                else addStoredAssistantMessage(m.content);
+            }
+            chatHistory = msgs.slice(-24).map(m => ({ role: m.role, content: m.content }));
+            showNextOptions();
+            scrollChat();
+        }
+        loadChatHistory();
 
         sendBtn.addEventListener('click', sendMessage);
         userInput.addEventListener('keypress', (e) => {
@@ -1209,9 +1266,10 @@
             await Promise.all([loadCurrentShift(), loadStudyTypes()]);
         }
 
+        // The active shift is server state — same answer on every browser/device
         async function loadCurrentShift() {
             try {
-                const data = await api('/api/shifts/current');
+                const data = await api('/api/shifts/active');
                 currentShift = data.shift;
                 document.getElementById('currentShiftName').textContent =
                     currentShift ? currentShift.name : 'No shift yet — created on first save';
@@ -1549,10 +1607,13 @@
                 shiftSelect.innerHTML = finalShifts.map(s =>
                     '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'
                 ).join('');
+                // Within-session selection is a UX convenience; a fresh load
+                // defaults to the server's active shift.
                 const remembered = sessionStorage.getItem('finalShiftId');
+                const activeShift = finalShifts.find(s => s.is_active);
                 shiftSelect.value = (remembered && finalShifts.some(s => s.id === remembered))
                     ? remembered
-                    : finalShifts[0].id;
+                    : (activeShift ? activeShift.id : finalShifts[0].id);
                 await loadFinalReports();
             } catch (e) {
                 reportList.innerHTML = '<div class="list-empty">⚠️ ' + escapeHtml(e.message) + '</div>';
@@ -1766,6 +1827,9 @@
                         (shiftsData.shifts || []).map(s =>
                             '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'
                         ).join('');
+                    // Fresh load defaults to the server's active shift ("Clear" widens to all)
+                    const rvActive = (shiftsData.shifts || []).find(s => s.is_active);
+                    if (rvActive) rvShift.value = rvActive.id;
                     document.getElementById('rvStudyTypes').innerHTML =
                         (typesData.study_types || []).map(t =>
                             '<option value="' + escapeHtml(t.name) + '">'

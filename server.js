@@ -955,6 +955,40 @@ app.post('/api/shifts', async (req, res) => {
   }
 });
 
+// Delete a shift — empty shifts only (the accidental-duplicate case). Reports
+// reference shifts by FK, so this is also the only deletion that could succeed.
+app.delete('/api/shifts/:id', async (req, res) => {
+  if (!requireSupabase(res)) return;
+  try {
+    const { count, error: cntErr } = await supabase
+      .from('reports')
+      .select('id', { count: 'exact', head: true })
+      .eq('shift_id', req.params.id);
+    if (cntErr) throw cntErr;
+    if (count > 0) {
+      return res.status(400).json({
+        error: `Shift has ${count} report${count === 1 ? '' : 's'} — only empty shifts can be deleted`
+      });
+    }
+    const { data: deleted, error } = await supabase
+      .from('shifts').delete().eq('id', req.params.id).select();
+    if (error) throw error;
+    if (!deleted || deleted.length === 0) {
+      return res.status(404).json({ error: 'Shift not found' });
+    }
+    // Deleting the active shift promotes the most recent remaining one
+    if (deleted[0].is_active) {
+      const { data: latest, error: latestErr } = await supabase
+        .from('shifts').select('id').order('started_at', { ascending: false }).limit(1);
+      if (!latestErr && latest && latest.length) await activateShift(latest[0].id);
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete shift error:', error);
+    res.status(500).json({ error: 'Failed to delete shift', details: error.message });
+  }
+});
+
 // Manually switch the active shift (e.g. resuming an older shift)
 app.put('/api/shifts/:id/activate', async (req, res) => {
   if (!requireSupabase(res)) return;

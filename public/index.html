@@ -112,6 +112,8 @@
             transition: all 0.2s;
         }
         .ghost:hover { background: #505050; }
+        .ghost.danger { color: #dc8a8a; }
+        .ghost.danger:hover { background: #5a3535; }
 
         /* ---------- Assist: chat ---------- */
         /* Chat is the one place a max-width helps readability — the page itself
@@ -723,6 +725,7 @@
                     <input id="rvStudyType" list="rvStudyTypes" placeholder="e.g. CT head" style="width:170px">
                     <datalist id="rvStudyTypes"></datalist>
                     <button class="ghost" id="rvClear">Clear</button>
+                    <button class="ghost danger" id="rvDeleteShift" style="display:none">Delete Shift</button>
                     <span class="status" id="rvCount"></span>
                 </div>
                 <div class="report-head">
@@ -2067,31 +2070,64 @@
         const rvCount = document.getElementById('rvCount');
         let reviewInited = false;
 
+        function updateRvDeleteBtn() {
+            document.getElementById('rvDeleteShift').style.display = rvShift.value ? '' : 'none';
+        }
+
+        // selectId: undefined = default to the active shift; '' = All shifts
+        async function loadRvShifts(selectId) {
+            const shiftsData = await api('/api/shifts');
+            const shifts = shiftsData.shifts || [];
+            rvShift.innerHTML = '<option value="">All shifts</option>' +
+                shifts.map(s =>
+                    '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'
+                ).join('');
+            if (selectId !== undefined) {
+                rvShift.value = selectId;
+            } else {
+                // Fresh load defaults to the server's active shift ("Clear" widens to all)
+                const rvActive = shifts.find(s => s.is_active);
+                if (rvActive) rvShift.value = rvActive.id;
+            }
+            updateRvDeleteBtn();
+        }
+
         async function initReviewPage() {
             if (!reviewInited) {
                 reviewInited = true;
                 try {
-                    const [shiftsData, typesData] = await Promise.all([
-                        api('/api/shifts'),
-                        api('/api/study-types')
-                    ]);
-                    rvShift.innerHTML = '<option value="">All shifts</option>' +
-                        (shiftsData.shifts || []).map(s =>
-                            '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'
-                        ).join('');
-                    // Fresh load defaults to the server's active shift ("Clear" widens to all)
-                    const rvActive = (shiftsData.shifts || []).find(s => s.is_active);
-                    if (rvActive) rvShift.value = rvActive.id;
+                    const typesData = await api('/api/study-types');
                     document.getElementById('rvStudyTypes').innerHTML =
                         (typesData.study_types || []).map(t =>
                             '<option value="' + escapeHtml(t.name) + '">'
                         ).join('');
+                    await loadRvShifts();
                 } catch (e) {
                     console.error('Review init failed:', e);
                 }
             }
             runReviewSearch();
         }
+
+        // Delete an accidentally created shift — the server refuses unless it's empty
+        document.getElementById('rvDeleteShift').addEventListener('click', async () => {
+            const shiftId = rvShift.value;
+            if (!shiftId) return;
+            const name = rvShift.options[rvShift.selectedIndex].text;
+            if (!confirm('Delete shift “' + name + '”?\n\nOnly empty shifts (no reports) can be deleted.')) return;
+            try {
+                await api('/api/shifts/' + encodeURIComponent(shiftId), { method: 'DELETE' });
+                showToast('Deleted shift: ' + name);
+                await loadRvShifts('');
+                runReviewSearch();
+                // Every other page shows shift lists — refresh them all
+                finalDataStale = true;
+                loadCurrentShift();
+                initDraftShifts();
+            } catch (e) {
+                showToast('Delete failed: ' + e.message, 4000);
+            }
+        });
 
         async function runReviewSearch() {
             const params = new URLSearchParams();
@@ -2134,7 +2170,7 @@
             selectFinalReport(r.id, row);
         }
 
-        rvShift.addEventListener('change', runReviewSearch);
+        rvShift.addEventListener('change', () => { updateRvDeleteBtn(); runReviewSearch(); });
         rvGrade.addEventListener('change', runReviewSearch);
         let rvDebounce = null;
         rvStudyType.addEventListener('input', () => {
@@ -2145,6 +2181,7 @@
             rvShift.value = '';
             rvGrade.value = '';
             rvStudyType.value = '';
+            updateRvDeleteBtn();
             runReviewSearch();
         });
     </script>

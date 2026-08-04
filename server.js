@@ -191,14 +191,21 @@ console.log('========================');
 // classifier refusals fallbacks exist to rescue.
 const FALLBACK_CAPABLE = /fable|mythos|opus-5/i;
 
+// output_config.effort is the latency lever: low/medium for mechanical tasks,
+// default (high) for complex ones. Haiku 4.5 rejects the parameter.
+const EFFORT_CAPABLE = /fable|mythos|opus|sonnet-5|sonnet-4-6/i;
+
 // withFallbacks: request server-side refusal fallbacks where the model supports it.
-async function claudeText({ model, system, message, messages, maxTokens, withFallbacks }) {
+async function claudeText({ model, system, message, messages, maxTokens, withFallbacks, effort }) {
   const params = {
     model,
     max_tokens: maxTokens,
     system,
     messages: messages || [{ role: 'user', content: message }]
   };
+  if (effort && EFFORT_CAPABLE.test(model)) {
+    params.output_config = { effort };
+  }
   let response;
   if (withFallbacks && FALLBACK_CAPABLE.test(model)) {
     try {
@@ -272,6 +279,7 @@ function parseClaudeJson(text) {
 const ASSIST_SYSTEM = `You are an expert radiologist's writing assistant inside Flow Dictation, a radiology reporting tool.
 
 Rules:
+- Less is more. Keep responses short and to the point, in short sentences. Lead with the answer; no preamble, no commentary, no elaboration beyond what was asked. Expand only when explicitly asked for detail. This governs your own prose — never drop or shorten clinical content in text you were asked to transform.
 - Write in standard radiology reporting register: precise, concise, formal, third person, present tense for current findings.
 - Output plain text only. Never use markdown formatting (no **, no #, no bullets with -) unless explicitly told to return JSON.
 - Preserve the clinical meaning of anything you rewrite. Never invent findings, measurements, or comparisons that were not provided.
@@ -305,18 +313,47 @@ Report body:`,
 User's findings / dictation:`
 };
 
-const DRAFT_REVIEW_SYSTEM = `You review radiology report drafts for a radiologist. Identify typo corrections (spelling, grammar, punctuation, dictation/speech-recognition errors) and small stylistic improvements (clarity, flow, standard radiology phrasing).
+// Speed: mechanical transformations run at low effort, moderate tasks at
+// medium; only full report generation keeps the default (high) depth.
+// Undefined = model default.
+const ACTION_EFFORT = {
+  reword: 'low',
+  proofread: 'low',
+  describe: 'medium',
+  impression: 'medium',
+  fullreport: 'high'
+};
+const CHAT_EFFORT = 'medium';          // free-form Assist chat
+const DRAFT_REVIEW_EFFORT = 'medium';  // typo/essential-edit review
+
+const DRAFT_REVIEW_SYSTEM = `You review radiology report drafts for a radiologist. Flag ONLY essential corrections: obvious typos (spelling, grammar, punctuation) and clear speech-recognition/dictation errors, plus wording that is factually wrong or genuinely confusing.
 
 Return JSON only — no markdown fences, no commentary — in exactly this shape:
 {"edits": [{"original_text": "...", "suggested_text": "...", "reason": "...", "category": "typo"}]}
 
 Rules:
-- "category" must be exactly "typo" or "style".
+- Essential changes only. Do NOT suggest optional stylistic polish, preference rewording, tightening, or restructuring. If a sentence is acceptable as written, leave it alone — even if you would phrase it differently.
+- Fewer, high-confidence edits beat many marginal ones. When unsure whether an edit is essential, omit it.
+- "category" must be exactly "typo" or "style". Use "typo" for spelling/grammar/punctuation/dictation errors; reserve "style" for wording that is clearly wrong or confusing, not preferences.
 - "original_text" must be an EXACT character-for-character substring of the report so it can be located, and must be unique enough to find (include a few surrounding words if needed).
 - Keep each edit small and local: a word, phrase, or at most one sentence. Do not rewrite the whole report.
 - Never change medical meaning, laterality, measurements, or findings.
 - "reason" is one short sentence.
 - If nothing needs changing, return {"edits": []}.`;
+
+const READOUT_INTEGRATE_SYSTEM = `You convert an attending radiologist's verbal read-out feedback into targeted edits to a resident's draft report. This is NOT a rewrite: change only what the feedback calls for.
+
+Return JSON only — no markdown fences, no commentary — in exactly this shape:
+{"edits": [{"original_text": "...", "suggested_text": "...", "reason": "...", "category": "readout"}]}
+
+Rules:
+- Make only the changes the feedback requires, plus anything strictly needed to keep the report internally consistent with those changes (e.g. a matching impression item). Leave everything else exactly as written — no polish, no restructuring.
+- "category" is always exactly "readout".
+- "original_text" must be an EXACT character-for-character substring of the draft so it can be located, and must be unique enough to find (include a few surrounding words if needed).
+- Keep each edit small and local: a word, phrase, or sentence. To ADD a new sentence, use an adjacent existing sentence as the anchor: original_text = that sentence, suggested_text = that sentence plus the addition.
+- Never introduce findings, measurements, or comparisons the feedback did not state.
+- "reason" is one short sentence tying the edit to the specific feedback point it implements.
+- If the feedback requires no changes to the report, return {"edits": []}.`;
 
 const STUDY_TYPE_SYSTEM = `You identify the study type of a radiology report: modality plus body part, normalized in the style "MRI knee", "CT abdomen pelvis", "US thyroid", "XR chest", "PET/CT whole body", "CT head".
 Return JSON only — no markdown fences, no commentary: {"study_type": "..."}`;
@@ -338,13 +375,12 @@ Radiopaedia (radiopaedia.org) is the preferred source. Search it first, and incl
 
 Do not search for questions you can answer completely from knowledge (basic anatomy, simple definitions) — in those cases include no references rather than padding. Never fabricate a URL: only include links returned by search.`;
 
-// Opus writes noticeably longer than Fable by default. Length responds to
-// prompting, not to max_tokens or effort — so nudge it when Opus is answering.
-const RAD_QA_BREVITY_ADDENDUM = `Keep this answer tight — a few short paragraphs, and shorter still for simple questions. Lead with the direct answer, then only the detail that changes what the reader would do next. Skip preamble, restating the question, exhaustive differentials, and drop-in report templates unless the resident explicitly asks for them. Prefer prose over stacked headers and bullet lists.`;
+// Length responds to prompting, not to max_tokens or effort — applied on every
+// model ("less is more": short first answers, detail on request).
+const RAD_QA_BREVITY_ADDENDUM = `Keep this answer tight — a few short paragraphs, and shorter still for simple questions. Short sentences. Lead with the direct answer, then only the detail that changes what the reader would do next. Skip preamble, restating the question, exhaustive differentials, and drop-in report templates unless the resident explicitly asks for them. Prefer prose over stacked headers and bullet lists. The resident can always ask a follow-up for depth.`;
 
 function buildRadQaSystem(model, searchEnabled) {
-  let s = RAD_QA_SYSTEM_PROMPT;
-  if (/opus/i.test(model)) s += '\n' + RAD_QA_BREVITY_ADDENDUM;
+  let s = RAD_QA_SYSTEM_PROMPT + '\n' + RAD_QA_BREVITY_ADDENDUM;
   if (searchEnabled) s += '\n' + RAD_QA_REFERENCES_ADDENDUM;
   return s;
 }
@@ -641,7 +677,8 @@ app.post('/api/assist', async (req, res) => {
       model: chatModel,
       system,
       messages,
-      maxTokens: 4000
+      maxTokens: 4000,
+      effort: instruction ? ACTION_EFFORT[action] : CHAT_EFFORT
     });
 
     if (action === 'describe') {
@@ -751,7 +788,8 @@ app.post('/api/draft/review', async (req, res) => {
       model: MODEL_REPORT,
       system,
       message: `Review this radiology report draft:\n\n${report}`,
-      maxTokens: 8000
+      maxTokens: 8000,
+      effort: DRAFT_REVIEW_EFFORT
     });
 
     let parsed;
@@ -1008,7 +1046,7 @@ app.get('/api/reports', async (req, res) => {
     const { shift_id, grade, study_type } = req.query;
     let query = supabase
       .from('reports')
-      .select('id, shift_id, study_type, study_id_label, report_type, created_at, final_saved_at, rpr_grade, rpr_note')
+      .select('id, shift_id, study_type, study_id_label, report_type, created_at, final_saved_at, rpr_grade, rpr_note, readout_notes, notes_integrated_at')
       .order('created_at', { ascending: false });
     if (shift_id) query = query.eq('shift_id', shift_id);
     if (grade === 'ungraded') query = query.is('rpr_grade', null);
@@ -1057,6 +1095,122 @@ app.put('/api/reports/:id/final', async (req, res) => {
   } catch (error) {
     console.error('Save final error:', error);
     res.status(500).json({ error: 'Failed to save final', details: error.message });
+  }
+});
+
+// ============ Read-out workflow ============
+
+// Jot/replace the attending's verbal feedback for one study
+app.put('/api/reports/:id/notes', async (req, res) => {
+  if (!requireSupabase(res)) return;
+  try {
+    const notes = typeof req.body.readout_notes === 'string' ? req.body.readout_notes : '';
+    const { data, error } = await supabase
+      .from('reports')
+      .update({ readout_notes: notes.trim() ? notes : null })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ report: data });
+  } catch (error) {
+    console.error('Save notes error:', error);
+    res.status(500).json({ error: 'Failed to save notes', details: error.message });
+  }
+});
+
+// Turn read-out notes into targeted edit proposals (same shape as /api/draft/review;
+// the client renders the same accept/reject cards). Never rewrites the draft.
+app.post('/api/reports/:id/integrate-notes', async (req, res) => {
+  if (!requireSupabase(res)) return;
+  try {
+    const { data: report, error: repErr } = await supabase
+      .from('reports').select('*').eq('id', req.params.id).single();
+    if (repErr) throw repErr;
+
+    // The client sends the live textarea contents so unsaved tweaks are honored;
+    // stored values are the fallback.
+    const draft = (typeof req.body.draft_text === 'string' && req.body.draft_text.trim())
+      ? req.body.draft_text : report.draft_text;
+    const notes = (typeof req.body.readout_notes === 'string' && req.body.readout_notes.trim())
+      ? req.body.readout_notes : (report.readout_notes || '');
+    if (!notes.trim()) {
+      return res.status(400).json({ error: 'No read-out notes to integrate' });
+    }
+
+    const system = await buildKnowledgeSystem(READOUT_INTEGRATE_SYSTEM, report.study_type);
+    const text = await claudeTextFallback({
+      model: MODEL_REPORT,
+      system,
+      message: `Attending read-out feedback:\n${notes}\n\nResident's current draft:\n${draft}`,
+      maxTokens: 8000
+    });
+
+    let parsed;
+    try {
+      parsed = parseClaudeJson(text);
+    } catch (e) {
+      console.error('Integrate JSON parse failed:', text.slice(0, 500));
+      return res.json({ edits: [] });
+    }
+    const rawEdits = Array.isArray(parsed) ? parsed : (parsed.edits || []);
+    const edits = rawEdits
+      .filter(e => e && typeof e.original_text === 'string' && typeof e.suggested_text === 'string')
+      .map(e => ({
+        original_text: e.original_text,
+        suggested_text: e.suggested_text,
+        reason: String(e.reason || ''),
+        category: 'readout'
+      }))
+      .filter(e => draft.includes(e.original_text) && e.original_text !== e.suggested_text);
+
+    res.json({ edits });
+  } catch (error) {
+    console.error('Integrate notes error:', error);
+    res.status(500).json({ error: 'Integration failed', details: error.message });
+  }
+});
+
+// Re-save a reopened draft: new draft_text, edits appended to the audit trail.
+// raw_text is never touched; notes stay stored after integration.
+app.put('/api/reports/:id', async (req, res) => {
+  if (!requireSupabase(res)) return;
+  try {
+    const { draft_text, append_edits, notes_integrated, study_type, study_id_label, report_type } = req.body;
+    if (!draft_text || !draft_text.trim()) {
+      return res.status(400).json({ error: 'draft_text is required' });
+    }
+    const { data: existing, error: exErr } = await supabase
+      .from('reports').select('edits_json').eq('id', req.params.id).single();
+    if (exErr) throw exErr;
+
+    const cleanAppend = (Array.isArray(append_edits) ? append_edits : [])
+      .filter(e => e && typeof e.original_text === 'string' && typeof e.suggested_text === 'string')
+      .map(e => ({
+        original_text: e.original_text,
+        suggested_text: e.suggested_text,
+        reason: String(e.reason || ''),
+        category: String(e.category || 'style'),
+        status: e.status === 'accepted' ? 'accepted' : 'rejected'
+      }));
+
+    const update = {
+      draft_text,
+      edits_json: (existing.edits_json || []).concat(cleanAppend)
+    };
+    if (typeof study_type === 'string' && study_type.trim()) update.study_type = study_type.trim();
+    if (typeof study_id_label === 'string') update.study_id_label = study_id_label.trim() || null;
+    if (report_type === 'prelim' || report_type === 'complete') update.report_type = report_type;
+    // Only ever set forward — a later plain re-save must not clear the marker
+    if (notes_integrated) update.notes_integrated_at = new Date().toISOString();
+
+    const { data, error } = await supabase
+      .from('reports').update(update).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json({ report: data });
+  } catch (error) {
+    console.error('Update report error:', error);
+    res.status(500).json({ error: 'Failed to update report', details: error.message });
   }
 });
 

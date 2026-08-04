@@ -328,6 +328,23 @@
         .dropdown-item { padding: 8px 12px; font-size: 13px; cursor: pointer; color: #d0d0d0; }
         .dropdown-item:hover { background: #4a4a4a; }
         .dropdown-empty { padding: 8px 12px; font-size: 12px; color: #808080; font-style: italic; }
+        /* Read-out: shift drafts list + notes */
+        #draftList { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow-y: auto; }
+        .draft-item {
+            padding: 6px 9px; border: 1px solid #404040; border-radius: 8px; cursor: pointer;
+            font-size: 12px; color: #c0c0c0; display: flex; align-items: center; gap: 6px;
+        }
+        .draft-item:hover { background: #3d3d3d; }
+        .draft-item.current { border-color: #8ec9a0; background: #2e3530; }
+        .draft-item .di-main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .draft-item .di-time { color: #808080; flex-shrink: 0; }
+        .note-dot { width: 7px; height: 7px; border-radius: 50%; background: #e0a832; flex-shrink: 0; }
+        .note-dot.integrated { background: #8ec9a0; }
+        .draft-list-empty { font-size: 12px; color: #808080; font-style: italic; }
+        #readoutNotes { min-height: 90px; font-size: 13px; }
+        .notes-actions { display: flex; gap: 8px; }
+        .notes-actions button { flex: 1; }
+        #editingBanner { font-size: 12px; color: #8ec9a0; }
         .segmented { display: flex; border: 1px solid #404040; border-radius: 8px; overflow: hidden; }
         .seg {
             flex: 1; background: transparent; border: none; color: #909090;
@@ -594,8 +611,15 @@
                             <button class="ghost" id="newShiftBtn">Start New Shift</button>
                         </div>
                     </div>
+                    <div class="panel" id="draftsPanel">
+                        <div class="panel-title">Shift Drafts — read-out / revisit</div>
+                        <select id="draftShiftSelect"></select>
+                        <div id="draftList"></div>
+                        <button class="ghost" id="newDraftBtn" style="display:none">New Draft</button>
+                    </div>
                     <div class="panel" id="metaPanel">
                         <div class="panel-title">Study</div>
+                        <div id="editingBanner" style="display:none"></div>
                         <label>Study Type <span class="opt">(optional — auto-detected if blank)</span></label>
                         <div class="combobox">
                             <input id="studyTypeInput" autocomplete="off" placeholder="e.g. MRI knee">
@@ -609,7 +633,17 @@
                             <button class="seg active" id="segComplete">Complete</button>
                         </div>
                         <button class="primary" id="reviewSaveBtn">Review &amp; Save</button>
+                        <button class="ghost" id="saveLoadedBtn" style="display:none">Save without review</button>
                         <div class="status" id="draftStatus"></div>
+                    </div>
+                    <div class="panel" id="notesPanel" style="display:none">
+                        <div class="panel-title">Read-out Notes</div>
+                        <textarea id="readoutNotes" placeholder="What the attending said about this study…"></textarea>
+                        <div class="notes-actions">
+                            <button class="ghost" id="saveNotesBtn">Save Notes</button>
+                            <button class="primary" id="integrateNotesBtn" disabled>Integrate Notes</button>
+                        </div>
+                        <div class="status" id="notesStatus"></div>
                     </div>
                     <div class="panel" id="editsPanel" style="display:none">
                         <div class="panel-title">Suggested Edits — <span id="editsCount"></span></div>
@@ -1254,6 +1288,9 @@
         let reviewedRaw = '';
         let draftInited = false;
         let saving = false;
+        let loadedReport = null;   // saved report being revisited (null = composing new)
+        let integrating = false;   // review-mode edits came from read-out notes
+        let draftShifts = [];      // shifts for the drafts-list selector
 
         function setDraftStatus(msg, cls) {
             draftStatus.textContent = msg || '';
@@ -1263,7 +1300,7 @@
         async function initDraftPage() {
             if (draftInited) return;
             draftInited = true;
-            await Promise.all([loadCurrentShift(), loadStudyTypes()]);
+            await Promise.all([loadCurrentShift(), loadStudyTypes(), initDraftShifts()]);
         }
 
         // The active shift is server state — same answer on every browser/device
@@ -1316,16 +1353,13 @@
         studyTypeInput.addEventListener('input', renderStudyTypeDropdown);
         studyTypeInput.addEventListener('blur', () => setTimeout(() => { studyTypeDropdown.style.display = 'none'; }, 150));
 
-        document.getElementById('segPrelim').addEventListener('click', function () {
-            reportType = 'prelim';
-            this.classList.add('active');
-            document.getElementById('segComplete').classList.remove('active');
-        });
-        document.getElementById('segComplete').addEventListener('click', function () {
-            reportType = 'complete';
-            this.classList.add('active');
-            document.getElementById('segPrelim').classList.remove('active');
-        });
+        function setReportType(t) {
+            reportType = t;
+            document.getElementById('segPrelim').classList.toggle('active', t === 'prelim');
+            document.getElementById('segComplete').classList.toggle('active', t === 'complete');
+        }
+        document.getElementById('segPrelim').addEventListener('click', () => setReportType('prelim'));
+        document.getElementById('segComplete').addEventListener('click', () => setReportType('complete'));
 
         document.getElementById('newShiftBtn').addEventListener('click', async () => {
             const name = await askShiftName(autoShiftName());
@@ -1335,9 +1369,194 @@
                 currentShift = data.shift;
                 document.getElementById('currentShiftName').textContent = currentShift.name;
                 showToast('Shift started: ' + currentShift.name);
+                await initDraftShifts();
             } catch (e) {
                 setDraftStatus('Failed to create shift: ' + e.message, 'error');
             }
+        });
+
+        // ---------- Read-out: shift drafts list, per-study notes, integration ----------
+
+        const draftShiftSelect = document.getElementById('draftShiftSelect');
+        const readoutNotesEl = document.getElementById('readoutNotes');
+        const notesStatus = document.getElementById('notesStatus');
+        const integrateBtn = document.getElementById('integrateNotesBtn');
+
+        async function initDraftShifts() {
+            try {
+                const data = await api('/api/shifts');
+                draftShifts = data.shifts || [];
+                if (draftShifts.length === 0) {
+                    draftShiftSelect.innerHTML = '<option value="">No shifts yet</option>';
+                    document.getElementById('draftList').innerHTML = '';
+                    return;
+                }
+                draftShiftSelect.innerHTML = draftShifts.map(s =>
+                    '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'
+                ).join('');
+                const active = draftShifts.find(s => s.is_active);
+                if (active) draftShiftSelect.value = active.id;
+                await loadDraftList();
+            } catch (e) {
+                console.error('Draft shifts load failed:', e);
+            }
+        }
+
+        // Unfinalized reports of the selected shift, newest first
+        async function loadDraftList() {
+            const shiftId = draftShiftSelect.value;
+            const listEl = document.getElementById('draftList');
+            if (!shiftId) { listEl.innerHTML = ''; return; }
+            try {
+                const data = await api('/api/reports?shift_id=' + encodeURIComponent(shiftId));
+                const drafts = (data.reports || []).filter(r => !r.final_saved_at);
+                if (drafts.length === 0) {
+                    listEl.innerHTML = '<div class="draft-list-empty">No unfinalized drafts in this shift.</div>';
+                    return;
+                }
+                listEl.innerHTML = '';
+                drafts.forEach(r => {
+                    const item = document.createElement('div');
+                    item.className = 'draft-item' + (loadedReport && loadedReport.id === r.id ? ' current' : '');
+                    const t = new Date(r.created_at);
+                    const label = [r.study_type, r.study_id_label].filter(Boolean).join(' · ');
+                    item.innerHTML =
+                        (r.readout_notes
+                            ? '<span class="note-dot' + (r.notes_integrated_at ? ' integrated' : '') +
+                              '" title="' + (r.notes_integrated_at ? 'Notes integrated' : 'Has read-out notes') + '"></span>'
+                            : '') +
+                        '<span class="di-main">' + escapeHtml(r.id) + (label ? ' — ' + escapeHtml(label) : '') + '</span>' +
+                        '<span class="di-time">' + pad2(t.getHours()) + ':' + pad2(t.getMinutes()) + '</span>';
+                    item.addEventListener('click', () => openDraft(r.id));
+                    listEl.appendChild(item);
+                });
+            } catch (e) {
+                listEl.innerHTML = '<div class="draft-list-empty">⚠️ ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+        draftShiftSelect.addEventListener('change', loadDraftList);
+
+        function draftDirty() {
+            if (loadedReport) return draftText.value !== (loadedReport.draft_text || '');
+            return !!draftText.value.trim();
+        }
+
+        function updateEditingUi() {
+            const editing = !!loadedReport;
+            document.getElementById('notesPanel').style.display = editing ? '' : 'none';
+            document.getElementById('newDraftBtn').style.display = editing ? '' : 'none';
+            document.getElementById('saveLoadedBtn').style.display = editing ? '' : 'none';
+            const banner = document.getElementById('editingBanner');
+            banner.style.display = editing ? '' : 'none';
+            banner.textContent = editing ? 'Editing saved draft ' + loadedReport.id : '';
+            integrateBtn.disabled = !readoutNotesEl.value.trim();
+        }
+
+        async function openDraft(id) {
+            if (loadedReport && loadedReport.id === id) return;
+            if (draftDirty() && !confirm('Discard unsaved changes to the current draft?')) return;
+            try {
+                const data = await api('/api/reports/' + encodeURIComponent(id));
+                const r = data.report;
+                loadedReport = r;
+                currentEdits = [];
+                reviewedRaw = '';
+                integrating = false;
+                exitReviewMode();
+                draftText.value = r.draft_text || '';
+                studyTypeInput.value = r.study_type || '';
+                studyIdInput.value = r.study_id_label || '';
+                setReportType(r.report_type === 'prelim' ? 'prelim' : 'complete');
+                readoutNotesEl.value = r.readout_notes || '';
+                notesStatus.textContent = '';
+                setDraftStatus('', '');
+                updateEditingUi();
+                loadDraftList();
+            } catch (e) {
+                setDraftStatus('Failed to load draft: ' + e.message, 'error');
+            }
+        }
+
+        function newDraft() {
+            if (draftDirty() && !confirm('Discard unsaved changes to the current draft?')) return;
+            loadedReport = null;
+            integrating = false;
+            currentEdits = [];
+            reviewedRaw = '';
+            exitReviewMode();
+            draftText.value = '';
+            studyTypeInput.value = '';
+            studyIdInput.value = '';
+            readoutNotesEl.value = '';
+            setReportType('complete');
+            notesStatus.textContent = '';
+            setDraftStatus('', '');
+            updateEditingUi();
+            loadDraftList();
+        }
+        document.getElementById('newDraftBtn').addEventListener('click', newDraft);
+
+        // Notes autosave on blur (and explicit Save Notes). Notes are the record of
+        // what the attending said — they stay stored after integration.
+        async function saveNotes() {
+            if (!loadedReport) return;
+            const notes = readoutNotesEl.value;
+            if (notes === (loadedReport.readout_notes || '')) return;
+            try {
+                notesStatus.textContent = 'Saving…';
+                notesStatus.className = 'status';
+                const data = await api('/api/reports/' + encodeURIComponent(loadedReport.id) + '/notes', {
+                    method: 'PUT', body: { readout_notes: notes }
+                });
+                loadedReport.readout_notes = data.report.readout_notes;
+                notesStatus.textContent = 'Notes saved.';
+                loadDraftList();
+            } catch (e) {
+                notesStatus.textContent = 'Notes save failed: ' + e.message;
+                notesStatus.className = 'status error';
+            }
+        }
+        readoutNotesEl.addEventListener('blur', saveNotes);
+        readoutNotesEl.addEventListener('input', () => {
+            integrateBtn.disabled = !readoutNotesEl.value.trim();
+        });
+        document.getElementById('saveNotesBtn').addEventListener('click', saveNotes);
+
+        // Integrate notes → the same accept/reject edit cards as the review pass
+        integrateBtn.addEventListener('click', async () => {
+            if (!loadedReport || !readoutNotesEl.value.trim()) return;
+            integrateBtn.disabled = true;
+            notesStatus.textContent = 'Integrating with Claude…';
+            notesStatus.className = 'status';
+            try {
+                await saveNotes();
+                reviewedRaw = draftText.value;
+                const data = await api('/api/reports/' + encodeURIComponent(loadedReport.id) + '/integrate-notes', {
+                    method: 'POST',
+                    body: { draft_text: reviewedRaw, readout_notes: readoutNotesEl.value }
+                });
+                currentEdits = locateEdits(reviewedRaw, data.edits || []);
+                if (currentEdits.length === 0) {
+                    notesStatus.textContent = 'No changes suggested from these notes.';
+                } else {
+                    notesStatus.textContent = '';
+                    integrating = true;
+                    enterReviewMode();
+                }
+            } catch (e) {
+                notesStatus.textContent = 'Integration failed: ' + e.message;
+                notesStatus.className = 'status error';
+            } finally {
+                integrateBtn.disabled = !readoutNotesEl.value.trim();
+            }
+        });
+
+        // Re-save a reopened draft without another Claude review pass
+        document.getElementById('saveLoadedBtn').addEventListener('click', async () => {
+            reviewedRaw = draftText.value;
+            currentEdits = [];
+            integrating = false;
+            await persistReport();
         });
 
         function shiftBoundaryCrossed(last, now) {
@@ -1390,6 +1609,7 @@
             setDraftStatus('Reviewing with Claude…');
             try {
                 reviewedRaw = draftText.value;
+                integrating = false;
                 const data = await api('/api/draft/review', { method: 'POST', body: {
                     report: reviewedRaw,
                     study_type: studyTypeInput.value.trim()
@@ -1448,6 +1668,9 @@
             draftPreview.style.display = '';
             metaPanel.style.display = 'none';
             editsPanel.style.display = '';
+            // Focus the cards: no draft switching or note edits mid-review
+            document.getElementById('draftsPanel').style.display = 'none';
+            document.getElementById('notesPanel').style.display = 'none';
             renderReview();
         }
 
@@ -1456,6 +1679,8 @@
             draftPreview.style.display = 'none';
             metaPanel.style.display = '';
             editsPanel.style.display = 'none';
+            document.getElementById('draftsPanel').style.display = '';
+            document.getElementById('notesPanel').style.display = loadedReport ? '' : 'none';
             reviewStatus.textContent = '';
         }
         document.getElementById('cancelReviewBtn').addEventListener('click', exitReviewMode);
@@ -1537,9 +1762,6 @@
                 statusEl.textContent = 'Saving…';
                 statusEl.className = 'status';
 
-                const shift = await resolveShiftForSave();
-                if (!shift) { statusEl.textContent = 'Save cancelled.'; return; }
-
                 const editsRecord = currentEdits.map(e => ({
                     original_text: e.original_text,
                     suggested_text: e.suggested_text,
@@ -1547,6 +1769,35 @@
                     category: e.category,
                     status: e.status === 'accepted' ? 'accepted' : 'rejected'
                 }));
+
+                if (loadedReport) {
+                    // Re-save of a reopened draft: update in place; raw_text untouched,
+                    // this round's edits appended to the audit trail
+                    const body = {
+                        draft_text: applyAcceptedEdits(),
+                        append_edits: editsRecord,
+                        notes_integrated: integrating,
+                        study_type: studyTypeInput.value.trim(),
+                        study_id_label: studyIdInput.value.trim(),
+                        report_type: reportType
+                    };
+                    const data = await api('/api/reports/' + encodeURIComponent(loadedReport.id), { method: 'PUT', body });
+                    loadedReport = data.report;
+                    exitReviewMode();
+                    draftText.value = loadedReport.draft_text;
+                    currentEdits = [];
+                    reviewedRaw = '';
+                    integrating = false;
+                    updateEditingUi();
+                    loadDraftList();
+                    finalDataStale = true;
+                    setDraftStatus('', '');
+                    showToast('Updated report ' + loadedReport.id);
+                    return;
+                }
+
+                const shift = await resolveShiftForSave();
+                if (!shift) { statusEl.textContent = 'Save cancelled.'; return; }
 
                 const body = {
                     proposed_id: makeReportId(),
@@ -1566,7 +1817,8 @@
                 studyIdInput.value = '';
                 currentEdits = [];
                 reviewedRaw = '';
-                await Promise.all([loadStudyTypes(), loadCurrentShift()]);
+                // Saving may have created/switched the active shift — refresh both
+                await Promise.all([loadStudyTypes(), loadCurrentShift(), initDraftShifts()]);
                 finalDataStale = true;
                 setDraftStatus('', '');
                 showToast('Saved report ' + data.report.id + '\n' + (data.report.study_type || ''));

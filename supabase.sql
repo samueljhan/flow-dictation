@@ -32,6 +32,10 @@ create table if not exists reports (
   created_at timestamptz not null default now(),
   final_text text,
   final_saved_at timestamptz,
+  -- Read-out: verbal attending feedback jotted per study, and when (if ever)
+  -- it was integrated into the draft via edit cards
+  readout_notes text,
+  notes_integrated_at timestamptz,
   -- RPR grade as ACTUALLY assigned by the attending/QA — manual documentation only,
   -- never AI-generated. RPR1 concordant · RPR2 minor discrepancy, unlikely clinical
   -- significance · RPR3 moderate, possible significance · RPR4 major, likely significance
@@ -66,6 +70,14 @@ alter table shifts enable row level security;
 alter table study_types enable row level security;
 alter table reports enable row level security;
 alter table assist_feedback enable row level security;
+
+-- ============================================================
+-- Read-out workflow (added later — run this section on its own if
+-- the tables above already exist in your database)
+-- ============================================================
+
+alter table reports add column if not exists readout_notes text;
+alter table reports add column if not exists notes_integrated_at timestamptz;
 
 -- ============================================================
 -- Active shift (added later — run this section on its own if the

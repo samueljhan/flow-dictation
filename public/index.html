@@ -688,8 +688,11 @@
                     <div class="panel" id="editsPanel" style="display:none">
                         <div class="panel-title">Suggested Edits — <span id="editsCount"></span></div>
                         <div id="editsList" style="display:flex; flex-direction:column; gap:8px;"></div>
-                        <button class="primary" id="saveReviewedBtn">Save</button>
-                        <button class="ghost" id="rejectAllSaveBtn">Reject All &amp; Save</button>
+                        <div class="btn-row">
+                            <button class="ghost" id="saveReviewedBtn">Save Draft</button>
+                            <button class="ghost" id="saveReviewedFinalBtn" title="Apply accepted edits, mark done, and start the next study">Save Final</button>
+                        </div>
+                        <button class="ghost" id="rejectAllSaveBtn">Reject All &amp; Save Draft</button>
                         <button class="ghost" id="cancelReviewBtn">Back to editing</button>
                         <div class="status" id="reviewStatus"></div>
                     </div>
@@ -1603,6 +1606,11 @@
 
         function newDraft() {
             if (draftDirty() && !confirm('Discard unsaved changes to the current draft?')) return;
+            resetComposer();
+        }
+
+        // Blank compose state, ready for the next study
+        function resetComposer() {
             loadedReport = null;
             integrating = false;
             currentEdits = [];
@@ -1943,6 +1951,7 @@
         }
 
         document.getElementById('saveReviewedBtn').addEventListener('click', () => persistReport());
+        document.getElementById('saveReviewedFinalBtn').addEventListener('click', () => persistReport({ finalize: true }));
         document.getElementById('rejectAllSaveBtn').addEventListener('click', () => {
             currentEdits.forEach(e => { e.status = 'rejected'; });
             persistReport();
@@ -1996,16 +2005,23 @@
                     };
                     const data = await api('/api/reports/' + encodeURIComponent(loadedReport.id), { method: 'PUT', body });
                     loadedReport = data.report;
+                    const savedId = loadedReport.id;
+                    const savedDraft = loadedReport.draft_text;
                     exitReviewMode();
-                    draftText.value = loadedReport.draft_text;
                     currentEdits = [];
                     reviewedRaw = '';
                     integrating = false;
-                    updateEditingUi();
-                    loadDraftList();
                     finalDataStale = true;
-                    setDraftStatus('', '');
-                    showToast((finalize ? 'Final saved — ' : 'Updated ') + loadedReport.id);
+                    if (finalize) {
+                        // Done with this study — clear down for the next one
+                        resetComposer();
+                    } else {
+                        draftText.value = savedDraft;
+                        updateEditingUi();
+                        loadDraftList();
+                        setDraftStatus('', '');
+                    }
+                    showToast((finalize ? 'Final saved — ' : 'Updated ') + savedId);
                     return;
                 }
 

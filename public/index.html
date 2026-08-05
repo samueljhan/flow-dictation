@@ -297,8 +297,23 @@
 
         /* ---------- Draft page ---------- */
         #page-draft { padding: 24px 32px; }
-        .draft-layout { display: flex; gap: 24px; flex: 1; min-height: 0; }
+        .draft-layout { display: flex; flex: 1; min-height: 0; }
         .draft-left { flex: 0 0 63%; display: flex; flex-direction: column; min-width: 0; }
+        /* Drag handles: hit area is wide, the visible line is thin */
+        .splitter-v, .splitter-h { position: relative; flex-shrink: 0; touch-action: none; }
+        .splitter-v { flex-basis: 22px; cursor: col-resize; }
+        .splitter-h { flex-basis: 14px; cursor: row-resize; }
+        .splitter-v::before, .splitter-h::before {
+            content: ''; position: absolute; background: #404040; border-radius: 2px;
+            transition: background 0.15s;
+        }
+        .splitter-v::before { top: 0; bottom: 0; left: 50%; width: 2px; transform: translateX(-50%); }
+        .splitter-h::before { left: 0; right: 0; top: 50%; height: 2px; transform: translateY(-50%); }
+        .splitter-v:hover::before, .splitter-h:hover::before,
+        .splitter-v.dragging::before, .splitter-h.dragging::before { background: #7a7a7a; }
+        /* While dragging, don't let the pointer select text or flip the cursor */
+        body.dragging-v, body.dragging-v * { cursor: col-resize !important; user-select: none !important; }
+        body.dragging-h, body.dragging-h * { cursor: row-resize !important; user-select: none !important; }
         #draftText { flex: 1; font-size: 14px; background: #242424; }
         .report-preview {
             flex: 1; overflow-y: auto; background: #242424; border: 1px solid #404040;
@@ -307,10 +322,24 @@
         }
         .edit-span-original { background: rgba(220, 53, 69, 0.15); text-decoration: line-through; color: #c98a8a; border-radius: 3px; }
         .edit-span-suggested { background: rgba(40, 167, 69, 0.15); color: #8ec9a0; border-radius: 3px; }
-        .draft-right {
-            flex: 1; display: flex; flex-direction: column; gap: 12px;
-            overflow-y: auto; min-width: 290px;
+        /* Editable replacement typed straight into the report preview */
+        .edit-span-user {
+            background: rgba(111, 159, 216, 0.16); color: #cfe0f5; border-radius: 3px;
+            outline: 1px dashed #5a7fb0; outline-offset: 1px; padding: 0 1px; min-width: 6px;
+            display: inline-block; white-space: pre-wrap;
         }
+        .edit-span-user:focus { outline: 1px solid #6f9fd8; background: rgba(111, 159, 216, 0.24); }
+        .draft-right {
+            flex: 1; display: flex; flex-direction: column;
+            min-width: 240px; min-height: 0;
+        }
+        /* Top group scrolls; the read-out panel below it is drag-resizable */
+        .draft-right-top {
+            flex: 1; min-height: 80px; overflow-y: auto;
+            display: flex; flex-direction: column; gap: 12px;
+        }
+        #notesPanel { flex: 0 0 auto; height: 260px; min-height: 120px; overflow: hidden; }
+        #notesPanel #readoutNotes { flex: 1; min-height: 0; }
         .panel {
             background: #333333; border: 1px solid #404040; border-radius: 12px; padding: 14px;
             display: flex; flex-direction: column; gap: 10px; flex-shrink: 0;
@@ -343,7 +372,7 @@
         .note-dot { width: 7px; height: 7px; border-radius: 50%; background: #e0a832; flex-shrink: 0; }
         .note-dot.integrated { background: #8ec9a0; }
         .draft-list-empty { font-size: 12px; color: #808080; font-style: italic; }
-        #readoutNotes { min-height: 90px; font-size: 13px; }
+        #readoutNotes { min-height: 90px; font-size: 13px; resize: none; }
         .notes-actions { display: flex; gap: 8px; }
         .notes-actions button { flex: 1; }
         #editingBanner { font-size: 12px; color: #8ec9a0; }
@@ -363,6 +392,7 @@
         }
         .edit-card.accepted { border-color: #28a745; }
         .edit-card.rejected { opacity: 0.45; }
+        .edit-card.edited { border-color: #6f9fd8; }
         .edit-cat {
             display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase;
             padding: 1px 7px; border-radius: 8px; letter-spacing: 0.5px; width: fit-content;
@@ -382,6 +412,10 @@
         .edit-actions button:hover { color: #e0e0e0; border-color: #606060; }
         .edit-actions .accept-btn.on { background: rgba(40, 167, 69, 0.15); border-color: #28a745; color: #28a745; }
         .edit-actions .reject-btn.on { background: rgba(220, 53, 69, 0.12); border-color: #dc3545; color: #dc7a7a; }
+        .edit-actions .edit-btn.on { background: rgba(111, 159, 216, 0.15); border-color: #6f9fd8; color: #9ab8e0; }
+        .edit-user { color: #9ab8e0; font-weight: 600; }
+        .edit-user:empty::after { content: '(deleted)'; font-weight: 400; font-style: italic; color: #808080; }
+        .edit-hint { font-size: 12px; color: #6f9fd8; }
 
         /* ---------- Final page ---------- */
         #page-final { padding: 0; }
@@ -507,9 +541,14 @@
             .example-prompt { height: 60px; padding: 10px; }
             .nav-prompts { grid-template-columns: repeat(2, 1fr); }
             #page-draft { padding: 14px; }
+            /* Stacked layout — dragging is meaningless, so the handles go away
+               and any dragged sizes are overridden back to auto */
             .draft-layout { flex-direction: column; overflow-y: auto; gap: 14px; }
-            .draft-left { flex: none; min-height: 260px; }
-            .draft-right { overflow-y: visible; min-width: 0; }
+            .draft-left { flex: none !important; min-height: 260px; }
+            .draft-right { overflow-y: visible; min-width: 0; gap: 14px; }
+            .draft-right-top { overflow-y: visible; flex: none; gap: 14px; }
+            .splitter-v, .splitter-h { display: none !important; }
+            #notesPanel { height: auto !important; }
             .final-scroll { padding: 14px; }
             .final-columns { flex-direction: column; gap: 14px; }
             .final-toolbar { flex-wrap: wrap; }
@@ -605,7 +644,9 @@
                     <textarea id="draftText" placeholder="Paste your full report here…"></textarea>
                     <div id="draftPreview" class="report-preview" style="display:none"></div>
                 </div>
+                <div class="splitter-v" id="splitterV" title="Drag to resize"></div>
                 <div class="draft-right">
+                  <div class="draft-right-top" id="draftRightTop">
                     <div class="panel">
                         <div class="panel-title">Shift</div>
                         <div class="shift-row">
@@ -638,15 +679,6 @@
                         <button class="ghost" id="reviewBtn" title="Run a Claude review pass and show suggested edits">Review</button>
                         <div class="status" id="draftStatus"></div>
                     </div>
-                    <div class="panel" id="notesPanel" style="display:none">
-                        <div class="panel-title">Read-out Notes</div>
-                        <textarea id="readoutNotes" placeholder="What the attending said about this study…"></textarea>
-                        <div class="notes-actions">
-                            <button class="ghost" id="saveNotesBtn">Save Notes</button>
-                            <button class="primary" id="integrateNotesBtn" disabled>Integrate Notes</button>
-                        </div>
-                        <div class="status" id="notesStatus"></div>
-                    </div>
                     <div class="panel" id="editsPanel" style="display:none">
                         <div class="panel-title">Suggested Edits — <span id="editsCount"></span></div>
                         <div id="editsList" style="display:flex; flex-direction:column; gap:8px;"></div>
@@ -655,6 +687,17 @@
                         <button class="ghost" id="cancelReviewBtn">Back to editing</button>
                         <div class="status" id="reviewStatus"></div>
                     </div>
+                  </div>
+                  <div class="splitter-h" id="splitterH" style="display:none" title="Drag to resize"></div>
+                  <div class="panel" id="notesPanel" style="display:none">
+                        <div class="panel-title">Read-out Notes</div>
+                        <textarea id="readoutNotes" placeholder="What the attending said about this study…"></textarea>
+                        <div class="notes-actions">
+                            <button class="ghost" id="saveNotesBtn">Save Notes</button>
+                            <button class="primary" id="integrateNotesBtn" disabled>Integrate Notes</button>
+                        </div>
+                        <div class="status" id="notesStatus"></div>
+                  </div>
                 </div>
             </div>
         </section>
@@ -1378,6 +1421,80 @@
             }
         });
 
+        // ---------- Draggable pane splitters (Draft page) ----------
+        // Sizes are per-device UI preference, so they live in localStorage.
+
+        function makeSplitter({ handle, axis, storeKey, apply, measure, min, max }) {
+            const saved = parseFloat(localStorage.getItem(storeKey));
+            if (!isNaN(saved)) apply(saved);
+            let dragging = false;
+            handle.addEventListener('pointerdown', (e) => {
+                dragging = true;
+                handle.setPointerCapture(e.pointerId);
+                handle.classList.add('dragging');
+                document.body.classList.add(axis === 'x' ? 'dragging-v' : 'dragging-h');
+                e.preventDefault();
+            });
+            handle.addEventListener('pointermove', (e) => {
+                if (!dragging) return;
+                const v = Math.min(max(), Math.max(min(), measure(e)));
+                apply(v);
+            });
+            const end = () => {
+                if (!dragging) return;
+                dragging = false;
+                handle.classList.remove('dragging');
+                document.body.classList.remove('dragging-v', 'dragging-h');
+                localStorage.setItem(storeKey, String(measureCurrent()));
+            };
+            let measureCurrent = () => 0;
+            handle.addEventListener('pointerup', end);
+            handle.addEventListener('pointercancel', end);
+            return { setMeasureCurrent: fn => { measureCurrent = fn; } };
+        }
+
+        // Vertical: report pane vs. right column, stored as a percentage so it
+        // survives window resizing
+        (function () {
+            const layout = document.querySelector('.draft-layout');
+            const left = document.querySelector('.draft-left');
+            const s = makeSplitter({
+                handle: document.getElementById('splitterV'),
+                axis: 'x',
+                storeKey: 'draftSplitPct',
+                apply: pct => { left.style.flexBasis = pct + '%'; },
+                measure: e => {
+                    const r = layout.getBoundingClientRect();
+                    return ((e.clientX - r.left) / r.width) * 100;
+                },
+                min: () => 25,
+                max: () => 80
+            });
+            s.setMeasureCurrent(() => parseFloat(left.style.flexBasis) || 63);
+        })();
+
+        // Horizontal: read-out notes height (measured from the bottom edge)
+        (function () {
+            const right = document.querySelector('.draft-right');
+            const notes = document.getElementById('notesPanel');
+            const s = makeSplitter({
+                handle: document.getElementById('splitterH'),
+                axis: 'y',
+                storeKey: 'draftNotesH',
+                apply: h => { notes.style.height = h + 'px'; },
+                measure: e => right.getBoundingClientRect().bottom - e.clientY,
+                min: () => 120,
+                max: () => Math.max(160, right.getBoundingClientRect().height - 120)
+            });
+            s.setMeasureCurrent(() => notes.getBoundingClientRect().height);
+        })();
+
+        // The horizontal handle only exists when the notes panel does
+        function setNotesVisible(visible) {
+            document.getElementById('notesPanel').style.display = visible ? '' : 'none';
+            document.getElementById('splitterH').style.display = visible ? '' : 'none';
+        }
+
         // ---------- Read-out: shift drafts list, per-study notes, integration ----------
 
         const draftShiftSelect = document.getElementById('draftShiftSelect');
@@ -1446,7 +1563,7 @@
 
         function updateEditingUi() {
             const editing = !!loadedReport;
-            document.getElementById('notesPanel').style.display = editing ? '' : 'none';
+            setNotesVisible(editing);
             document.getElementById('newDraftBtn').style.display = editing ? '' : 'none';
             const banner = document.getElementById('editingBanner');
             banner.style.display = editing ? '' : 'none';
@@ -1666,7 +1783,7 @@
             editsPanel.style.display = '';
             // Focus the cards: no draft switching or note edits mid-review
             document.getElementById('draftsPanel').style.display = 'none';
-            document.getElementById('notesPanel').style.display = 'none';
+            setNotesVisible(false);
             renderReview();
         }
 
@@ -1676,47 +1793,76 @@
             metaPanel.style.display = '';
             editsPanel.style.display = 'none';
             document.getElementById('draftsPanel').style.display = '';
-            document.getElementById('notesPanel').style.display = loadedReport ? '' : 'none';
+            setNotesVisible(!!loadedReport);
             reviewStatus.textContent = '';
         }
         document.getElementById('cancelReviewBtn').addEventListener('click', exitReviewMode);
 
+        // Index of an edited span to focus once the next render lands
+        let focusEditIdx = null;
+
+        function caretToEnd(el) {
+            el.focus();
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            range.collapse(false);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+        }
+
+        function updateEditsCount() {
+            const pending = currentEdits.filter(e => e.status === 'pending').length;
+            document.getElementById('editsCount').textContent =
+                currentEdits.length + ' total, ' + pending + ' undecided';
+        }
+
         function renderReview() {
             let html = '';
             let cursor = 0;
-            for (const e of currentEdits) {
+            currentEdits.forEach((e, i) => {
                 html += escapeHtml(reviewedRaw.slice(cursor, e.pos));
                 if (e.status === 'accepted') {
                     html += '<span class="edit-span-suggested">' + escapeHtml(e.suggested_text) + '</span>';
                 } else if (e.status === 'rejected') {
                     html += escapeHtml(e.original_text);
+                } else if (e.status === 'edited') {
+                    // Typed directly in the report; contenteditable so the caret
+                    // sits where the change actually goes
+                    html += '<span class="edit-span-user" contenteditable="true" spellcheck="true" ' +
+                            'data-idx="' + i + '">' + escapeHtml(e.user_text) + '</span>';
                 } else {
                     html += '<span class="edit-span-original">' + escapeHtml(e.original_text) + '</span>' +
                             '<span class="edit-span-suggested"> ' + escapeHtml(e.suggested_text) + '</span>';
                 }
                 cursor = e.pos + e.original_text.length;
-            }
+            });
             html += escapeHtml(reviewedRaw.slice(cursor));
             draftPreview.innerHTML = html;
 
-            const pending = currentEdits.filter(e => e.status === 'pending').length;
-            document.getElementById('editsCount').textContent =
-                currentEdits.length + ' total, ' + pending + ' undecided';
+            updateEditsCount();
             editsList.innerHTML = '';
-            currentEdits.forEach((e) => {
+            currentEdits.forEach((e, i) => {
                 const ctxBefore = reviewedRaw.slice(Math.max(0, e.pos - 40), e.pos);
                 const ctxAfter = reviewedRaw.slice(e.pos + e.original_text.length, e.pos + e.original_text.length + 40);
                 const card = document.createElement('div');
                 card.className = 'edit-card ' + e.status;
+                const replacement = e.status === 'edited'
+                    ? '<span class="edit-user" data-user-idx="' + i + '">' + escapeHtml(e.user_text) + '</span>'
+                    : '<span class="edit-sugg">' + escapeHtml(e.suggested_text) + '</span>';
                 card.innerHTML =
                     '<span class="edit-cat">' + e.category + '</span>' +
                     '<div class="edit-context"><span class="ctx">…' + escapeHtml(ctxBefore) + '</span>' +
                     '<span class="edit-orig">' + escapeHtml(e.original_text) + '</span> → ' +
-                    '<span class="edit-sugg">' + escapeHtml(e.suggested_text) + '</span>' +
+                    replacement +
                     '<span class="ctx">' + escapeHtml(ctxAfter) + '…</span></div>' +
                     (e.reason ? '<div class="edit-reason">' + escapeHtml(e.reason) + '</div>' : '') +
+                    (e.status === 'edited'
+                        ? '<div class="edit-hint">✎ Type your own wording in the highlighted text on the left.</div>'
+                        : '') +
                     '<div class="edit-actions">' +
                     '<button class="accept-btn' + (e.status === 'accepted' ? ' on' : '') + '">✓ Accept</button>' +
+                    '<button class="edit-btn' + (e.status === 'edited' ? ' on' : '') + '">✎ Edit</button>' +
                     '<button class="reject-btn' + (e.status === 'rejected' ? ' on' : '') + '">✗ Reject</button>' +
                     '</div>';
                 card.querySelector('.accept-btn').addEventListener('click', () => {
@@ -1727,8 +1873,42 @@
                     e.status = e.status === 'rejected' ? 'pending' : 'rejected';
                     renderReview();
                 });
+                card.querySelector('.edit-btn').addEventListener('click', () => {
+                    if (e.status === 'edited') {
+                        e.status = 'pending';
+                    } else {
+                        e.status = 'edited';
+                        // Start from the suggestion — the flagged spot is usually
+                        // right even when the proposed wording isn't
+                        if (typeof e.user_text !== 'string') e.user_text = e.suggested_text;
+                        focusEditIdx = i;
+                    }
+                    renderReview();
+                });
                 editsList.appendChild(card);
             });
+
+            // Live-bind the editable spans. Typing must NOT re-render — that would
+            // destroy the caret — so the model and the card are updated in place.
+            draftPreview.querySelectorAll('.edit-span-user').forEach(span => {
+                const idx = Number(span.dataset.idx);
+                span.addEventListener('input', () => {
+                    currentEdits[idx].user_text = span.innerText;
+                    const mirror = editsList.querySelector('[data-user-idx="' + idx + '"]');
+                    if (mirror) mirror.textContent = currentEdits[idx].user_text;
+                });
+                // Keep pasted content plain — this text goes straight into the report
+                span.addEventListener('paste', ev => {
+                    ev.preventDefault();
+                    const t = (ev.clipboardData || window.clipboardData).getData('text/plain');
+                    document.execCommand('insertText', false, t);
+                });
+            });
+            if (focusEditIdx !== null) {
+                const span = draftPreview.querySelector('.edit-span-user[data-idx="' + focusEditIdx + '"]');
+                if (span) caretToEnd(span);
+                focusEditIdx = null;
+            }
         }
 
         document.getElementById('saveReviewedBtn').addEventListener('click', () => persistReport());
@@ -1738,12 +1918,14 @@
         });
 
         function applyAcceptedEdits() {
-            // Any edit without an explicit accept defaults to REJECTED
+            // Any edit without an explicit accept or hand-edit defaults to REJECTED
             let out = '';
             let cursor = 0;
             for (const e of currentEdits) {
                 out += reviewedRaw.slice(cursor, e.pos);
-                out += e.status === 'accepted' ? e.suggested_text : e.original_text;
+                if (e.status === 'accepted') out += e.suggested_text;
+                else if (e.status === 'edited') out += (e.user_text || '');
+                else out += e.original_text;
                 cursor = e.pos + e.original_text.length;
             }
             out += reviewedRaw.slice(cursor);
@@ -1758,12 +1940,15 @@
                 statusEl.textContent = 'Saving…';
                 statusEl.className = 'status';
 
+                // 'edited' also records the wording actually used
                 const editsRecord = currentEdits.map(e => ({
                     original_text: e.original_text,
                     suggested_text: e.suggested_text,
                     reason: e.reason,
                     category: e.category,
-                    status: e.status === 'accepted' ? 'accepted' : 'rejected'
+                    status: e.status === 'accepted' ? 'accepted'
+                          : e.status === 'edited' ? 'edited' : 'rejected',
+                    ...(e.status === 'edited' ? { user_text: e.user_text || '' } : {})
                 }));
 
                 if (loadedReport) {

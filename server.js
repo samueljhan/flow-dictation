@@ -1270,15 +1270,20 @@ app.put('/api/reports/:id', async (req, res) => {
       .from('reports').select('edits_json').eq('id', req.params.id).single();
     if (exErr) throw exErr;
 
+    // 'edited' = the reviewer wrote their own wording; keep it in the trail
     const cleanAppend = (Array.isArray(append_edits) ? append_edits : [])
       .filter(e => e && typeof e.original_text === 'string' && typeof e.suggested_text === 'string')
-      .map(e => ({
-        original_text: e.original_text,
-        suggested_text: e.suggested_text,
-        reason: String(e.reason || ''),
-        category: String(e.category || 'style'),
-        status: e.status === 'accepted' ? 'accepted' : 'rejected'
-      }));
+      .map(e => {
+        const status = ['accepted', 'edited'].includes(e.status) ? e.status : 'rejected';
+        return {
+          original_text: e.original_text,
+          suggested_text: e.suggested_text,
+          reason: String(e.reason || ''),
+          category: String(e.category || 'style'),
+          status,
+          ...(status === 'edited' ? { user_text: String(e.user_text || '') } : {})
+        };
+      });
 
     const update = {
       draft_text,

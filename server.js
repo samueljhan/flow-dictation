@@ -19,12 +19,17 @@ app.use(express.urlencoded({ extended: false }));
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 // Detection is a trivial classification that runs on nearly every action —
 // Haiku handles it at ~1/10 the price of the frontier models.
-const MODEL_DETECT = process.env.MODEL_DETECT || 'claude-haiku-4-5';  // study type detection
-const MODEL_REPORT = process.env.MODEL_REPORT || 'claude-fable-5';  // report actions + draft review
-const MODEL_CHAT = process.env.MODEL_CHAT || 'claude-fable-5';      // free-form Assist chat
-const MODEL_RADQA = process.env.MODEL_RADQA || 'claude-fable-5';    // Quick Rad Question
+const MODEL_DETECT = process.env.MODEL_DETECT || 'claude-haiku-4-5';      // study type detection
+const MODEL_REPORT = process.env.MODEL_REPORT || 'claude-sonnet-4-6';     // describe / reword / proofread / full report
+const MODEL_CHAT = process.env.MODEL_CHAT || 'claude-fable-5';            // free-form Assist chat
+const MODEL_RADQA = process.env.MODEL_RADQA || 'claude-fable-5';          // Quick Rad Question
+// Judgement-heavy paths default to Fable. Explicit env wins; otherwise an
+// explicitly-set MODEL_REPORT is inherited, and the Fable default applies only
+// when neither is configured.
+const MODEL_REVIEW = process.env.MODEL_REVIEW || process.env.MODEL_REPORT || 'claude-fable-5';        // draft review + read-out integration
+const MODEL_IMPRESSION = process.env.MODEL_IMPRESSION || process.env.MODEL_REPORT || 'claude-fable-5'; // impression generation
 // Used on every path when safety classifiers decline a benign radiology request
-const MODEL_FALLBACK = process.env.MODEL_FALLBACK || 'claude-opus-5';
+const MODEL_FALLBACK = process.env.MODEL_FALLBACK || 'claude-opus-4-8';
 
 // Supabase (server-side only — service role key, never sent to the browser)
 const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)
@@ -181,7 +186,14 @@ console.log('Anthropic:', !!process.env.ANTHROPIC_API_KEY ? '✓' : '✗');
 console.log('Supabase:', !!supabase ? '✓' : '✗');
 console.log('Google Client ID:', !!process.env.GOOGLE_CLIENT_ID ? '✓' : '✗');
 console.log('Google Client Secret:', !!process.env.GOOGLE_CLIENT_SECRET ? '✓' : '✗');
-console.log(`Models: detect=${MODEL_DETECT} report=${MODEL_REPORT} chat=${MODEL_CHAT} radqa=${MODEL_RADQA} (fallback ${MODEL_FALLBACK})`);
+console.log('Models:');
+console.log(`  detect     = ${MODEL_DETECT}`);
+console.log(`  report     = ${MODEL_REPORT}   (describe · reword · proofread · full report)`);
+console.log(`  review     = ${MODEL_REVIEW}   (draft review · read-out integration)`);
+console.log(`  impression = ${MODEL_IMPRESSION}`);
+console.log(`  radqa      = ${MODEL_RADQA}`);
+console.log(`  chat       = ${MODEL_CHAT}`);
+console.log(`  fallback   = ${MODEL_FALLBACK}   (on classifier refusal)`);
 console.log('========================');
 
 // ============ Claude helpers ============
@@ -225,6 +237,11 @@ async function claudeText({ model, system, message, messages, maxTokens, withFal
   }
   const u = response.usage || {};
   console.log(`[claude] ${response.model || model} in=${u.input_tokens} out=${u.output_tokens} cache_write=${u.cache_creation_input_tokens || 0} cache_read=${u.cache_read_input_tokens || 0}`);
+  // The server-side `fallbacks` param swaps models transparently — surface it
+  // so a primary that keeps getting declined doesn't stay invisible.
+  if ((u.iterations || []).some(i => i.type === 'fallback_message')) {
+    console.warn(`⚠ [fallback] ${model} was declined by safety classifiers — served by ${response.model || 'fallback model'} instead`);
+  }
   // Safety classifiers (e.g. on claude-fable-5) can decline a request with a 200 +
   // stop_reason "refusal" and empty content — surface that instead of returning ''.
   if (response.stop_reason === 'refusal') {
@@ -248,7 +265,7 @@ async function claudeTextFallback(opts) {
   } catch (e) {
     const fallback = opts.fallbackModel || MODEL_FALLBACK;
     if (e.isRefusal && fallback && fallback !== opts.model) {
-      console.log(`[claude] ${opts.model} declined — retrying on ${fallback}`);
+      console.warn(`⚠ [fallback] ${opts.model} refused — retrying on ${fallback}. Reason: ${e.message}`);
       return await claudeText({ ...opts, model: fallback, withFallbacks: true });
     }
     throw e;
@@ -325,6 +342,9 @@ const ACTION_EFFORT = {
 };
 const CHAT_EFFORT = 'medium';          // free-form Assist chat
 const DRAFT_REVIEW_EFFORT = 'medium';  // typo/essential-edit review
+
+// Per-action model routing; anything unlisted uses MODEL_REPORT.
+const ACTION_MODEL = { impression: MODEL_IMPRESSION };
 
 const DRAFT_REVIEW_SYSTEM = `You review radiology report drafts for a radiologist. Flag ONLY essential corrections: obvious typos (spelling, grammar, punctuation) and clear speech-recognition/dictation errors, plus wording that is factually wrong or genuinely confusing.
 
@@ -546,6 +566,29 @@ function looksLikeReport(text) {
   return text.trim().length >= 200;
 }
 
+// Generate Full Report writes the whole report on MODEL_REPORT, then rewrites
+// just the IMPRESSION on MODEL_IMPRESSION — the section where model judgement
+// matters most. Returns the original text unchanged if anything doesn't line up.
+const IMPRESSION_HEADING = /^[ \t]*(?:\*\*)?\s*IMPRESSION\b[^\n]*$/im;
+
+async function upgradeImpression(reportText, studyType) {
+  if (MODEL_IMPRESSION === MODEL_REPORT) return reportText;
+  const m = reportText.match(IMPRESSION_HEADING);
+  if (!m) return reportText;
+  const body = reportText.slice(0, m.index).trimEnd();
+  if (!body) return reportText;
+  const system = await buildKnowledgeSystem(ASSIST_SYSTEM, studyType);
+  const impression = (await claudeTextFallback({
+    model: MODEL_IMPRESSION,
+    system,
+    message: `${ASSIST_ACTIONS.impression}\n\n${body}`,
+    maxTokens: 2000,
+    effort: ACTION_EFFORT.impression
+  })).trim();
+  if (!impression) return reportText;
+  return `${body}\n\n${m[0]}\n${impression}`;
+}
+
 // ============ Page 1: Assist ============
 
 app.post('/api/assist', async (req, res) => {
@@ -660,8 +703,8 @@ app.post('/api/assist', async (req, res) => {
     // The four report actions get the knowledge layer (style guide + language +
     // matched exemplars). Free-form chat keeps the lean base prompt.
     let system = ASSIST_SYSTEM;
+    let studyType = null;
     if (instruction) {
-      let studyType = null;
       // fullreport inputs are often short dictations, but knowing the study type
       // is what pulls in the right exemplars — always try to detect it.
       if (action === 'fullreport' || looksLikeReport(message)) {
@@ -670,16 +713,25 @@ app.post('/api/assist', async (req, res) => {
       system = await buildKnowledgeSystem(ASSIST_SYSTEM, studyType);
     }
 
-    // Quick actions run on MODEL_REPORT with the knowledge layer; free-form chat
-    // runs on MODEL_CHAT (Fable tier — enable refusal fallbacks).
-    const chatModel = instruction ? MODEL_REPORT : MODEL_CHAT;
-    const text = await claudeTextFallback({
+    // Quick actions run on their routed model with the knowledge layer;
+    // free-form chat runs on MODEL_CHAT.
+    const chatModel = instruction ? (ACTION_MODEL[action] || MODEL_REPORT) : MODEL_CHAT;
+    let text = await claudeTextFallback({
       model: chatModel,
       system,
       messages,
       maxTokens: 4000,
       effort: instruction ? ACTION_EFFORT[action] : CHAT_EFFORT
     });
+
+    // Second pass: rewrite the full report's IMPRESSION on MODEL_IMPRESSION
+    if (action === 'fullreport') {
+      try {
+        text = await upgradeImpression(text, studyType);
+      } catch (e) {
+        console.error('Impression pass failed — keeping original impression:', e.message);
+      }
+    }
 
     if (action === 'describe') {
       try {
@@ -785,7 +837,7 @@ app.post('/api/draft/review', async (req, res) => {
     const system = await buildKnowledgeSystem(DRAFT_REVIEW_SYSTEM, studyType);
 
     const text = await claudeTextFallback({
-      model: MODEL_REPORT,
+      model: MODEL_REVIEW,
       system,
       message: `Review this radiology report draft:\n\n${report}`,
       maxTokens: 8000,
@@ -1174,7 +1226,7 @@ app.post('/api/reports/:id/integrate-notes', async (req, res) => {
 
     const system = await buildKnowledgeSystem(READOUT_INTEGRATE_SYSTEM, report.study_type);
     const text = await claudeTextFallback({
-      model: MODEL_REPORT,
+      model: MODEL_REVIEW,
       system,
       message: `Attending read-out feedback:\n${notes}\n\nResident's current draft:\n${draft}`,
       maxTokens: 8000
@@ -1557,7 +1609,11 @@ app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     service: 'Flow Dictation API',
-    llm: { detect: MODEL_DETECT, report: MODEL_REPORT, chat: MODEL_CHAT, radqa: MODEL_RADQA, fallback: MODEL_FALLBACK },
+    llm: {
+      detect: MODEL_DETECT, report: MODEL_REPORT, review: MODEL_REVIEW,
+      impression: MODEL_IMPRESSION, radqa: MODEL_RADQA, chat: MODEL_CHAT,
+      fallback: MODEL_FALLBACK
+    },
     auth: { google: googleLoginConfigured, password: !!APP_PASSWORD, allowed_emails: ALLOWED_EMAILS.length },
     supabase: supabase ? 'configured' : 'not configured'
   });

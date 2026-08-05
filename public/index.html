@@ -634,8 +634,8 @@
                             <button class="seg" id="segPrelim">Prelim</button>
                             <button class="seg active" id="segComplete">Complete</button>
                         </div>
-                        <button class="primary" id="reviewSaveBtn">Review &amp; Save</button>
-                        <button class="ghost" id="saveLoadedBtn" style="display:none">Save without review</button>
+                        <button class="primary" id="saveBtn">Save</button>
+                        <button class="ghost" id="reviewBtn" title="Run a Claude review pass and show suggested edits">Review</button>
                         <div class="status" id="draftStatus"></div>
                     </div>
                     <div class="panel" id="notesPanel" style="display:none">
@@ -1448,7 +1448,6 @@
             const editing = !!loadedReport;
             document.getElementById('notesPanel').style.display = editing ? '' : 'none';
             document.getElementById('newDraftBtn').style.display = editing ? '' : 'none';
-            document.getElementById('saveLoadedBtn').style.display = editing ? '' : 'none';
             const banner = document.getElementById('editingBanner');
             banner.style.display = editing ? '' : 'none';
             banner.textContent = editing ? 'Editing saved draft ' + loadedReport.id : '';
@@ -1554,13 +1553,6 @@
             }
         });
 
-        // Re-save a reopened draft without another Claude review pass
-        document.getElementById('saveLoadedBtn').addEventListener('click', async () => {
-            reviewedRaw = draftText.value;
-            currentEdits = [];
-            integrating = false;
-            await persistReport();
-        });
 
         function shiftBoundaryCrossed(last, now) {
             const d = new Date(last.getFullYear(), last.getMonth(), last.getDate());
@@ -1604,13 +1596,30 @@
             return currentShift;
         }
 
-        document.getElementById('reviewSaveBtn').addEventListener('click', async () => {
-            const text = draftText.value.trim();
-            if (!text) { setDraftStatus('Paste a report first.', 'error'); return; }
-            const btn = document.getElementById('reviewSaveBtn');
+        // Save: never calls Claude. The default, fast action for new drafts and re-saves.
+        document.getElementById('saveBtn').addEventListener('click', async () => {
+            if (!draftText.value.trim()) { setDraftStatus('Paste a report first.', 'error'); return; }
+            reviewedRaw = draftText.value;
+            currentEdits = [];
+            integrating = false;
+            await persistReport();
+        });
+
+        // Review: the only path to the Claude review pass. Unsaved text is saved
+        // first (so a failed review never loses work), then reviewed.
+        document.getElementById('reviewBtn').addEventListener('click', async () => {
+            if (!draftText.value.trim()) { setDraftStatus('Paste a report first.', 'error'); return; }
+            const btn = document.getElementById('reviewBtn');
             btn.disabled = true;
-            setDraftStatus('Reviewing with Claude…');
             try {
+                if (!loadedReport) {
+                    reviewedRaw = draftText.value;
+                    currentEdits = [];
+                    integrating = false;
+                    await persistReport({ keepOpen: true });
+                    if (!loadedReport) return;   // save cancelled or failed
+                }
+                setDraftStatus('Reviewing with Claude…');
                 reviewedRaw = draftText.value;
                 integrating = false;
                 const data = await api('/api/draft/review', { method: 'POST', body: {
@@ -1618,34 +1627,18 @@
                     study_type: studyTypeInput.value.trim()
                 } });
                 currentEdits = locateEdits(reviewedRaw, data.edits || []);
-                setDraftStatus('');
                 if (currentEdits.length === 0) {
-                    await persistReport();
+                    setDraftStatus('No edits suggested — draft is already saved.', '');
                 } else {
+                    setDraftStatus('', '');
                     enterReviewMode();
                 }
             } catch (e) {
-                setDraftStatus('Review failed: ' + e.message + ' — you can retry, or Save without review below.', 'error');
-                offerSaveWithoutReview();
+                setDraftStatus('Review failed: ' + e.message + ' — your draft is saved; you can retry.', 'error');
             } finally {
                 btn.disabled = false;
             }
         });
-
-        function offerSaveWithoutReview() {
-            if (document.getElementById('saveNoReviewBtn')) return;
-            const b = document.createElement('button');
-            b.id = 'saveNoReviewBtn';
-            b.className = 'ghost';
-            b.textContent = 'Save without review';
-            b.addEventListener('click', async () => {
-                reviewedRaw = draftText.value;
-                currentEdits = [];
-                await persistReport();
-                b.remove();
-            });
-            metaPanel.appendChild(b);
-        }
 
         function locateEdits(text, edits) {
             const located = [];
@@ -1757,7 +1750,7 @@
             return out;
         }
 
-        async function persistReport() {
+        async function persistReport({ keepOpen = false } = {}) {
             if (saving) return;
             saving = true;
             const statusEl = editsPanel.style.display === 'none' ? draftStatus : reviewStatus;
@@ -1815,11 +1808,19 @@
                 const data = await api('/api/reports', { method: 'POST', body });
 
                 exitReviewMode();
-                draftText.value = '';
-                studyTypeInput.value = '';
-                studyIdInput.value = '';
                 currentEdits = [];
                 reviewedRaw = '';
+                if (keepOpen) {
+                    // Review flow: the new report stays open for the review pass
+                    loadedReport = data.report;
+                    studyTypeInput.value = data.report.study_type || '';
+                    readoutNotesEl.value = data.report.readout_notes || '';
+                    updateEditingUi();
+                } else {
+                    draftText.value = '';
+                    studyTypeInput.value = '';
+                    studyIdInput.value = '';
+                }
                 // Saving may have created/switched the active shift — refresh both
                 await Promise.all([loadStudyTypes(), loadCurrentShift(), initDraftShifts()]);
                 finalDataStale = true;

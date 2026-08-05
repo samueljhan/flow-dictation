@@ -1062,7 +1062,7 @@ app.put('/api/shifts/:id/activate', async (req, res) => {
 app.post('/api/reports', async (req, res) => {
   if (!requireSupabase(res)) return;
   try {
-    const { proposed_id, shift_id, study_type, study_id_label, report_type, raw_text, draft_text, edits_json } = req.body;
+    const { proposed_id, shift_id, study_type, study_id_label, report_type, raw_text, draft_text, edits_json, finalized } = req.body;
     if (!proposed_id || !/^\d{12}$/.test(proposed_id)) {
       return res.status(400).json({ error: 'proposed_id must be a yyyymmddhhmm timestamp' });
     }
@@ -1107,7 +1107,8 @@ app.post('/api/reports', async (req, res) => {
         raw_text,
         draft_text: draft_text || raw_text,
         edits_json: edits_json || [],
-        created_at: now
+        created_at: now,
+        finalized_at: finalized ? now : null
       })
       .select()
       .single();
@@ -1132,7 +1133,7 @@ app.get('/api/reports', async (req, res) => {
     const { shift_id, grade, study_type } = req.query;
     let query = supabase
       .from('reports')
-      .select('id, shift_id, study_type, study_id_label, report_type, created_at, final_saved_at, rpr_grade, rpr_note, readout_notes, notes_integrated_at')
+      .select('id, shift_id, study_type, study_id_label, report_type, created_at, final_saved_at, rpr_grade, rpr_note, readout_notes, notes_integrated_at, read_out_at, finalized_at')
       .order('created_at', { ascending: false });
     if (shift_id) query = query.eq('shift_id', shift_id);
     if (grade === 'ungraded') query = query.is('rpr_grade', null);
@@ -1205,6 +1206,25 @@ app.put('/api/reports/:id/notes', async (req, res) => {
   }
 });
 
+// Manually mark a study as read out with the attending — independent of whether
+// any read-out notes were typed.
+app.put('/api/reports/:id/read-out', async (req, res) => {
+  if (!requireSupabase(res)) return;
+  try {
+    const { data, error } = await supabase
+      .from('reports')
+      .update({ read_out_at: req.body.read_out ? new Date().toISOString() : null })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ report: data });
+  } catch (error) {
+    console.error('Read-out flag error:', error);
+    res.status(500).json({ error: 'Failed to set read-out status', details: error.message });
+  }
+});
+
 // Turn read-out notes into targeted edit proposals (same shape as /api/draft/review;
 // the client renders the same accept/reject cards). Never rewrites the draft.
 app.post('/api/reports/:id/integrate-notes', async (req, res) => {
@@ -1262,7 +1282,7 @@ app.post('/api/reports/:id/integrate-notes', async (req, res) => {
 app.put('/api/reports/:id', async (req, res) => {
   if (!requireSupabase(res)) return;
   try {
-    const { draft_text, append_edits, notes_integrated, study_type, study_id_label, report_type } = req.body;
+    const { draft_text, append_edits, notes_integrated, study_type, study_id_label, report_type, finalized } = req.body;
     if (!draft_text || !draft_text.trim()) {
       return res.status(400).json({ error: 'draft_text is required' });
     }
@@ -1294,6 +1314,10 @@ app.put('/api/reports/:id', async (req, res) => {
     if (report_type === 'prelim' || report_type === 'complete') update.report_type = report_type;
     // Only ever set forward — a later plain re-save must not clear the marker
     if (notes_integrated) update.notes_integrated_at = new Date().toISOString();
+    // "Save Final" marks it done; a plain "Save Draft" reopens it (clears the mark)
+    if (typeof finalized === 'boolean') {
+      update.finalized_at = finalized ? new Date().toISOString() : null;
+    }
 
     const { data, error } = await supabase
       .from('reports').update(update).eq('id', req.params.id).select().single();

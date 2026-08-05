@@ -300,20 +300,15 @@
         .draft-layout { display: flex; flex: 1; min-height: 0; }
         .draft-left { flex: 0 0 63%; display: flex; flex-direction: column; min-width: 0; }
         /* Drag handles: hit area is wide, the visible line is thin */
-        .splitter-v, .splitter-h { position: relative; flex-shrink: 0; touch-action: none; }
-        .splitter-v { flex-basis: 22px; cursor: col-resize; }
-        .splitter-h { flex-basis: 14px; cursor: row-resize; }
-        .splitter-v::before, .splitter-h::before {
+        .splitter-v { position: relative; flex-shrink: 0; touch-action: none; flex-basis: 22px; cursor: col-resize; }
+        .splitter-v::before {
             content: ''; position: absolute; background: #404040; border-radius: 2px;
+            top: 0; bottom: 0; left: 50%; width: 2px; transform: translateX(-50%);
             transition: background 0.15s;
         }
-        .splitter-v::before { top: 0; bottom: 0; left: 50%; width: 2px; transform: translateX(-50%); }
-        .splitter-h::before { left: 0; right: 0; top: 50%; height: 2px; transform: translateY(-50%); }
-        .splitter-v:hover::before, .splitter-h:hover::before,
-        .splitter-v.dragging::before, .splitter-h.dragging::before { background: #7a7a7a; }
+        .splitter-v:hover::before, .splitter-v.dragging::before { background: #7a7a7a; }
         /* While dragging, don't let the pointer select text or flip the cursor */
         body.dragging-v, body.dragging-v * { cursor: col-resize !important; user-select: none !important; }
-        body.dragging-h, body.dragging-h * { cursor: row-resize !important; user-select: none !important; }
         #draftText { flex: 1; font-size: 14px; background: #242424; }
         .report-preview {
             flex: 1; overflow-y: auto; background: #242424; border: 1px solid #404040;
@@ -338,13 +333,16 @@
             flex: 1; min-height: 80px; overflow-y: auto;
             display: flex; flex-direction: column; gap: 12px;
         }
-        #notesPanel { flex: 0 0 auto; height: 260px; min-height: 120px; overflow: hidden; }
-        #notesPanel #readoutNotes { flex: 1; min-height: 0; }
+        #notesPanel { flex: 0 0 auto; }
         .panel {
             background: #333333; border: 1px solid #404040; border-radius: 12px; padding: 14px;
             display: flex; flex-direction: column; gap: 10px; flex-shrink: 0;
         }
         .panel-title { font-size: 11px; font-weight: 700; color: #909090; text-transform: uppercase; letter-spacing: 0.8px; }
+        /* An empty status line shouldn't hold open a gap under the buttons */
+        .panel .status:empty { display: none; }
+        .btn-row { display: flex; gap: 8px; }
+        .btn-row button { flex: 1; white-space: normal; line-height: 1.25; }
         .panel label { font-size: 13px; font-weight: 600; color: #d0d0d0; }
         .panel .opt { font-weight: 400; color: #808080; font-size: 11px; }
         .shift-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -369,10 +367,15 @@
         .draft-item.current { border-color: #8ec9a0; background: #2e3530; }
         .draft-item .di-main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .draft-item .di-time { color: #808080; flex-shrink: 0; }
-        .note-dot { width: 7px; height: 7px; border-radius: 50%; background: #e0a832; flex-shrink: 0; }
-        .note-dot.integrated { background: #8ec9a0; }
+        /* Green = finalized (sorted to the bottom), yellow = read out / has notes */
+        .note-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+        .note-dot.yellow { background: #e0a832; }
+        .note-dot.green { background: #8ec9a0; }
+        .draft-item.finalized .di-main { color: #8f8f8f; }
         .draft-list-empty { font-size: 12px; color: #808080; font-style: italic; }
-        #readoutNotes { min-height: 90px; font-size: 13px; resize: none; }
+        #readoutNotes { min-height: 110px; font-size: 13px; resize: vertical; }
+        .readout-check { display: flex; align-items: center; gap: 7px; font-size: 13px; color: #d0d0d0; cursor: pointer; }
+        .readout-check input { accent-color: #e0a832; margin: 0; }
         .notes-actions { display: flex; gap: 8px; }
         .notes-actions button { flex: 1; }
         #editingBanner { font-size: 12px; color: #8ec9a0; }
@@ -675,7 +678,10 @@
                             <button class="seg" id="segPrelim">Prelim</button>
                             <button class="seg active" id="segComplete">Complete</button>
                         </div>
-                        <button class="primary" id="saveBtn">Save</button>
+                        <div class="btn-row">
+                            <button class="primary" id="saveBtn">Save Draft</button>
+                            <button class="primary" id="draftSaveFinalBtn" title="Mark this study done — moves it to the bottom of the list">Save Final</button>
+                        </div>
                         <button class="ghost" id="reviewBtn" title="Run a Claude review pass and show suggested edits">Review</button>
                         <div class="status" id="draftStatus"></div>
                     </div>
@@ -688,9 +694,9 @@
                         <div class="status" id="reviewStatus"></div>
                     </div>
                   </div>
-                  <div class="splitter-h" id="splitterH" style="display:none" title="Drag to resize"></div>
                   <div class="panel" id="notesPanel" style="display:none">
                         <div class="panel-title">Read-out Notes</div>
+                        <label class="readout-check"><input type="checkbox" id="readOutFlag"> Read out with attending</label>
                         <textarea id="readoutNotes" placeholder="What the attending said about this study…"></textarea>
                         <div class="notes-actions">
                             <button class="ghost" id="saveNotesBtn">Save Notes</button>
@@ -1473,26 +1479,8 @@
             s.setMeasureCurrent(() => parseFloat(left.style.flexBasis) || 63);
         })();
 
-        // Horizontal: read-out notes height (measured from the bottom edge)
-        (function () {
-            const right = document.querySelector('.draft-right');
-            const notes = document.getElementById('notesPanel');
-            const s = makeSplitter({
-                handle: document.getElementById('splitterH'),
-                axis: 'y',
-                storeKey: 'draftNotesH',
-                apply: h => { notes.style.height = h + 'px'; },
-                measure: e => right.getBoundingClientRect().bottom - e.clientY,
-                min: () => 120,
-                max: () => Math.max(160, right.getBoundingClientRect().height - 120)
-            });
-            s.setMeasureCurrent(() => notes.getBoundingClientRect().height);
-        })();
-
-        // The horizontal handle only exists when the notes panel does
         function setNotesVisible(visible) {
             document.getElementById('notesPanel').style.display = visible ? '' : 'none';
-            document.getElementById('splitterH').style.display = visible ? '' : 'none';
         }
 
         // ---------- Read-out: shift drafts list, per-study notes, integration ----------
@@ -1522,6 +1510,14 @@
             }
         }
 
+        // Green = finalized via Save Final. Yellow = read out with the attending,
+        // whether that was marked by hand or implied by having notes.
+        function dotFor(r) {
+            if (r.finalized_at) return 'green';
+            if (r.read_out_at || (r.readout_notes && r.readout_notes.trim())) return 'yellow';
+            return null;
+        }
+
         // Unfinalized reports of the selected shift, newest first
         async function loadDraftList() {
             const shiftId = draftShiftSelect.value;
@@ -1534,18 +1530,26 @@
                     listEl.innerHTML = '<div class="draft-list-empty">No unfinalized drafts in this shift.</div>';
                     return;
                 }
+                // Finalized studies sink to the bottom; within each group the
+                // server's newest-first order is preserved
+                drafts.sort((a, b) => (a.finalized_at ? 1 : 0) - (b.finalized_at ? 1 : 0));
                 listEl.innerHTML = '';
                 drafts.forEach(r => {
+                    const dot = dotFor(r);
                     const item = document.createElement('div');
-                    item.className = 'draft-item' + (loadedReport && loadedReport.id === r.id ? ' current' : '');
+                    item.className = 'draft-item'
+                        + (loadedReport && loadedReport.id === r.id ? ' current' : '')
+                        + (r.finalized_at ? ' finalized' : '');
                     const t = new Date(r.created_at);
-                    const label = [r.study_type, r.study_id_label].filter(Boolean).join(' · ');
+                    // Lead with the Study ID — that's what identifies the case at read-out
+                    const tail = [r.study_type, r.id].filter(Boolean).join(' · ');
+                    const label = r.study_id_label
+                        ? escapeHtml(r.study_id_label) + ' — ' + escapeHtml(tail)
+                        : escapeHtml(tail);
                     item.innerHTML =
-                        (r.readout_notes
-                            ? '<span class="note-dot' + (r.notes_integrated_at ? ' integrated' : '') +
-                              '" title="' + (r.notes_integrated_at ? 'Notes integrated' : 'Has read-out notes') + '"></span>'
-                            : '') +
-                        '<span class="di-main">' + escapeHtml(r.id) + (label ? ' — ' + escapeHtml(label) : '') + '</span>' +
+                        (dot ? '<span class="note-dot ' + dot + '" title="' +
+                            (dot === 'green' ? 'Final saved' : 'Read out') + '"></span>' : '') +
+                        '<span class="di-main">' + label + '</span>' +
                         '<span class="di-time">' + pad2(t.getHours()) + ':' + pad2(t.getMinutes()) + '</span>';
                     item.addEventListener('click', () => openDraft(r.id));
                     listEl.appendChild(item);
@@ -1587,6 +1591,7 @@
                 studyIdInput.value = r.study_id_label || '';
                 setReportType(r.report_type === 'prelim' ? 'prelim' : 'complete');
                 readoutNotesEl.value = r.readout_notes || '';
+                document.getElementById('readOutFlag').checked = !!r.read_out_at;
                 notesStatus.textContent = '';
                 setDraftStatus('', '');
                 updateEditingUi();
@@ -1607,6 +1612,7 @@
             studyTypeInput.value = '';
             studyIdInput.value = '';
             readoutNotesEl.value = '';
+            document.getElementById('readOutFlag').checked = false;
             setReportType('complete');
             notesStatus.textContent = '';
             setDraftStatus('', '');
@@ -1635,6 +1641,22 @@
                 notesStatus.className = 'status error';
             }
         }
+        // Manual read-out marker — works with or without notes typed
+        document.getElementById('readOutFlag').addEventListener('change', async (ev) => {
+            if (!loadedReport) return;
+            const on = ev.target.checked;
+            try {
+                const data = await api('/api/reports/' + encodeURIComponent(loadedReport.id) + '/read-out', {
+                    method: 'PUT', body: { read_out: on }
+                });
+                loadedReport.read_out_at = data.report.read_out_at;
+                loadDraftList();
+            } catch (e) {
+                ev.target.checked = !on;
+                showToast('Could not save read-out status: ' + e.message, 4000);
+            }
+        });
+
         readoutNotesEl.addEventListener('blur', saveNotes);
         readoutNotesEl.addEventListener('input', () => {
             integrateBtn.disabled = !readoutNotesEl.value.trim();
@@ -1720,6 +1742,15 @@
             currentEdits = [];
             integrating = false;
             await persistReport();
+        });
+
+        // Save Final = save + mark done (green dot, sorts to the bottom)
+        document.getElementById('draftSaveFinalBtn').addEventListener('click', async () => {
+            if (!draftText.value.trim()) { setDraftStatus('Paste a report first.', 'error'); return; }
+            reviewedRaw = draftText.value;
+            currentEdits = [];
+            integrating = false;
+            await persistReport({ finalize: true });
         });
 
         // Review: the only path to the Claude review pass. Unsaved text is saved
@@ -1932,7 +1963,7 @@
             return out;
         }
 
-        async function persistReport({ keepOpen = false } = {}) {
+        async function persistReport({ keepOpen = false, finalize = false } = {}) {
             if (saving) return;
             saving = true;
             const statusEl = editsPanel.style.display === 'none' ? draftStatus : reviewStatus;
@@ -1958,6 +1989,7 @@
                         draft_text: applyAcceptedEdits(),
                         append_edits: editsRecord,
                         notes_integrated: integrating,
+                        ...(finalize ? { finalized: true } : {}),
                         study_type: studyTypeInput.value.trim(),
                         study_id_label: studyIdInput.value.trim(),
                         report_type: reportType
@@ -1973,7 +2005,7 @@
                     loadDraftList();
                     finalDataStale = true;
                     setDraftStatus('', '');
-                    showToast('Updated report ' + loadedReport.id);
+                    showToast((finalize ? 'Final saved — ' : 'Updated ') + loadedReport.id);
                     return;
                 }
 
@@ -1988,7 +2020,8 @@
                     report_type: reportType,
                     raw_text: reviewedRaw,
                     draft_text: applyAcceptedEdits(),
-                    edits_json: editsRecord
+                    edits_json: editsRecord,
+                    finalized: finalize
                 };
                 const data = await api('/api/reports', { method: 'POST', body });
 

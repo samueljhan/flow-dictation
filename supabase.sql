@@ -79,6 +79,11 @@ alter table assist_feedback enable row level security;
 alter table reports add column if not exists readout_notes text;
 alter table reports add column if not exists notes_integrated_at timestamptz;
 
+-- Drives the Draft list dots: read_out_at (manually marked as read out with the
+-- attending) and finalized_at ("Save Final" — done, sorts to the bottom).
+alter table reports add column if not exists read_out_at timestamptz;
+alter table reports add column if not exists finalized_at timestamptz;
+
 -- ============================================================
 -- Active shift (added later — run this section on its own if the
 -- tables above already exist in your database)

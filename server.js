@@ -1200,10 +1200,135 @@ app.put('/api/reports/:id/final', async (req, res) => {
       .select()
       .single();
     if (error) throw error;
-    res.json({ report: data });
+
+    // Harvest the findings/impression pair for training. Never block the save.
+    let sections = { stored: false, reason: 'not attempted' };
+    try {
+      sections = await saveReportSections(data, 'final');
+    } catch (e) {
+      console.error('Section extraction failed:', e.message);
+      sections = { stored: false, reason: e.message };
+    }
+    res.json({ report: data, sections });
   } catch (error) {
     console.error('Save final error:', error);
     res.status(500).json({ error: 'Failed to save final', details: error.message });
+  }
+});
+
+// ============ Findings / impression pairs (training data) ============
+
+// Locate a section heading at the start of a line, tolerating "**FINDINGS**",
+// "FINDINGS:", and headings with content on the same line.
+function findHeading(text, words) {
+  const re = new RegExp('^[ \\t]*(?:\\*\\*)?[ \\t]*(?:' + words.join('|') + ')\\b[ \\t]*:?[ \\t]*(?:\\*\\*)?', 'im');
+  const m = re.exec(text);
+  return m ? { start: m.index, after: m.index + m[0].length } : null;
+}
+
+const IMPRESSION_WORDS = ['IMPRESSION', 'IMPRESSIONS', 'CONCLUSION', 'ASSESSMENT'];
+
+// Split a report into findings and impression. The full text is always
+// returned; either section may come back null (an impression-only prelim, or a
+// report whose headings don't parse) — those reports are still stored whole.
+// A section is only claimed when its heading is found, since a wrong split
+// would be worse than a missing one for training data.
+function splitReportSections(text) {
+  const t = String(text || '').replace(/\r\n?/g, '\n').trim();
+  if (!t) return null;
+  const f = findHeading(t, ['FINDINGS', 'FINDING']);
+  // The impression heading must follow the findings heading when both exist
+  let imp = null;
+  if (f) {
+    const m = findHeading(t.slice(f.after), IMPRESSION_WORDS);
+    if (m) imp = { start: f.after + m.start, after: f.after + m.after };
+  } else {
+    const m = findHeading(t, IMPRESSION_WORDS);
+    if (m) imp = m;
+  }
+  const findings = f ? (t.slice(f.after, imp ? imp.start : t.length).trim() || null) : null;
+  const impression = imp ? (t.slice(imp.after).trim() || null) : null;
+  return { full_text: t, findings, impression };
+}
+
+// Store (or refresh) one report's row. The whole report is always kept; the
+// sections are recorded when detected. Never throws away the report.
+async function saveReportSections(report, source = 'final') {
+  const text = source === 'final' ? report.final_text : report.draft_text;
+  const parts = splitReportSections(text);
+  if (!parts) return { stored: false, reason: 'report text is empty' };
+  const { error } = await supabase.from('report_sections').upsert({
+    report_id: report.id,
+    source,
+    study_type: report.study_type || null,
+    full_text: parts.full_text,
+    findings: parts.findings,
+    impression: parts.impression,
+    updated_at: new Date().toISOString()
+  }, { onConflict: 'report_id,source' });
+  if (error) throw error;
+  return {
+    stored: true,
+    findings: !!parts.findings,
+    impression: !!parts.impression,
+    paired: !!(parts.findings && parts.impression)
+  };
+}
+
+// Paired export for training/fine-tuning. ?format=jsonl returns one JSON object
+// per line, which is what most training pipelines expect.
+app.get('/api/training/impression-pairs', async (req, res) => {
+  if (!requireSupabase(res)) return;
+  try {
+    const { study_type, format } = req.query;
+    let q = supabase
+      .from('report_sections')
+      .select('report_id, source, study_type, full_text, findings, impression, created_at')
+      .order('created_at', { ascending: false })
+      .limit(Math.min(parseInt(req.query.limit, 10) || 1000, 5000));
+    if (study_type && study_type.trim()) q = q.ilike('study_type', '%' + study_type.trim() + '%');
+    // Training reads complete pairs by default; ?include_partial=true returns
+    // impression-only prelims and unparsed reports as well.
+    if (req.query.include_partial !== 'true') {
+      q = q.not('findings', 'is', null).not('impression', 'is', null);
+    }
+    const { data, error } = await q;
+    if (error) throw error;
+    if (format === 'jsonl') {
+      res.type('application/x-ndjson');
+      return res.send(data.map(r => JSON.stringify(r)).join('\n'));
+    }
+    res.json({ count: data.length, pairs: data });
+  } catch (error) {
+    console.error('Training pairs error:', error);
+    res.status(500).json({ error: 'Failed to load pairs', details: error.message });
+  }
+});
+
+// Backfill: parse every finalized report that doesn't have a pair yet
+app.post('/api/training/extract-sections', async (req, res) => {
+  if (!requireSupabase(res)) return;
+  try {
+    const reports = await fetchAllRows('reports', 'id, study_type, final_text, final_saved_at, created_at');
+    const finals = reports.filter(r => r.final_text && r.final_text.trim());
+    let stored = 0, paired = 0;
+    const impressionOnly = [], findingsOnly = [], neither = [];
+    for (const r of finals) {
+      const out = await saveReportSections(r, 'final');
+      if (!out.stored) continue;
+      stored++;
+      if (out.paired) paired++;
+      else if (out.impression) impressionOnly.push(r.id);
+      else if (out.findings) findingsOnly.push(r.id);
+      else neither.push(r.id);
+    }
+    res.json({
+      examined: finals.length, stored, paired,
+      impression_only: impressionOnly, findings_only: findingsOnly, unparsed: neither
+    });
+  } catch (error) {
+    console.error('Extract sections error:', error);
+    res.status(500).json({ error: 'Extraction failed', details: error.message });
   }
 });
 

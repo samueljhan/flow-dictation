@@ -84,6 +84,29 @@ alter table reports add column if not exists notes_integrated_at timestamptz;
 alter table reports add column if not exists read_out_at timestamptz;
 alter table reports add column if not exists finalized_at timestamptz;
 
+-- Finalized reports kept whole, alongside their findings/impression split when
+-- those sections can be detected. One row per report, so a findings+impression
+-- pair is intrinsically matched and ready to export as training data.
+-- findings/impression are nullable on purpose: a prelim that is impression-only
+-- (or any report whose headings don't parse) is still stored in full.
+create table if not exists report_sections (
+  id bigint generated always as identity primary key,
+  report_id text not null references reports(id) on delete cascade,
+  source text not null default 'final',      -- which text it came from: 'final' | 'draft'
+  study_type text,
+  full_text text not null,                   -- always the complete report
+  findings text,                             -- null when no FINDINGS section was found
+  impression text,                           -- null when no IMPRESSION section was found
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (report_id, source)                 -- re-saving a final updates its row
+);
+create index if not exists report_sections_study_type_idx on report_sections (study_type);
+-- Complete pairs are what training reads; index them for that query
+create index if not exists report_sections_paired_idx on report_sections (created_at desc)
+  where findings is not null and impression is not null;
+alter table report_sections enable row level security;
+
 -- Previous draft_text values, written on every re-save, so "See recent changes"
 -- can diff the current draft against the one before it.
 create table if not exists report_revisions (

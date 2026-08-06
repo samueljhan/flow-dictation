@@ -231,14 +231,6 @@
             letter-spacing: 0.8px; margin-bottom: 2px;
         }
 
-        .response-buttons { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-        .action-btn {
-            background: #404040; color: #e0e0e0; border: none;
-            padding: 7px 14px; border-radius: 6px; cursor: pointer;
-            font-size: 12px; transition: all 0.3s;
-        }
-        .action-btn:hover { background: #505050; }
-        .action-btn.success { background: #28a745; color: white; }
 
         .feedback-bar {
             display: flex; align-items: center; gap: 8px; margin-top: 12px; padding-top: 12px;
@@ -933,16 +925,6 @@
             return out;
         }
 
-        function copyPlainText(text, btn) {
-            navigator.clipboard.writeText(text).then(() => {
-                if (btn) {
-                    const orig = btn.textContent;
-                    btn.textContent = '✓ Copied';
-                    btn.classList.add('success');
-                    setTimeout(() => { btn.textContent = orig; btn.classList.remove('success'); }, 1800);
-                }
-            }).catch(() => showToast('Copy failed — select the text manually'));
-        }
 
         function pad2(n) { return String(n).padStart(2, '0'); }
         function fmtDate(d) {
@@ -1077,6 +1059,32 @@
             card.addEventListener('click', () => armAction(card.dataset.action));
         });
 
+        // Selecting text anywhere in the transcript copies it — this replaces the
+        // per-message Copy button. Text selected inside a form field never reaches
+        // the document selection, so the feedback comment box can't trigger it.
+        let lastAutoCopied = '';
+
+        function copyChatSelection() {
+            const sel = window.getSelection();
+            if (!sel || sel.isCollapsed) return;
+            if (!sel.anchorNode || !sel.focusNode) return;
+            if (!chatContainer.contains(sel.anchorNode) || !chatContainer.contains(sel.focusNode)) return;
+            const text = sel.toString();
+            if (!text.trim()) return;
+            // Always re-copy (the clipboard may have changed elsewhere), but only
+            // toast when the selection actually changed — dragging fires repeatedly.
+            const changed = text !== lastAutoCopied;
+            navigator.clipboard.writeText(text).then(() => {
+                lastAutoCopied = text;
+                if (changed) showToast('Copied', 1100);
+            }).catch(() => { /* clipboard blocked — the selection is still there to copy by hand */ });
+        }
+        // Deferred so the selection has settled by the time we read it
+        const queueCopy = () => setTimeout(copyChatSelection, 0);
+        document.addEventListener('mouseup', queueCopy);
+        document.addEventListener('touchend', queueCopy);
+        document.addEventListener('keyup', (e) => { if (e.shiftKey || e.key === 'Shift') queueCopy(); });
+
         function clearWelcome() {
             const w = chatContainer.querySelector('.welcome-message');
             if (w) w.remove();
@@ -1124,16 +1132,9 @@
             content.className = 'message-content';
             content.innerHTML = html;
 
-            const tools = document.createElement('div');
-            tools.className = 'response-buttons';
-            const copyBtn = document.createElement('button');
-            copyBtn.className = 'action-btn';
-            copyBtn.textContent = 'Copy';
-            copyBtn.addEventListener('click', () => copyPlainText(plainText, copyBtn));
-            tools.appendChild(copyBtn);
-            content.appendChild(tools);
+            // No Copy button: selecting any text in the transcript copies it.
 
-            // Feedback UI — required (or skipped) before the next quick option grid appears
+            // Feedback UI
             const fb = document.createElement('div');
             fb.className = 'feedback-bar';
             fb.innerHTML =
@@ -1311,14 +1312,6 @@
             const content = document.createElement('div');
             content.className = 'message-content';
             content.innerHTML = linkifyEscaped(escapeHtml(text));
-            const tools = document.createElement('div');
-            tools.className = 'response-buttons';
-            const copyBtn = document.createElement('button');
-            copyBtn.className = 'action-btn';
-            copyBtn.textContent = 'Copy';
-            copyBtn.addEventListener('click', () => copyPlainText(text, copyBtn));
-            tools.appendChild(copyBtn);
-            content.appendChild(tools);
             div.appendChild(content);
             chatContainer.appendChild(div);
         }

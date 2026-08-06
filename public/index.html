@@ -1065,7 +1065,11 @@
         // the document selection, so the feedback comment box can't trigger it.
         let lastAutoCopied = '';
 
-        function copyChatSelection() {
+        // clearAfter: release the selection once copied, so the next drag starts a
+        // fresh selection instead of dragging this text (browsers begin a
+        // drag-and-drop when a drag starts inside an existing selection). Not done
+        // for keyboard selection, which would break shift-arrow extending.
+        function copyChatSelection(clearAfter) {
             const sel = window.getSelection();
             if (!sel || sel.isCollapsed) return;
             if (!sel.anchorNode || !sel.focusNode) return;
@@ -1073,18 +1077,24 @@
             const text = sel.toString();
             if (!text.trim()) return;
             // Always re-copy (the clipboard may have changed elsewhere), but only
-            // toast when the selection actually changed — dragging fires repeatedly.
+            // toast when the selection actually changed — keyboard selection repeats.
             const changed = text !== lastAutoCopied;
             navigator.clipboard.writeText(text).then(() => {
-                lastAutoCopied = text;
                 if (changed) showToast('Copied', 1100);
+                if (clearAfter) {
+                    const s = window.getSelection();
+                    if (s && s.toString() === text) s.removeAllRanges();
+                    lastAutoCopied = '';   // a fresh identical selection should confirm again
+                } else {
+                    lastAutoCopied = text;
+                }
             }).catch(() => { /* clipboard blocked — the selection is still there to copy by hand */ });
         }
         // Deferred so the selection has settled by the time we read it
-        const queueCopy = () => setTimeout(copyChatSelection, 0);
-        document.addEventListener('mouseup', queueCopy);
-        document.addEventListener('touchend', queueCopy);
-        document.addEventListener('keyup', (e) => { if (e.shiftKey || e.key === 'Shift') queueCopy(); });
+        const queueCopy = (clearAfter) => setTimeout(() => copyChatSelection(clearAfter), 0);
+        document.addEventListener('mouseup', () => queueCopy(true));
+        document.addEventListener('touchend', () => queueCopy(true));
+        document.addEventListener('keyup', (e) => { if (e.shiftKey || e.key === 'Shift') queueCopy(false); });
 
         function clearWelcome() {
             const w = chatContainer.querySelector('.welcome-message');

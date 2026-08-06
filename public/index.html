@@ -213,6 +213,19 @@
             font-size: 12px; color: #909090; padding: 0 8px 10px; cursor: pointer;
         }
         .ref-toggle input { accent-color: #909090; }
+        /* Persistent quick options above the composer */
+        .quick-bar {
+            display: flex; gap: 7px; overflow-x: auto; margin-bottom: 9px;
+            padding-bottom: 3px; scrollbar-width: thin;
+        }
+        .quick-bar::-webkit-scrollbar { height: 5px; }
+        .quick-bar::-webkit-scrollbar-thumb { background: #4a4a4a; border-radius: 3px; }
+        .quick-chip {
+            flex: 0 0 auto; background: #3a3a3a; border: 1px solid #4a4a4a; color: #b8b8b8;
+            font-size: 12px; padding: 6px 12px; border-radius: 999px; cursor: pointer; white-space: nowrap;
+        }
+        .quick-chip:hover { background: #4a4a4a; color: #e0e0e0; }
+        .quick-chip.armed { background: #565656; border-color: #8a8a8a; color: #fff; font-weight: 600; }
         .section-label {
             display: block; font-weight: 700; color: #909090; font-size: 11px;
             letter-spacing: 0.8px; margin-bottom: 2px;
@@ -632,6 +645,10 @@
                             <strong>Generate Full Report</strong>
                             <span>Complete report from dictated findings</span>
                         </div>
+                        <div class="example-prompt" data-action="synthesize">
+                            <strong>Synthesize Report</strong>
+                            <span>Update a prior/template report with new information</span>
+                        </div>
                         <div class="example-prompt" data-action="radqa">
                             <strong>Quick Rad Question</strong>
                             <span>Anatomy, protocols, differentials, pitfalls</span>
@@ -642,6 +659,7 @@
             </div>
             <div class="input-container">
               <div class="input-inner">
+                <div class="quick-bar" id="quickBar"></div>
                 <label class="ref-toggle" id="refToggle" style="display:none">
                     <input type="checkbox" id="refCheckbox" checked> Include references (searches Radiopaedia, ACR, RadioGraphics…)
                 </label>
@@ -995,7 +1013,7 @@
         const sendBtn = document.getElementById('sendBtn');
 
         let pendingAction = null;       // armed quick action
-        let awaitingFeedback = false;   // response must be rated/skipped before next quick option grid works
+        let synthTemplate = null;       // Synthesize step 1: the prior report, held until step 2
         let chatHistory = [];           // [{role, content}] sent with each request for follow-up intelligence
 
         const ACTION_HINTS = {
@@ -1004,14 +1022,49 @@
             proofread: 'Paste the text to proofread — corrections will be shown in bold (copies as plain text).',
             impression: 'Paste the report body — I’ll generate a numbered Impression.',
             fullreport: 'Dictate or paste your findings — I’ll generate a complete structured report with normals filled in. Review it carefully before use.',
+            synthesize: 'Step 1 of 2 — paste the prior report or template you want to start from.',
             radqa: 'Ask a quick radiology question — anatomy, protocol selection, differentials, imaging pitfalls, or report language. Follow-ups work.'
         };
-        const ACTION_LABELS = { describe: 'Describe a Finding', reword: 'Reword', proofread: 'Proofread', impression: 'Generate Impression', fullreport: 'Generate Full Report', radqa: 'Quick Rad Question' };
+        const ACTION_LABELS = {
+            describe: 'Describe a Finding', reword: 'Reword', proofread: 'Proofread',
+            impression: 'Generate Impression', fullreport: 'Generate Full Report',
+            synthesize: 'Synthesize Report', radqa: 'Quick Rad Question'
+        };
+
+        // Quick options are always available above the composer. Using one is
+        // optional — typing without arming anything is ordinary chat.
+        const quickBar = document.getElementById('quickBar');
+        for (const [action, label] of Object.entries(ACTION_LABELS)) {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'quick-chip';
+            chip.dataset.action = action;
+            chip.textContent = label;
+            chip.addEventListener('click', () => {
+                if (pendingAction === action) disarmAction();   // click again to cancel
+                else armAction(action);
+            });
+            quickBar.appendChild(chip);
+        }
+
+        function syncQuickBar() {
+            quickBar.querySelectorAll('.quick-chip').forEach(c =>
+                c.classList.toggle('armed', c.dataset.action === pendingAction));
+            document.getElementById('refToggle').style.display = pendingAction === 'radqa' ? 'flex' : 'none';
+        }
 
         function armAction(action) {
             pendingAction = action;
-            document.getElementById('refToggle').style.display = action === 'radqa' ? 'flex' : 'none';
+            synthTemplate = null;          // starting fresh cancels a half-built Synthesize
+            syncQuickBar();
             addHintMessage(ACTION_LABELS[action] + ' — ' + ACTION_HINTS[action]);
+            userInput.focus();
+        }
+
+        function disarmAction() {
+            pendingAction = null;
+            synthTemplate = null;
+            syncQuickBar();
             userInput.focus();
         }
 
@@ -1059,34 +1112,6 @@
             return div;
         }
 
-        // In-chat "next task" grid, shown once feedback on the previous response is resolved
-        function showNextOptions() {
-            const div = document.createElement('div');
-            div.className = 'message nav assistant';
-            const content = document.createElement('div');
-            content.className = 'message-content';
-            const label = document.createElement('div');
-            label.style.cssText = 'font-size:12px; color:#909090; margin-bottom:2px;';
-            label.textContent = 'Anything else?';
-            const grid = document.createElement('div');
-            grid.className = 'nav-prompts';
-            for (const [action, title] of Object.entries(ACTION_LABELS)) {
-                const card = document.createElement('div');
-                card.className = 'nav-prompt';
-                card.innerHTML = '<strong>' + escapeHtml(title) + '</strong>';
-                card.addEventListener('click', () => {
-                    div.remove();
-                    armAction(action);
-                });
-                grid.appendChild(card);
-            }
-            content.appendChild(label);
-            content.appendChild(grid);
-            div.appendChild(content);
-            chatContainer.appendChild(div);
-            scrollChat();
-        }
-
         // Render an assistant response. plainText is EXACTLY what Copy places on the clipboard.
         function addAssistantResponse({ html, plainText, actionType, userText }) {
             const div = document.createElement('div');
@@ -1132,8 +1157,7 @@
                 done.className = 'fb-done';
                 done.textContent = note;
                 content.appendChild(done);
-                awaitingFeedback = false;
-                showNextOptions();
+
             }
 
             submitBtn.addEventListener('click', async () => {
@@ -1159,7 +1183,6 @@
             div.appendChild(content);
             chatContainer.appendChild(div);
             scrollChat();
-            awaitingFeedback = true;
         }
 
         // Bold only the changed/added words of the proofread output; copy stays plain.
@@ -1181,9 +1204,25 @@
             if (!message) return;
 
             const actionType = pendingAction;
+
+            // Synthesize is two-part: the first message is the prior report and
+            // is only captured, not sent. The action stays armed for step 2.
+            if (actionType === 'synthesize' && synthTemplate === null) {
+                addUserMessage(message);
+                synthTemplate = message;
+                userInput.value = '';
+                userInput.style.height = 'auto';
+                addHintMessage('Step 2 of 2 — now paste or describe the new information to work into that report. ' +
+                               'I’ll apply it in your own reporting style.');
+                userInput.focus();
+                return;
+            }
+
+            const template = synthTemplate;
             pendingAction = null;
+            synthTemplate = null;
+            syncQuickBar();
             const includeRefs = document.getElementById('refCheckbox').checked;
-            document.getElementById('refToggle').style.display = 'none';
 
             addUserMessage(message);
             userInput.value = '';
@@ -1194,7 +1233,7 @@
             try {
                 const data = await api('/api/assist', {
                     method: 'POST',
-                    body: { action: actionType, message, history: historyToSend, references: includeRefs }
+                    body: { action: actionType, message, history: historyToSend, references: includeRefs, template }
                 });
                 loading.remove();
 
@@ -1298,7 +1337,6 @@
                 else addStoredAssistantMessage(m.content);
             }
             chatHistory = msgs.slice(-24).map(m => ({ role: m.role, content: m.content }));
-            showNextOptions();
             scrollChat();
         }
         loadChatHistory();

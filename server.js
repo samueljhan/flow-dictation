@@ -28,6 +28,7 @@ const MODEL_RADQA = process.env.MODEL_RADQA || 'claude-fable-5';          // Qui
 // when neither is configured.
 const MODEL_REVIEW = process.env.MODEL_REVIEW || process.env.MODEL_REPORT || 'claude-fable-5';        // draft review + read-out integration
 const MODEL_IMPRESSION = process.env.MODEL_IMPRESSION || process.env.MODEL_REPORT || 'claude-fable-5'; // impression generation
+const MODEL_SYNTHESIZE = process.env.MODEL_SYNTHESIZE || 'claude-fable-5';   // prior report + new info → merged report
 // Used on every path when safety classifiers decline a benign radiology request
 const MODEL_FALLBACK = process.env.MODEL_FALLBACK || 'claude-opus-4-8';
 
@@ -191,6 +192,7 @@ console.log(`  detect     = ${MODEL_DETECT}`);
 console.log(`  report     = ${MODEL_REPORT}   (describe · reword · proofread · full report)`);
 console.log(`  review     = ${MODEL_REVIEW}   (draft review · read-out integration)`);
 console.log(`  impression = ${MODEL_IMPRESSION}`);
+console.log(`  synthesize = ${MODEL_SYNTHESIZE}`);
 console.log(`  radqa      = ${MODEL_RADQA}`);
 console.log(`  chat       = ${MODEL_CHAT}`);
 console.log(`  fallback   = ${MODEL_FALLBACK}   (on classifier refusal)`);
@@ -303,7 +305,7 @@ Rules:
 - Preserve line breaks where they exist in the user's text.
 - Never include patient names, MRNs, dates of birth, or other PHI.
 - No preamble, no commentary, no sign-off — return only the requested content.
-- You may be given recent conversation history. Use it to interpret follow-ups naturally: "make it shorter", "more formal", "now do the impression", "same but for the left side" all refer to your previous answer. When the user moves on to a new, unrelated request, treat it as a fresh task and do not carry over earlier content.`;
+- You may be given recent conversation history. Judge for yourself whether each new message continues the previous exchange or starts something new. Follow-ups — "make it shorter", "more formal", "now do the impression", "same but for the left side", "what about on the left?" — refer to your previous answer; interpret them against it. A message that introduces a new report, a new finding, or an unrelated question is a fresh task: answer it on its own terms and do not carry over wording, findings, or structure from earlier answers. When it is genuinely ambiguous, prefer treating it as a follow-up, since the user can always restate.`;
 
 const ASSIST_ACTIONS = {
   describe: `The user is describing an imaging finding they are struggling to word. Suggest professional report wording for it.
@@ -327,7 +329,18 @@ Report body:`,
 - Number the IMPRESSION by clinical significance.
 - Return only the report text, nothing else.
 
-User's findings / dictation:`
+User's findings / dictation:`,
+  synthesize: `Rewrite the PRIOR REPORT so it incorporates the NEW INFORMATION, in the user's own reporting voice.
+
+Rules:
+- Start from the prior report and keep its structure, section headings, ordering, and phrasing conventions. This is an edit, not a fresh report.
+- Apply everything the new information states: change, add, or remove content accordingly. Where the two conflict, the new information wins.
+- Leave untouched anything the new information doesn't address — do not re-word, re-order, or "improve" it.
+- Update the impression so it stays consistent with the findings you changed.
+- Never invent findings, measurements, or comparisons that appear in neither input.
+- Use [bracketed placeholders] for details neither input supplies.
+- Match the style guide, language reference, and exemplar reports provided — they are the user's own conventions.
+- Return only the finished report, with no commentary about what you changed.`
 };
 
 // Speed: mechanical transformations run at low effort, moderate tasks at
@@ -338,13 +351,14 @@ const ACTION_EFFORT = {
   proofread: 'low',
   describe: 'medium',
   impression: 'medium',
-  fullreport: 'high'
+  fullreport: 'high',
+  synthesize: 'high'
 };
 const CHAT_EFFORT = 'medium';          // free-form Assist chat
 const DRAFT_REVIEW_EFFORT = 'medium';  // typo/essential-edit review
 
 // Per-action model routing; anything unlisted uses MODEL_REPORT.
-const ACTION_MODEL = { impression: MODEL_IMPRESSION };
+const ACTION_MODEL = { impression: MODEL_IMPRESSION, synthesize: MODEL_SYNTHESIZE };
 
 const DRAFT_REVIEW_SYSTEM = `You review radiology report drafts for a radiologist. Flag ONLY essential corrections: obvious typos (spelling, grammar, punctuation) and clear speech-recognition/dictation errors, plus wording that is factually wrong or genuinely confusing.
 
@@ -593,13 +607,19 @@ async function upgradeImpression(reportText, studyType) {
 
 app.post('/api/assist', async (req, res) => {
   try {
-    const { action, message, history } = req.body;
+    const { action, message, history, template } = req.body;
     if (!message || !message.trim()) {
       return res.status(400).json({ error: 'Message is required' });
     }
+    if (action === 'synthesize' && (!template || !template.trim())) {
+      return res.status(400).json({ error: 'A prior/template report is required for Synthesize Report' });
+    }
 
     const instruction = action && ASSIST_ACTIONS[action] ? ASSIST_ACTIONS[action] : null;
-    const userMessage = instruction ? `${instruction}\n\n${message}` : message;
+    // Synthesize is the one two-part action: prior report + the new information
+    const userMessage = action === 'synthesize'
+      ? `${instruction}\n\nPRIOR REPORT:\n${template}\n\nNEW INFORMATION:\n${message}`
+      : (instruction ? `${instruction}\n\n${message}` : message);
 
     // Recent conversation history so follow-ups ("shorter", "now the impression") work
     const messages = [];
@@ -706,9 +726,11 @@ app.post('/api/assist', async (req, res) => {
     let studyType = null;
     if (instruction) {
       // fullreport inputs are often short dictations, but knowing the study type
-      // is what pulls in the right exemplars — always try to detect it.
-      if (action === 'fullreport' || looksLikeReport(message)) {
-        try { studyType = await detectStudyType(message); } catch (e) { /* non-fatal */ }
+      // is what pulls in the right exemplars — always try to detect it. For
+      // synthesize, the prior report is the reliable source for that.
+      const detectFrom = action === 'synthesize' ? template : message;
+      if (action === 'fullreport' || action === 'synthesize' || looksLikeReport(detectFrom)) {
+        try { studyType = await detectStudyType(detectFrom); } catch (e) { /* non-fatal */ }
       }
       system = await buildKnowledgeSystem(ASSIST_SYSTEM, studyType);
     }
@@ -720,7 +742,7 @@ app.post('/api/assist', async (req, res) => {
       model: chatModel,
       system,
       messages,
-      maxTokens: 4000,
+      maxTokens: action === 'synthesize' ? 8000 : 4000,
       effort: instruction ? ACTION_EFFORT[action] : CHAT_EFFORT
     });
 
@@ -1676,7 +1698,8 @@ app.get('/api/health', (req, res) => {
     service: 'Flow Dictation API',
     llm: {
       detect: MODEL_DETECT, report: MODEL_REPORT, review: MODEL_REVIEW,
-      impression: MODEL_IMPRESSION, radqa: MODEL_RADQA, chat: MODEL_CHAT,
+      impression: MODEL_IMPRESSION, synthesize: MODEL_SYNTHESIZE,
+      radqa: MODEL_RADQA, chat: MODEL_CHAT,
       fallback: MODEL_FALLBACK
     },
     auth: { google: googleLoginConfigured, password: !!APP_PASSWORD, allowed_emails: ALLOWED_EMAILS.length },

@@ -827,6 +827,7 @@
             <p id="changesSubtitle"></p>
             <div id="changesDiff" class="diff-view"></div>
             <div class="modal-buttons">
+                <button class="ghost" id="changesRevert" style="display:none">Revert to previous version</button>
                 <button class="ghost" id="changesClose">Close</button>
             </div>
         </div>
@@ -1590,6 +1591,40 @@
         document.getElementById('changesClose').addEventListener('click', closeChanges);
         changesModal.addEventListener('click', e => { if (e.target === changesModal) closeChanges(); });
 
+        // Revert writes the previous text back as a normal save, so the version
+        // being replaced is itself snapshotted — reverting again undoes it.
+        const revertBtn = document.getElementById('changesRevert');
+        let changesCtx = null;   // { report, previous }
+
+        revertBtn.addEventListener('click', async () => {
+            if (!changesCtx) return;
+            const { report, previous } = changesCtx;
+            const who = report.study_id_label || report.id;
+            const openDirty = loadedReport && loadedReport.id === report.id && draftDirty();
+            if (!confirm('Revert ' + who + ' to the previous saved version?\n\n' +
+                (openDirty ? 'Unsaved edits in the editor will be replaced.\n\n' : '') +
+                'The current version is kept in history, so you can revert again to undo this.')) return;
+            revertBtn.disabled = true;
+            try {
+                const data = await api('/api/reports/' + encodeURIComponent(report.id), {
+                    method: 'PUT', body: { draft_text: previous, append_edits: [] }
+                });
+                if (loadedReport && loadedReport.id === report.id) {
+                    loadedReport = data.report;
+                    draftText.value = data.report.draft_text;
+                    updateEditingUi();
+                }
+                finalDataStale = true;
+                loadDraftList();
+                closeChanges();
+                showToast('Reverted ' + who + ' to the previous version');
+            } catch (e) {
+                showToast('Revert failed: ' + e.message, 4000);
+            } finally {
+                revertBtn.disabled = false;
+            }
+        });
+
         async function showRecentChanges(report) {
             const title = document.getElementById('changesTitle');
             const sub = document.getElementById('changesSubtitle');
@@ -1597,6 +1632,8 @@
             title.textContent = 'Recent changes — ' + (report.study_id_label || report.id);
             sub.textContent = 'Loading…';
             view.innerHTML = '';
+            changesCtx = null;
+            revertBtn.style.display = 'none';
             changesModal.classList.add('active');
             try {
                 const d = await api('/api/reports/' + encodeURIComponent(report.id) + '/changes');
@@ -1604,6 +1641,8 @@
                     sub.textContent = 'This draft has only been saved once — there are no earlier versions to compare against.';
                     return;
                 }
+                changesCtx = { report, previous: d.previous };
+                revertBtn.style.display = '';
                 const when = new Date(d.previous_at);
                 sub.innerHTML = 'Compared with the version saved at ' +
                     escapeHtml(fmtDate(when) + ' ' + pad2(when.getHours()) + ':' + pad2(when.getMinutes())) +

@@ -301,23 +301,24 @@
         @keyframes spin { to { transform: rotate(360deg); } }
 
         /* ---------- Draft page ---------- */
-        #page-draft { padding: 24px 32px; --page-pad-y: 24px; }
+        #page-draft { padding: 24px 32px; }
         .draft-layout { display: flex; flex: 1; min-height: 0; }
         .draft-left { flex: 0 0 63%; display: flex; flex-direction: column; min-width: 0; }
         /* Drag handles: hit area is wide, the visible line is thin */
-        .splitter-v { position: relative; flex-shrink: 0; touch-action: none; flex-basis: 22px; cursor: col-resize; }
-        /* A 1px hairline matching the report box borders, spanning the full
-           height: negative insets cancel the page's vertical padding so it
-           meets the header's bottom border and the bottom of the viewport. */
-        .splitter-v::before {
-            content: ''; position: absolute; background: #404040;
-            top: calc(-1 * var(--page-pad-y, 24px)); bottom: calc(-1 * var(--page-pad-y, 24px));
-            left: 50%; width: 1px; transform: translateX(-50%);
-            transition: background 0.15s;
+        /* 1px hairlines matching the report box borders; the hit area is wider */
+        .splitter-v, .splitter-h { position: relative; flex-shrink: 0; touch-action: none; }
+        .splitter-v { flex-basis: 22px; cursor: col-resize; }
+        .splitter-h { flex-basis: 18px; cursor: row-resize; }
+        .splitter-v::before, .splitter-h::before {
+            content: ''; position: absolute; background: #404040; transition: background 0.15s;
         }
-        .splitter-v:hover::before, .splitter-v.dragging::before { background: #7a7a7a; }
+        .splitter-v::before { top: 0; bottom: 0; left: 50%; width: 1px; transform: translateX(-50%); }
+        .splitter-h::before { left: 0; right: 0; top: 50%; height: 1px; transform: translateY(-50%); }
+        .splitter-v:hover::before, .splitter-h:hover::before,
+        .splitter-v.dragging::before, .splitter-h.dragging::before { background: #7a7a7a; }
         /* While dragging, don't let the pointer select text or flip the cursor */
         body.dragging-v, body.dragging-v * { cursor: col-resize !important; user-select: none !important; }
+        body.dragging-h, body.dragging-h * { cursor: row-resize !important; user-select: none !important; }
         #draftText { flex: 1; font-size: 14px; background: #242424; }
         .report-preview {
             flex: 1; overflow-y: auto; background: #242424; border: 1px solid #404040;
@@ -342,7 +343,8 @@
             flex: 1; min-height: 80px; overflow-y: auto;
             display: flex; flex-direction: column; gap: 12px;
         }
-        #notesPanel { flex: 0 0 auto; }
+        #notesPanel { flex: 0 0 auto; height: 260px; min-height: 120px; overflow: hidden; }
+        #notesPanel #readoutNotes { flex: 1; min-height: 0; }
         .panel {
             background: #333333; border: 1px solid #404040; border-radius: 12px; padding: 14px;
             display: flex; flex-direction: column; gap: 10px; flex-shrink: 0;
@@ -399,12 +401,11 @@
         .di-menu button:hover { background: #4a4a4a; color: #fff; }
         .modal.wide { max-width: 760px; }
         .modal .diff-view { margin-bottom: 0; max-height: 55vh; overflow-y: auto; }
-        #readoutNotes { min-height: 110px; font-size: 13px; resize: vertical; }
+        #readoutNotes { min-height: 90px; font-size: 13px; resize: none; }
         .readout-check { display: flex; align-items: center; gap: 7px; font-size: 13px; color: #d0d0d0; cursor: pointer; }
         .readout-check input { accent-color: #e0a832; margin: 0; }
         .notes-actions { display: flex; gap: 8px; }
         .notes-actions button { flex: 1; }
-        #editingBanner { font-size: 12px; color: #8ec9a0; }
         .segmented { display: flex; border: 1px solid #404040; border-radius: 8px; overflow: hidden; }
         .seg {
             flex: 1; background: transparent; border: none; color: #909090;
@@ -543,7 +544,7 @@
         /* Tablet: tighten the horizontal padding before stacking */
         @media (max-width: 1100px) {
             .header { padding-left: 20px; padding-right: 20px; }
-            #page-draft { padding: 20px; --page-pad-y: 20px; }
+            #page-draft { padding: 20px; }
             .final-scroll { padding: 20px; }
             .report-row, .report-head {
                 grid-template-columns: 115px minmax(120px, 1.3fr) minmax(0, 1fr) 80px 110px 56px 78px;
@@ -696,13 +697,12 @@
                     </div>
                     <div class="panel" id="metaPanel">
                         <div class="panel-title">Study</div>
-                        <div id="editingBanner" style="display:none"></div>
-                        <label>Study Type <span class="opt">(optional — auto-detected if blank)</span></label>
+                        <label>Study Type <span class="opt">(optional)</span></label>
                         <div class="combobox">
                             <input id="studyTypeInput" autocomplete="off" placeholder="e.g. MRI knee">
                             <div id="studyTypeDropdown" class="dropdown" style="display:none"></div>
                         </div>
-                        <label>Study ID <span class="opt">(optional — helps you find it later)</span></label>
+                        <label>Study ID <span class="opt">(optional)</span></label>
                         <input id="studyIdInput" autocomplete="off" placeholder="Accession, initials, room…">
                         <label>Report Type</label>
                         <div class="segmented">
@@ -728,6 +728,7 @@
                         <div class="status" id="reviewStatus"></div>
                     </div>
                   </div>
+                  <div class="splitter-h" id="splitterH" style="display:none" title="Drag to resize"></div>
                   <div class="panel" id="notesPanel" style="display:none">
                         <div class="panel-title">Read-out Notes</div>
                         <label class="readout-check"><input type="checkbox" id="readOutFlag"> Read out with attending</label>
@@ -1547,8 +1548,25 @@
             s.setMeasureCurrent(() => parseFloat(left.style.flexBasis) || 63);
         })();
 
+        // Horizontal: read-out notes height, measured from the bottom edge
+        (function () {
+            const right = document.querySelector('.draft-right');
+            const notes = document.getElementById('notesPanel');
+            const s = makeSplitter({
+                handle: document.getElementById('splitterH'),
+                axis: 'y',
+                storeKey: 'draftNotesH',
+                apply: h => { notes.style.height = h + 'px'; },
+                measure: e => right.getBoundingClientRect().bottom - e.clientY,
+                min: () => 120,
+                max: () => Math.max(160, right.getBoundingClientRect().height - 120)
+            });
+            s.setMeasureCurrent(() => notes.getBoundingClientRect().height);
+        })();
+
         function setNotesVisible(visible) {
             document.getElementById('notesPanel').style.display = visible ? '' : 'none';
+            document.getElementById('splitterH').style.display = visible ? '' : 'none';
         }
 
         // ---------- Read-out: shift drafts list, per-study notes, integration ----------
@@ -1757,14 +1775,12 @@
             const editing = !!loadedReport;
             setNotesVisible(editing);
             document.getElementById('newDraftBtn').style.display = editing ? '' : 'none';
-            const banner = document.getElementById('editingBanner');
-            banner.style.display = editing ? '' : 'none';
-            banner.textContent = editing ? 'Editing saved draft ' + loadedReport.id : '';
             integrateBtn.disabled = !readoutNotesEl.value.trim();
         }
 
         async function openDraft(id) {
-            if (loadedReport && loadedReport.id === id) return;
+            // Clicking the selected study again deselects it, back to a blank report
+            if (loadedReport && loadedReport.id === id) { newDraft(); return; }
             if (draftDirty() && !confirm('Discard unsaved changes to the current draft?')) return;
             try {
                 const data = await api('/api/reports/' + encodeURIComponent(id));

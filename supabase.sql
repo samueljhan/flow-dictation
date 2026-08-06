@@ -84,6 +84,17 @@ alter table reports add column if not exists notes_integrated_at timestamptz;
 alter table reports add column if not exists read_out_at timestamptz;
 alter table reports add column if not exists finalized_at timestamptz;
 
+-- Previous draft_text values, written on every re-save, so "See recent changes"
+-- can diff the current draft against the one before it.
+create table if not exists report_revisions (
+  id bigint generated always as identity primary key,
+  report_id text not null references reports(id) on delete cascade,
+  draft_text text not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists report_revisions_report_idx on report_revisions (report_id, id desc);
+alter table report_revisions enable row level security;
+
 -- ============================================================
 -- Active shift (added later — run this section on its own if the
 -- tables above already exist in your database)

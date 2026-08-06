@@ -1206,6 +1206,33 @@ app.put('/api/reports/:id/notes', async (req, res) => {
   }
 });
 
+// Current draft vs. the one saved immediately before it
+app.get('/api/reports/:id/changes', async (req, res) => {
+  if (!requireSupabase(res)) return;
+  try {
+    const { data: report, error: repErr } = await supabase
+      .from('reports').select('id, draft_text, raw_text').eq('id', req.params.id).single();
+    if (repErr) throw repErr;
+    const { data: revs, error: revErr } = await supabase
+      .from('report_revisions')
+      .select('draft_text, created_at')
+      .eq('report_id', req.params.id)
+      .order('id', { ascending: false })
+      .limit(1);
+    if (revErr) throw revErr;
+
+    const prior = revs && revs.length ? revs[0] : null;
+    res.json({
+      current: report.draft_text || '',
+      previous: prior ? prior.draft_text : null,
+      previous_at: prior ? prior.created_at : null
+    });
+  } catch (error) {
+    console.error('Changes error:', error);
+    res.status(500).json({ error: 'Failed to load changes', details: error.message });
+  }
+});
+
 // Manually mark a study as read out with the attending — independent of whether
 // any read-out notes were typed.
 app.put('/api/reports/:id/read-out', async (req, res) => {
@@ -1287,8 +1314,17 @@ app.put('/api/reports/:id', async (req, res) => {
       return res.status(400).json({ error: 'draft_text is required' });
     }
     const { data: existing, error: exErr } = await supabase
-      .from('reports').select('edits_json').eq('id', req.params.id).single();
+      .from('reports').select('edits_json, draft_text').eq('id', req.params.id).single();
     if (exErr) throw exErr;
+
+    // Snapshot the outgoing draft so "See recent changes" has something to diff
+    // against. Skipped when the text is unchanged (metadata-only saves).
+    if (existing.draft_text && existing.draft_text !== draft_text) {
+      const { error: revErr } = await supabase
+        .from('report_revisions')
+        .insert({ report_id: req.params.id, draft_text: existing.draft_text });
+      if (revErr) console.error('Revision snapshot failed:', revErr.message);
+    }
 
     // 'edited' = the reviewer wrote their own wording; keep it in the trail
     const cleanAppend = (Array.isArray(append_edits) ? append_edits : [])

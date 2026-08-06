@@ -373,6 +373,23 @@
         .note-dot.green { background: #8ec9a0; }
         .draft-item.finalized .di-main { color: #8f8f8f; }
         .draft-list-empty { font-size: 12px; color: #808080; font-style: italic; }
+        /* Per-row overflow menu */
+        .di-menu-btn {
+            flex-shrink: 0; background: transparent; border: none; color: #808080;
+            font-size: 15px; line-height: 1; padding: 2px 4px; border-radius: 5px; cursor: pointer;
+        }
+        .di-menu-btn:hover, .di-menu-btn.open { background: #4a4a4a; color: #e0e0e0; }
+        .di-menu {
+            position: fixed; z-index: 3200; background: #3a3a3a; border: 1px solid #555;
+            border-radius: 8px; padding: 4px; min-width: 172px; box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+        }
+        .di-menu button {
+            display: block; width: 100%; text-align: left; background: transparent; border: none;
+            color: #d0d0d0; font-size: 13px; padding: 7px 10px; border-radius: 6px; cursor: pointer;
+        }
+        .di-menu button:hover { background: #4a4a4a; color: #fff; }
+        .modal.wide { max-width: 760px; }
+        .modal .diff-view { margin-bottom: 0; max-height: 55vh; overflow-y: auto; }
         #readoutNotes { min-height: 110px; font-size: 13px; resize: vertical; }
         .readout-check { display: flex; align-items: center; gap: 7px; font-size: 13px; color: #d0d0d0; cursor: pointer; }
         .readout-check input { accent-color: #e0a832; margin: 0; }
@@ -803,6 +820,18 @@
     </div>
 
     <!-- "Is this a new shift?" prompt -->
+    <!-- Diff between the current draft and the previously saved one -->
+    <div class="modal-overlay" id="changesModal">
+        <div class="modal wide">
+            <h3 id="changesTitle">Recent changes</h3>
+            <p id="changesSubtitle"></p>
+            <div id="changesDiff" class="diff-view"></div>
+            <div class="modal-buttons">
+                <button class="ghost" id="changesClose">Close</button>
+            </div>
+        </div>
+    </div>
+
     <div class="modal-overlay" id="shiftPromptModal">
         <div class="modal">
             <h3>Is this a new shift?</h3>
@@ -1513,6 +1542,83 @@
             }
         }
 
+        // ---- Per-row "…" menu ----
+        // Rendered at the body level and positioned with fixed coords so the
+        // list's own overflow scrolling can't clip it.
+        let openMenuEl = null;
+
+        function closeRowMenu() {
+            if (openMenuEl) { openMenuEl.remove(); openMenuEl = null; }
+            document.querySelectorAll('.di-menu-btn.open').forEach(b => b.classList.remove('open'));
+        }
+        document.addEventListener('click', closeRowMenu);
+        document.addEventListener('keydown', e => { if (e.key === 'Escape') closeRowMenu(); });
+        window.addEventListener('resize', closeRowMenu);
+        document.addEventListener('scroll', closeRowMenu, true);
+
+        function openRowMenu(btn, report) {
+            const wasOpen = btn.classList.contains('open');
+            closeRowMenu();
+            if (wasOpen) return;          // second click closes
+            btn.classList.add('open');
+            const menu = document.createElement('div');
+            menu.className = 'di-menu';
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.textContent = 'See recent changes';
+            item.addEventListener('click', (ev) => {
+                ev.stopPropagation();
+                closeRowMenu();
+                showRecentChanges(report);
+            });
+            menu.appendChild(item);
+            menu.addEventListener('click', ev => ev.stopPropagation());
+            document.body.appendChild(menu);
+            const r = btn.getBoundingClientRect();
+            // Flip up / left when there isn't room below or right
+            const top = (r.bottom + menu.offsetHeight > window.innerHeight)
+                ? r.top - menu.offsetHeight - 4 : r.bottom + 4;
+            const left = Math.max(8, Math.min(r.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 8));
+            menu.style.top = top + 'px';
+            menu.style.left = left + 'px';
+            openMenuEl = menu;
+        }
+
+        // Diff of the current draft against the previously saved one
+        const changesModal = document.getElementById('changesModal');
+        function closeChanges() { changesModal.classList.remove('active'); }
+        document.getElementById('changesClose').addEventListener('click', closeChanges);
+        changesModal.addEventListener('click', e => { if (e.target === changesModal) closeChanges(); });
+
+        async function showRecentChanges(report) {
+            const title = document.getElementById('changesTitle');
+            const sub = document.getElementById('changesSubtitle');
+            const view = document.getElementById('changesDiff');
+            title.textContent = 'Recent changes — ' + (report.study_id_label || report.id);
+            sub.textContent = 'Loading…';
+            view.innerHTML = '';
+            changesModal.classList.add('active');
+            try {
+                const d = await api('/api/reports/' + encodeURIComponent(report.id) + '/changes');
+                if (d.previous === null) {
+                    sub.textContent = 'This draft has only been saved once — there are no earlier versions to compare against.';
+                    return;
+                }
+                const when = new Date(d.previous_at);
+                sub.innerHTML = 'Compared with the version saved at ' +
+                    escapeHtml(fmtDate(when) + ' ' + pad2(when.getHours()) + ':' + pad2(when.getMinutes())) +
+                    ' — <span class="diff-add">added</span> · <span class="diff-del">removed</span>';
+                view.innerHTML = diffWords(d.previous, d.current).map(p => {
+                    if (p.type === 'same') return escapeHtml(p.text);
+                    if (p.type === 'add') return '<span class="diff-add">' + escapeHtml(p.text) + '</span>';
+                    return '<span class="diff-del">' + escapeHtml(p.text) + '</span>';
+                }).join('') || '<span style="color:#808080;font-style:italic">No textual differences.</span>';
+            } catch (e) {
+                sub.textContent = '';
+                view.innerHTML = '<span style="color:#dc7a7a">⚠️ ' + escapeHtml(e.message) + '</span>';
+            }
+        }
+
         // Green = finalized via Save Final. Yellow = read out with the attending,
         // whether that was marked by hand or implied by having notes.
         function dotFor(r) {
@@ -1553,7 +1659,12 @@
                         (dot ? '<span class="note-dot ' + dot + '" title="' +
                             (dot === 'green' ? 'Final saved' : 'Read out') + '"></span>' : '') +
                         '<span class="di-main">' + label + '</span>' +
-                        '<span class="di-time">' + pad2(t.getHours()) + ':' + pad2(t.getMinutes()) + '</span>';
+                        '<span class="di-time">' + pad2(t.getHours()) + ':' + pad2(t.getMinutes()) + '</span>' +
+                        '<button type="button" class="di-menu-btn" title="More">…</button>';
+                    item.querySelector('.di-menu-btn').addEventListener('click', (ev) => {
+                        ev.stopPropagation();          // don't open the draft
+                        openRowMenu(ev.currentTarget, r);
+                    });
                     item.addEventListener('click', () => openDraft(r.id));
                     listEl.appendChild(item);
                 });

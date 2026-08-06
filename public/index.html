@@ -309,14 +309,18 @@
         @keyframes spin { to { transform: rotate(360deg); } }
 
         /* ---------- Draft page ---------- */
-        #page-draft { padding: 24px 32px; }
+        #page-draft { padding: 24px 32px; --page-pad-y: 24px; }
         .draft-layout { display: flex; flex: 1; min-height: 0; }
         .draft-left { flex: 0 0 63%; display: flex; flex-direction: column; min-width: 0; }
         /* Drag handles: hit area is wide, the visible line is thin */
         .splitter-v { position: relative; flex-shrink: 0; touch-action: none; flex-basis: 22px; cursor: col-resize; }
+        /* A 1px hairline matching the report box borders, spanning the full
+           height: negative insets cancel the page's vertical padding so it
+           meets the header's bottom border and the bottom of the viewport. */
         .splitter-v::before {
-            content: ''; position: absolute; background: #404040; border-radius: 2px;
-            top: 0; bottom: 0; left: 50%; width: 2px; transform: translateX(-50%);
+            content: ''; position: absolute; background: #404040;
+            top: calc(-1 * var(--page-pad-y, 24px)); bottom: calc(-1 * var(--page-pad-y, 24px));
+            left: 50%; width: 1px; transform: translateX(-50%);
             transition: background 0.15s;
         }
         .splitter-v:hover::before, .splitter-v.dragging::before { background: #7a7a7a; }
@@ -547,7 +551,7 @@
         /* Tablet: tighten the horizontal padding before stacking */
         @media (max-width: 1100px) {
             .header { padding-left: 20px; padding-right: 20px; }
-            #page-draft { padding: 20px; }
+            #page-draft { padding: 20px; --page-pad-y: 20px; }
             .final-scroll { padding: 20px; }
             .report-row, .report-head {
                 grid-template-columns: 115px minmax(120px, 1.3fr) minmax(0, 1fr) 80px 110px 56px 78px;

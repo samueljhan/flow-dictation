@@ -19,9 +19,10 @@ insert into style_guide (section, rule) values
 ('findings', 'For each index lesion give measurement, precise location, and series/image reference.'),
 ('findings', 'Scope statements to what is imaged: "The visualized lung bases are clear."'),
 -- impressions
-('impressions', 'Number impression items and order them by clinical significance, most important first.'),
+('impressions', 'Do not number, letter, or bullet impression items — put each item on its own line, ordered by clinical significance, most important first.'),
 ('impressions', 'The first impression item answers the clinical question directly.'),
 ('impressions', 'Never introduce a finding in the impression that is not described in the report body.'),
+('impressions', 'Include only findings that change patient management or answer the clinical question; leave incidental, chronic, and stable benign findings in the body.'),
 ('impressions', 'Do not restate normals in the impression; include a pertinent negative only when it answers the clinical question.'),
 ('impressions', 'Keep each impression item to one or two sentences — detail belongs in the findings.'),
 ('impressions', 'State recommendations explicitly with modality and interval (e.g., "Recommend follow-up CT in 6 months").'),
@@ -47,8 +48,8 @@ insert into rad_language (category, content) values
 ('findings_phrasing', 'Characterize masses by enhancement pattern, margin, and internal architecture — not "complex lesion" alone.'),
 ('findings_phrasing', 'Lines and tubes: name the device, course, and tip position: "Endotracheal tube tip 3.2 cm above the carina."'),
 -- impression_phrasing
-('impression_phrasing', 'Lead with the diagnosis that answers the clinical question: "1. Acute uncomplicated appendicitis."'),
-('impression_phrasing', 'Pertinent negative phrasing when it answers the referrer: "2. No drainable fluid collection."'),
+('impression_phrasing', 'Lead with the diagnosis that answers the clinical question: "Acute uncomplicated appendicitis."'),
+('impression_phrasing', 'Pertinent negative phrasing when it answers the referrer: "No drainable fluid collection."'),
 ('impression_phrasing', 'Refer to the body rather than repeating detail: "Findings are compatible with [diagnosis], as described above."'),
 ('impression_phrasing', 'Direct recommendation: "Recommend contrast-enhanced MRI for further characterization."'),
 ('impression_phrasing', 'Optional-recommendation register: "Short-interval follow-up ultrasound in 6 weeks can be considered."'),

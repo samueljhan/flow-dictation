@@ -146,7 +146,8 @@ create table if not exists assist_messages (
   id bigint generated always as identity primary key,
   role text not null check (role in ('user', 'assistant')),
   content text not null,
-  action_type text,          -- describe | reword | proofread | impression | fullreport | radqa | freeform
+  action_type text,          -- describe | reword | proofread | impression | fullreport | synthesize | freeform
+                             -- ('radqa' appears in rows saved before the Quick Rad Question action was removed)
   created_at timestamptz not null default now()
 );
 

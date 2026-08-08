@@ -21,8 +21,9 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 // Haiku handles it at ~1/10 the price of the frontier models.
 const MODEL_DETECT = process.env.MODEL_DETECT || 'claude-haiku-4-5';      // study type detection
 const MODEL_REPORT = process.env.MODEL_REPORT || 'claude-sonnet-4-6';     // describe / reword / proofread / full report
-const MODEL_CHAT = process.env.MODEL_CHAT || 'claude-fable-5';            // free-form Assist chat
-const MODEL_RADQA = process.env.MODEL_RADQA || 'claude-fable-5';          // Quick Rad Question
+// Free text: questions, follow-ups, and any text work typed without arming a
+// quick action. MODEL_RADQA is honoured for continuity with older deployments.
+const MODEL_CHAT = process.env.MODEL_CHAT || process.env.MODEL_RADQA || 'claude-fable-5';
 // Judgement-heavy paths default to Fable. Explicit env wins; otherwise an
 // explicitly-set MODEL_REPORT is inherited, and the Fable default applies only
 // when neither is configured.
@@ -193,8 +194,7 @@ console.log(`  report     = ${MODEL_REPORT}   (describe · reword · proofread �
 console.log(`  review     = ${MODEL_REVIEW}   (draft review · read-out integration)`);
 console.log(`  impression = ${MODEL_IMPRESSION}`);
 console.log(`  synthesize = ${MODEL_SYNTHESIZE}`);
-console.log(`  radqa      = ${MODEL_RADQA}`);
-console.log(`  chat       = ${MODEL_CHAT}`);
+console.log(`  chat       = ${MODEL_CHAT}   (free text: questions · follow-ups · typed requests)`);
 console.log(`  fallback   = ${MODEL_FALLBACK}   (on classifier refusal)`);
 console.log('========================');
 
@@ -319,14 +319,21 @@ Text to reword:`,
   proofread: `Proofread the following text. Correct spelling, grammar, punctuation, and obvious speech-recognition/dictation errors. Do not otherwise change wording, meaning, or style. Return only the fully corrected text, preserving line breaks exactly.
 
 Text to proofread:`,
-  impression: `Generate a numbered IMPRESSION for the following radiology report body. Order items by clinical significance, keep each item concise, and use standard radiology register. Return only the numbered impression lines (1. ... 2. ...), nothing else.
+  impression: `Generate an IMPRESSION for the following radiology report body. Rules:
+- Be selective. Include only findings that change patient management or answer the clinical question. Omit incidental and chronic findings, stable/unchanged benign findings, and normal statements — those stay in the findings.
+- Include a pertinent negative only when it directly answers the clinical question.
+- If nothing meets that bar, say so in a single line rather than padding the impression with minor findings.
+- Order by clinical significance, most important first; the first line answers the clinical question.
+- One item per line, separated by a single newline. Do NOT number, letter, bullet, or otherwise label the lines — plain text only, so lines can be edited and reordered freely.
+- Keep each item to one or two sentences in standard radiology register; detail belongs in the findings.
+- Return only the impression lines, nothing else.
 
 Report body:`,
   fullreport: `Generate a complete radiology report from the user's dictated or summarized findings. Use standard report structure — EXAMINATION, CLINICAL HISTORY, TECHNIQUE, COMPARISON, FINDINGS, IMPRESSION — matching the structure and phrasing of any exemplar reports provided for this study type. Rules:
 - Include every finding the user stated, worded in standard radiology register. Never alter laterality, measurements, or meaning.
 - For structures the user did not mention, use the standard normal statements appropriate to this study type.
 - Use [bracketed placeholders] for details the user did not provide (e.g. [clinical history], [comparison date]) rather than inventing them.
-- Number the IMPRESSION by clinical significance.
+- Keep the IMPRESSION selective: only findings that change patient management or answer the clinical question — no incidental or chronic findings. Order by clinical significance, one item per line, unnumbered and unbulleted.
 - Return only the report text, nothing else.
 
 User's findings / dictation:`,
@@ -354,8 +361,10 @@ const ACTION_EFFORT = {
   fullreport: 'high',
   synthesize: 'high'
 };
-const CHAT_EFFORT = 'medium';          // free-form Assist chat
 const DRAFT_REVIEW_EFFORT = 'medium';  // typo/essential-edit review
+// Free text is the most-used path, so it is also the most latency-sensitive.
+// Env-overridable to retune without a code change.
+const FREEFORM_EFFORT = process.env.FREEFORM_EFFORT || 'medium';
 
 // Per-action model routing; anything unlisted uses MODEL_REPORT.
 const ACTION_MODEL = { impression: MODEL_IMPRESSION, synthesize: MODEL_SYNTHESIZE };
@@ -366,6 +375,7 @@ Return JSON only — no markdown fences, no commentary — in exactly this shape
 {"edits": [{"original_text": "...", "suggested_text": "...", "reason": "...", "category": "typo"}]}
 
 Rules:
+- SCOPE: review only the body of the report — the FINDINGS section and everything after it (including the IMPRESSION). Everything above FINDINGS is off limits: exam/study type, clinical history or indication, technique, comparison, protocol, patient or accession headers. Never propose an edit there, even for an obvious typo. If a report has no FINDINGS heading, review the whole thing.
 - Essential changes only. Do NOT suggest optional stylistic polish, preference rewording, tightening, or restructuring. If a sentence is acceptable as written, leave it alone — even if you would phrase it differently.
 - Fewer, high-confidence edits beat many marginal ones. When unsure whether an edit is essential, omit it.
 - "category" must be exactly "typo" or "style". Use "typo" for spelling/grammar/punctuation/dictation errors; reserve "style" for wording that is clearly wrong or confusing, not preferences.
@@ -392,34 +402,54 @@ Rules:
 const STUDY_TYPE_SYSTEM = `You identify the study type of a radiology report: modality plus body part, normalized in the style "MRI knee", "CT abdomen pelvis", "US thyroid", "XR chest", "PET/CT whole body", "CT head".
 Return JSON only — no markdown fences, no commentary: {"study_type": "..."}`;
 
-const RAD_QA_SYSTEM_PROMPT = `You are an expert academic radiologist answering quick questions from a radiology resident. Style:
-- Answer directly and precisely at resident-to-fellow teaching level; assume medical vocabulary
-- Anatomic precision matters — name specific structures, attachments, and relationships
-- Proactively flag imaging pitfalls, mimics, and pseudolesions relevant to the question
-- For protocol questions, reason about the clinical question first, then the acquisition
-- When asked for report language, give drop-in ready phrasing with bracketed [placeholders]
-- Concise but substantive: typically a few short paragraphs; use a brief list only when enumerating truly parallel items
-- If a question has genuine controversy or institutional variation, say so briefly
-- No generic safety disclaimers or 'consult your attending' filler; this is education between professionals, not patient advice`;
+// Free text is the main way in — there are no modes to pick, so this prompt has
+// to work out for itself what the user wants. The quick-action chips exist only
+// as shortcuts; every one of their jobs is described here too, because a typed
+// request ("tidy this up", "impression?", "what's the Bosniak cutoff") has to
+// land in the same place as the chip would.
+const FREEFORM_SYSTEM = `You are an expert academic radiologist and writing assistant inside Flow Dictation, a radiology reporting tool. The user types freely — there are no modes and no buttons to tell you what they want. Work that out yourself from the message and the recent conversation, then follow the matching playbook below.
+
+FIRST — continuation or new task? You may be given recent conversation history. Judge whether the new message continues the previous exchange or starts something new. Follow-ups — "make it shorter", "more formal", "now do the impression", "same but for the left side", "what about on the left?", "why?" — refer to your previous answer; interpret them against it, and apply the playbook to the text or topic already in the conversation rather than to the literal words of the follow-up. A message that introduces a new report, a new finding, or an unrelated question is a fresh task: answer it on its own terms and carry over no wording, findings, or structure from earlier answers. When it is genuinely ambiguous, prefer treating it as a follow-up — the user can always restate.
+
+THEN — which kind of request is it?
+
+QUESTION (anatomy, physics, protocols, differentials, pitfalls, staging/classification systems, guidelines, management, "what is", "how do I", "when should"). This is the most common thing typed here. Answer it:
+- Directly and precisely at resident-to-fellow teaching level; assume medical vocabulary.
+- Anatomic precision matters — name specific structures, attachments, and relationships.
+- Proactively flag imaging pitfalls, mimics, and pseudolesions relevant to the question.
+- For protocol questions, reason about the clinical question first, then the acquisition.
+- When asked for report language, give drop-in ready phrasing with bracketed [placeholders].
+- Note genuine controversy or institutional variation briefly.
+- Keep it tight: a few short paragraphs, shorter still for simple questions. Lead with the direct answer, then only the detail that changes what the reader would do next. Skip preamble, restating the question, exhaustive differentials, and report templates unless asked. Prefer prose over stacked headers and bullet lists; a brief list only for truly parallel items. The user can ask a follow-up for depth.
+- No generic safety disclaimers or "consult your attending" filler — this is education between professionals, not patient advice.
+
+TEXT WORK — the user supplied text (or is referring to text already in the conversation) and wants it transformed. Identify which and do only that:
+- Reword / tidy up / improve: keep the exact meaning, improve clarity and flow, preserve structure and line breaks. Return only the reworded text.
+- Proofread: correct spelling, grammar, punctuation, and speech-recognition/dictation errors. Change nothing else — not wording, not meaning, not style. Return only the corrected text, line breaks preserved.
+- Impression: include only findings that change patient management or answer the clinical question. Omit incidental and chronic findings, stable benign findings, and normals; a pertinent negative only when it directly answers the clinical question. If nothing meets that bar, say so in one line rather than padding. Order by clinical significance, most important first. One item per line, separated by a single newline, with NO numbering, lettering, or bullets. One or two sentences per item.
+- Wording for a finding they are struggling to describe: give the Findings sentence, then the matching Impression wording, labelled FINDINGS: and IMPRESSION:.
+- Full report from dictated findings: use standard structure (EXAMINATION, CLINICAL HISTORY, TECHNIQUE, COMPARISON, FINDINGS, IMPRESSION). Include every finding stated, standard normal statements for structures not mentioned, and [bracketed placeholders] for details not provided — never invented ones.
+For all text work: standard radiology register (precise, concise, formal, third person, present tense for current findings); preserve clinical meaning exactly; never invent findings, measurements, or comparisons; never alter laterality; return only the requested text with no preamble or commentary.
+
+ANYTHING ELSE — answer briefly and directly.
+
+Always: never include patient names, MRNs, dates of birth, or other PHI. Plain text only — no markdown headers, no bullet characters, no code fences. **Bold** is allowed for emphasis in answers to questions, never inside report text.`;
 
 // Appended only when the "Include references" toggle is on (tools provided)
-const RAD_QA_REFERENCES_ADDENDUM = `When a reference would genuinely help (classification systems, management guidelines, follow-up criteria, entities the resident may want to read further on), use web search to find the specific relevant page and end your answer with a short 'References' line listing 1-3 links with one-phrase descriptions.
+const REFERENCES_ADDENDUM = `When a reference would genuinely help (classification systems, management guidelines, follow-up criteria, entities the user may want to read further on), use web search to find the specific relevant page and end your answer with a short 'References' line listing 1-3 links with one-phrase descriptions.
 
 Radiopaedia (radiopaedia.org) is the preferred source. Search it first, and include the relevant Radiopaedia article whenever one exists — list it first in the References. Add other sources only when they cover something Radiopaedia does not: ACR Appropriateness Criteria for protocol/appropriateness questions, and RadioGraphics for in-depth reviews.
 
-Do not search for questions you can answer completely from knowledge (basic anatomy, simple definitions) — in those cases include no references rather than padding. Never fabricate a URL: only include links returned by search.`;
+Do not search for questions you can answer completely from knowledge (basic anatomy, simple definitions), and never search for text work — rewording, proofreading, impressions, and report generation need no references. In those cases include no references rather than padding. Never fabricate a URL: only include links returned by search.`;
 
-// Length responds to prompting, not to max_tokens or effort — applied on every
-// model ("less is more": short first answers, detail on request).
-const RAD_QA_BREVITY_ADDENDUM = `Keep this answer tight — a few short paragraphs, and shorter still for simple questions. Short sentences. Lead with the direct answer, then only the detail that changes what the reader would do next. Skip preamble, restating the question, exhaustive differentials, and drop-in report templates unless the resident explicitly asks for them. Prefer prose over stacked headers and bullet lists. The resident can always ask a follow-up for depth.`;
-
-function buildRadQaSystem(model, searchEnabled) {
-  let s = RAD_QA_SYSTEM_PROMPT + '\n' + RAD_QA_BREVITY_ADDENDUM;
-  if (searchEnabled) s += '\n' + RAD_QA_REFERENCES_ADDENDUM;
+function buildFreeformSystem(searchEnabled, knowledgeBlock) {
+  let s = FREEFORM_SYSTEM;
+  if (searchEnabled) s += '\n\n' + REFERENCES_ADDENDUM;
+  if (knowledgeBlock) s += knowledgeBlock;
   return s;
 }
 
-const RAD_QA_SEARCH_TOOL = {
+const REFERENCE_SEARCH_TOOL = {
   type: 'web_search_20250305',
   name: 'web_search',
   allowed_domains: [
@@ -508,8 +538,22 @@ async function getKnowledgeBlock() {
 // 'user' > 'parrot' alphabetically, so order source DESC puts user rows first.
 const EXEMPLAR_COLS = 'id, study_type, title, body, source';
 
+// Exemplar lookup is 1-4 sequential round trips, on the critical path of every
+// report action. Cached per study type on the same TTL as the knowledge block.
+const exemplarCache = new Map();   // normalized study type -> { rows, loadedAt }
+function invalidateExemplars() { exemplarCache.clear(); }
+
 async function selectExemplars(studyType) {
   if (!supabase) return [];
+  const cacheKey = (studyType || '').trim().toLowerCase();
+  const hit = exemplarCache.get(cacheKey);
+  if (hit && Date.now() - hit.loadedAt < KNOWLEDGE_TTL_MS) return hit.rows;
+  const rows = await selectExemplarsUncached(studyType);
+  exemplarCache.set(cacheKey, { rows, loadedAt: Date.now() });
+  return rows;
+}
+
+async function selectExemplarsUncached(studyType) {
   const chosen = [];
   const seen = new Set();
   const add = rows => {
@@ -562,14 +606,18 @@ function exemplarBlockText(exemplars) {
 
 // System prompt as content blocks: [static block (cached), exemplar block (varies)]
 async function buildKnowledgeSystem(baseSystem, studyType) {
-  const knowledge = await getKnowledgeBlock();
+  // Independent lookups — fetched together, not one after the other
+  const [knowledge, exemplars] = await Promise.all([
+    getKnowledgeBlock(),
+    selectExemplars(studyType)
+  ]);
   const blocks = [];
   if (knowledge) {
     blocks.push({ type: 'text', text: baseSystem + knowledge, cache_control: { type: 'ephemeral' } });
   } else {
     blocks.push({ type: 'text', text: baseSystem });
   }
-  const exText = exemplarBlockText(await selectExemplars(studyType));
+  const exText = exemplarBlockText(exemplars);
   if (exText) blocks.push({ type: 'text', text: exText });
   return blocks;
 }
@@ -580,10 +628,27 @@ function looksLikeReport(text) {
   return text.trim().length >= 200;
 }
 
+// A long typed question is not report content — no style guide or exemplar can
+// improve the answer, so it skips detection and the knowledge fetch entirely.
+const QUESTION_OPENERS = /^(what|why|how|when|which|who|where|is|are|was|were|do|does|did|can|could|should|would|will|any|explain|tell me|difference)\b/i;
+function looksLikeQuestion(text) {
+  const t = text.trim();
+  return t.endsWith('?') || QUESTION_OPENERS.test(t);
+}
+
 // Generate Full Report writes the whole report on MODEL_REPORT, then rewrites
 // just the IMPRESSION on MODEL_IMPRESSION — the section where model judgement
 // matters most. Returns the original text unchanged if anything doesn't line up.
 const IMPRESSION_HEADING = /^[ \t]*(?:\*\*)?\s*IMPRESSION\b[^\n]*$/im;
+const FINDINGS_HEADING = /^[ \t]*(?:\*\*)?\s*FINDINGS\b[^\n]*$/im;
+
+// Where the reviewable body starts: the FINDINGS heading. Everything above it
+// (exam, history, technique, comparison) is off limits to the review pass.
+// No heading found -> the whole report is reviewable.
+function reviewableFrom(report) {
+  const m = report.match(FINDINGS_HEADING);
+  return m ? m.index : 0;
+}
 
 async function upgradeImpression(reportText, studyType) {
   if (MODEL_IMPRESSION === MODEL_REPORT) return reportText;
@@ -605,145 +670,274 @@ async function upgradeImpression(reportText, studyType) {
 
 // ============ Page 1: Assist ============
 
+// Shared by the buffered and streaming endpoints, so both build exactly the
+// same request and only differ in how the answer is delivered.
+
+function assistValidate(req, res) {
+  const { action, message, template } = req.body;
+  if (!message || !message.trim()) {
+    res.status(400).json({ error: 'Message is required' });
+    return false;
+  }
+  if (action === 'synthesize' && (!template || !template.trim())) {
+    res.status(400).json({ error: 'A prior/template report is required for Synthesize Report' });
+    return false;
+  }
+  return true;
+}
+
+function assistMessages({ action, instruction, message, template, history }) {
+  // Synthesize is the one two-part action: prior report + the new information
+  const userMessage = action === 'synthesize'
+    ? `${instruction}\n\nPRIOR REPORT:\n${template}\n\nNEW INFORMATION:\n${message}`
+    : (instruction ? `${instruction}\n\n${message}` : message);
+
+  // Recent conversation history so follow-ups ("shorter", "now the impression") work
+  const messages = [];
+  if (Array.isArray(history)) {
+    for (const h of history.slice(-12)) {
+      if ((h.role === 'user' || h.role === 'assistant') &&
+          typeof h.content === 'string' && h.content.trim()) {
+        messages.push({ role: h.role, content: h.content.slice(0, 20000) });
+      }
+    }
+  }
+  messages.push({ role: 'user', content: userMessage });
+  return messages;
+}
+
+// Free text: style guide and exemplars matter when the message is report content
+// to work on; a typed question doesn't need them, and detection costs ~1s.
+// Resolved once per turn — runFreeform's loop can re-send several times.
+async function freeformSystemFactory(message) {
+  let knowledgeBlock = '';
+  let exemplarText = '';
+  if (looksLikeReport(message) && !looksLikeQuestion(message)) {
+    try {
+      // Detection and the style guide are independent — overlap them
+      const [studyType, block] = await Promise.all([
+        detectStudyType(message).catch(() => null),
+        getKnowledgeBlock()
+      ]);
+      knowledgeBlock = block;
+      exemplarText = exemplarBlockText(await selectExemplars(studyType));
+    } catch (e) {
+      console.error('Knowledge load failed for free text:', e.message);
+    }
+  }
+  return (searchOn) => {
+    const blocks = [{
+      type: 'text',
+      text: buildFreeformSystem(searchOn, knowledgeBlock),
+      ...(knowledgeBlock ? { cache_control: { type: 'ephemeral' } } : {})
+    }];
+    if (exemplarText) blocks.push({ type: 'text', text: exemplarText });
+    return blocks;
+  };
+}
+
+// An armed quick action: its dedicated prompt plus the knowledge layer (style
+// guide + language + matched exemplars). Proofread is the exception — it must
+// not change wording, so a style guide and exemplars cannot help it, and
+// skipping them also skips a detection call.
+async function actionSystemFor(action, message, template) {
+  if (action === 'proofread') return { system: ASSIST_SYSTEM, studyType: null };
+  // fullreport inputs are often short dictations, but knowing the study type
+  // is what pulls in the right exemplars — always try to detect it. For
+  // synthesize, the prior report is the reliable source for that.
+  const detectFrom = action === 'synthesize' ? template : message;
+  const needsDetect = action === 'fullreport' || action === 'synthesize' || looksLikeReport(detectFrom);
+  // Detection and the style guide are independent — overlap them
+  const [studyType] = await Promise.all([
+    needsDetect ? detectStudyType(detectFrom).catch(() => null) : Promise.resolve(null),
+    getKnowledgeBlock()
+  ]);
+  return { system: await buildKnowledgeSystem(ASSIST_SYSTEM, studyType), studyType };
+}
+
+// One free-text turn. Pass onDelta to stream the answer as it is produced; the
+// returned text is always rebuilt from the final message either way, so a
+// mid-flight retry or a server-side model fallback can never corrupt it.
+// onReset fires when a retry discards what has already been emitted.
+async function runFreeform({ messages, systemFor, useRefs, onDelta, onReset, onStatus }) {
+  let msgs = messages;
+  let text = '';
+  let model = MODEL_CHAT;
+  let searchEnabled = useRefs;
+  let triedFallbackModel = false;
+  let refsDropped = false;
+  let truncated = false;
+  const citations = [];
+  const seenUrls = new Set();
+
+  // Search-enabled responses interleave text / server_tool_use /
+  // web_search_tool_result blocks, and the server-side tool loop can pause
+  // (stop_reason "pause_turn") — resume by appending the turn and re-sending.
+  const restart = () => {
+    msgs = messages;
+    text = '';
+    citations.length = 0;
+    seenUrls.clear();
+    if (onReset) onReset();
+  };
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const params = {
+      model,
+      // Referenced answers run long, and the References line comes last —
+      // too low a ceiling truncates it away.
+      max_tokens: 8000,
+      system: systemFor(searchEnabled),
+      messages: msgs,
+      ...(FREEFORM_EFFORT && EFFORT_CAPABLE.test(model)
+        ? { output_config: { effort: FREEFORM_EFFORT } }
+        : {}),
+      // Only the Fable/Opus-5 tier accepts these; MODEL_CHAT is overridable
+      ...(FALLBACK_CAPABLE.test(model)
+        ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' }
+        : {}),
+      ...(searchEnabled ? { tools: [REFERENCE_SEARCH_TOOL] } : {})
+    };
+
+    let response;
+    if (onDelta) {
+      const s = anthropic.beta.messages.stream(params);
+      s.on('text', onDelta);
+      // A searched answer writes nothing until the results are back, which is
+      // most of its wall clock — say what it is doing instead of stalling
+      if (onStatus) {
+        let lastStatus = null;
+        const status = m => { if (m !== lastStatus) { lastStatus = m; onStatus(m); } };
+        s.on('streamEvent', ev => {
+          if (ev.type !== 'content_block_start') return;
+          const t = ev.content_block && ev.content_block.type;
+          if (t === 'server_tool_use') status('Searching references…');
+          else if (t === 'web_search_tool_result') status('Reading results…');
+          else if (t === 'text') status('');
+        });
+      }
+      response = await s.finalMessage();
+    } else {
+      response = await anthropic.beta.messages.create(params);
+    }
+
+    const u = response.usage || {};
+    const viaServerFallback = (u.iterations || []).some(i => i.type === 'fallback_message');
+    console.log(`[claude] ${response.model} freeform${searchEnabled ? '+search' : ''}${onDelta ? '+stream' : ''}${viaServerFallback ? ' (server-fallback)' : ''} in=${u.input_tokens} out=${u.output_tokens} stop=${response.stop_reason}`);
+
+    if (response.stop_reason === 'refusal') {
+      // Safety classifiers occasionally decline benign radiology questions
+      // (bone/soft-tissue tumors especially), usually only once web search
+      // results are in context. Degrade in the order that preserves the most:
+      //   1. same question on the fallback model, references intact
+      //   2. fallback model without search (answer from knowledge, no refs)
+      if (!triedFallbackModel && MODEL_FALLBACK && MODEL_FALLBACK !== model) {
+        triedFallbackModel = true;
+        model = MODEL_FALLBACK;
+        restart();
+        continue;
+      }
+      if (searchEnabled) {
+        searchEnabled = false;
+        refsDropped = true;
+        restart();
+        continue;
+      }
+      throw new Error('This question was declined by the model’s safety filters. Try rephrasing it.');
+    }
+    for (const block of response.content) {
+      if (block.type === 'text') {
+        text += block.text;
+        for (const c of block.citations || []) {
+          if (c.url && !seenUrls.has(c.url)) {
+            seenUrls.add(c.url);
+            citations.push({ url: c.url, title: c.title || '' });
+          }
+        }
+      }
+    }
+    if (response.stop_reason === 'pause_turn') {
+      msgs = [...msgs, { role: 'assistant', content: response.content }];
+      continue;
+    }
+    truncated = response.stop_reason === 'max_tokens';
+    break;
+  }
+  // Radiopaedia first in any citation list we render
+  citations.sort((a, b) =>
+    (b.url.includes('radiopaedia.org') ? 1 : 0) - (a.url.includes('radiopaedia.org') ? 1 : 0));
+  return { text: text.trim(), citations, refs_dropped: refsDropped, truncated };
+}
+
+// Quick-action equivalent of claudeTextFallback, streaming as it goes. Same
+// refusal → fallback-model behaviour; the text returned is the final message's,
+// not the accumulated deltas.
+async function streamClaudeText({ model, system, messages, maxTokens, effort, onDelta, onReset }) {
+  const run = async (m, withFallbacks) => {
+    const params = {
+      model: m,
+      max_tokens: maxTokens,
+      system,
+      messages,
+      ...(effort && EFFORT_CAPABLE.test(m) ? { output_config: { effort } } : {})
+    };
+    const s = withFallbacks && FALLBACK_CAPABLE.test(m)
+      ? anthropic.beta.messages.stream({
+          ...params, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default'
+        })
+      : anthropic.messages.stream(params);
+    if (onDelta) s.on('text', onDelta);
+    const final = await s.finalMessage();
+    const u = final.usage || {};
+    console.log(`[claude] ${final.model || m} stream in=${u.input_tokens} out=${u.output_tokens} stop=${final.stop_reason}`);
+    if (final.stop_reason === 'refusal') {
+      const err = new Error('This request was declined by the model’s safety filters. Try rephrasing it.');
+      err.isRefusal = true;
+      throw err;
+    }
+    return final.content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
+  };
+  try {
+    return await run(model, true);
+  } catch (e) {
+    // Self-heal if a model's fallback support differs from FALLBACK_CAPABLE
+    if (/does not support the .?fallbacks/i.test(e.message || '')) {
+      console.warn(`[claude] ${model} rejected fallbacks — retrying without`);
+      if (onReset) onReset();
+      return await run(model, false);
+    }
+    if (e.isRefusal && MODEL_FALLBACK && MODEL_FALLBACK !== model) {
+      if (onReset) onReset();
+      return await run(MODEL_FALLBACK, true);
+    }
+    throw e;
+  }
+}
+
 app.post('/api/assist', async (req, res) => {
   try {
+    if (!assistValidate(req, res)) return;
     const { action, message, history, template } = req.body;
-    if (!message || !message.trim()) {
-      return res.status(400).json({ error: 'Message is required' });
-    }
-    if (action === 'synthesize' && (!template || !template.trim())) {
-      return res.status(400).json({ error: 'A prior/template report is required for Synthesize Report' });
-    }
-
     const instruction = action && ASSIST_ACTIONS[action] ? ASSIST_ACTIONS[action] : null;
-    // Synthesize is the one two-part action: prior report + the new information
-    const userMessage = action === 'synthesize'
-      ? `${instruction}\n\nPRIOR REPORT:\n${template}\n\nNEW INFORMATION:\n${message}`
-      : (instruction ? `${instruction}\n\n${message}` : message);
+    const messages = assistMessages({ action, instruction, message, template, history });
 
-    // Recent conversation history so follow-ups ("shorter", "now the impression") work
-    const messages = [];
-    if (Array.isArray(history)) {
-      for (const h of history.slice(-12)) {
-        if ((h.role === 'user' || h.role === 'assistant') &&
-            typeof h.content === 'string' && h.content.trim()) {
-          messages.push({ role: h.role, content: h.content.slice(0, 20000) });
-        }
-      }
-    }
-    messages.push({ role: 'user', content: userMessage });
-
-    // Quick Rad Question: dedicated teaching prompt, lean context (no knowledge
-    // injection). Optionally search a whitelist of radiology references.
-    if (action === 'radqa') {
-      const useRefs = req.body.references !== false; // default ON
-
-      let msgs = messages;
-      let text = '';
-      let model = MODEL_RADQA;
-      let searchEnabled = useRefs;
-      let triedFallbackModel = false;
-      let refsDropped = false;
-      let truncated = false;
-      const citations = [];
-      const seenUrls = new Set();
-
-      // Search-enabled responses interleave text / server_tool_use /
-      // web_search_tool_result blocks, and the server-side tool loop can pause
-      // (stop_reason "pause_turn") — resume by appending the turn and re-sending.
-      const restart = () => {
-        msgs = messages;
-        text = '';
-        citations.length = 0;
-        seenUrls.clear();
-      };
-
-      for (let attempt = 0; attempt < 8; attempt++) {
-        const response = await anthropic.beta.messages.create({
-          model,
-          // Referenced answers run long, and the References line comes last —
-          // too low a ceiling truncates it away.
-          max_tokens: 8000,
-          system: buildRadQaSystem(model, searchEnabled),
-          messages: msgs,
-          // Only the Fable/Opus-5 tier accepts these; MODEL_RADQA is overridable
-          ...(FALLBACK_CAPABLE.test(model)
-            ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' }
-            : {}),
-          ...(searchEnabled ? { tools: [RAD_QA_SEARCH_TOOL] } : {})
-        });
-        const u = response.usage || {};
-        const viaServerFallback = (u.iterations || []).some(i => i.type === 'fallback_message');
-        console.log(`[claude] ${response.model} radqa${searchEnabled ? '+search' : ''}${viaServerFallback ? ' (server-fallback)' : ''} in=${u.input_tokens} out=${u.output_tokens} stop=${response.stop_reason}`);
-
-        if (response.stop_reason === 'refusal') {
-          // Safety classifiers occasionally decline benign radiology questions
-          // (bone/soft-tissue tumors especially), usually only once web search
-          // results are in context. Degrade in the order that preserves the most:
-          //   1. same question on the fallback model, references intact
-          //   2. fallback model without search (answer from knowledge, no refs)
-          if (!triedFallbackModel && MODEL_FALLBACK && MODEL_FALLBACK !== model) {
-            triedFallbackModel = true;
-            model = MODEL_FALLBACK;
-            restart();
-            continue;
-          }
-          if (searchEnabled) {
-            searchEnabled = false;
-            refsDropped = true;
-            restart();
-            continue;
-          }
-          throw new Error('This question was declined by the model’s safety filters. Try rephrasing it.');
-        }
-        for (const block of response.content) {
-          if (block.type === 'text') {
-            text += block.text;
-            for (const c of block.citations || []) {
-              if (c.url && !seenUrls.has(c.url)) {
-                seenUrls.add(c.url);
-                citations.push({ url: c.url, title: c.title || '' });
-              }
-            }
-          }
-        }
-        if (response.stop_reason === 'pause_turn') {
-          msgs = [...msgs, { role: 'assistant', content: response.content }];
-          continue;
-        }
-        truncated = response.stop_reason === 'max_tokens';
-        break;
-      }
-      // Radiopaedia first in any citation list we render
-      citations.sort((a, b) =>
-        (b.url.includes('radiopaedia.org') ? 1 : 0) - (a.url.includes('radiopaedia.org') ? 1 : 0));
-      return res.json({ type: 'text', text: text.trim(), citations, refs_dropped: refsDropped, truncated });
+    // Free text (no quick action armed): one prompt that works out for itself
+    // whether this is a question, text work, or a follow-up.
+    if (!instruction) {
+      const systemFor = await freeformSystemFactory(message);
+      const out = await runFreeform({
+        messages, systemFor, useRefs: req.body.references !== false
+      });
+      return res.json({ type: 'text', ...out });
     }
 
-    // The four report actions get the knowledge layer (style guide + language +
-    // matched exemplars). Free-form chat keeps the lean base prompt.
-    let system = ASSIST_SYSTEM;
-    let studyType = null;
-    if (instruction) {
-      // fullreport inputs are often short dictations, but knowing the study type
-      // is what pulls in the right exemplars — always try to detect it. For
-      // synthesize, the prior report is the reliable source for that.
-      const detectFrom = action === 'synthesize' ? template : message;
-      if (action === 'fullreport' || action === 'synthesize' || looksLikeReport(detectFrom)) {
-        try { studyType = await detectStudyType(detectFrom); } catch (e) { /* non-fatal */ }
-      }
-      system = await buildKnowledgeSystem(ASSIST_SYSTEM, studyType);
-    }
-
-    // Quick actions run on their routed model with the knowledge layer;
-    // free-form chat runs on MODEL_CHAT.
-    const chatModel = instruction ? (ACTION_MODEL[action] || MODEL_REPORT) : MODEL_CHAT;
+    const { system, studyType } = await actionSystemFor(action, message, template);
     let text = await claudeTextFallback({
-      model: chatModel,
+      model: ACTION_MODEL[action] || MODEL_REPORT,
       system,
       messages,
       maxTokens: action === 'synthesize' ? 8000 : 4000,
-      effort: instruction ? ACTION_EFFORT[action] : CHAT_EFFORT
+      effort: ACTION_EFFORT[action]
     });
 
     // Second pass: rewrite the full report's IMPRESSION on MODEL_IMPRESSION
@@ -774,6 +968,84 @@ app.post('/api/assist', async (req, res) => {
     console.error('Assist error:', error);
     res.status(500).json({ error: 'Assist request failed', details: error.message });
   }
+});
+
+// Server-Sent Events. Same answers as /api/assist, delivered as they are
+// written — the wait before the first words is what makes the app feel slow.
+// Events: delta {t} · reset {} (discard what was shown) · status {message}
+//         done {type,text,citations,refs_dropped,truncated} · error {error}
+// The client renders deltas live but re-renders from `done`, which is
+// authoritative — deltas are cosmetic.
+function sseInit(res) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no'   // don't let a proxy sit on the chunks
+  });
+  if (res.flushHeaders) res.flushHeaders();
+}
+
+app.post('/api/assist/stream', async (req, res) => {
+  if (!assistValidate(req, res)) return;
+  const { action, message, history, template } = req.body;
+  const instruction = action && ASSIST_ACTIONS[action] ? ASSIST_ACTIONS[action] : null;
+  // describe returns a findings/impression pair the client renders as one unit
+  if (action === 'describe') {
+    return res.status(400).json({ error: 'Describe returns structured JSON — use /api/assist' });
+  }
+  const messages = assistMessages({ action, instruction, message, template, history });
+
+  // res, not req: the request stream closes as soon as its body is parsed,
+  // which is immediately — only the response tells us the client went away
+  let aborted = false;
+  res.on('close', () => { aborted = true; });
+  const send = (event, data) => {
+    if (aborted || res.writableEnded) return;
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+
+  sseInit(res);
+  try {
+    if (!instruction) {
+      const systemFor = await freeformSystemFactory(message);
+      const out = await runFreeform({
+        messages,
+        systemFor,
+        useRefs: req.body.references !== false,
+        onDelta: t => send('delta', { t }),
+        onReset: () => send('reset', {}),
+        onStatus: m => send('status', { message: m })
+      });
+      send('done', { type: 'text', ...out });
+    } else {
+      const { system, studyType } = await actionSystemFor(action, message, template);
+      let text = await streamClaudeText({
+        model: ACTION_MODEL[action] || MODEL_REPORT,
+        system,
+        messages,
+        maxTokens: action === 'synthesize' ? 8000 : 4000,
+        effort: ACTION_EFFORT[action],
+        onDelta: t => send('delta', { t }),
+        onReset: () => send('reset', {})
+      });
+      if (action === 'fullreport') {
+        // The impression is rewritten on MODEL_IMPRESSION after the body lands,
+        // so say what the pause is for — the text visibly changes at the end
+        send('status', { message: 'Refining impression…' });
+        try {
+          text = await upgradeImpression(text, studyType);
+        } catch (e) {
+          console.error('Impression pass failed — keeping original impression:', e.message);
+        }
+      }
+      send('done', { type: 'text', text });
+    }
+  } catch (error) {
+    console.error('Assist stream error:', error);
+    send('error', { error: error.message || 'Assist request failed' });
+  }
+  if (!res.writableEnded) res.end();
 });
 
 app.post('/api/assist/feedback', async (req, res) => {
@@ -874,6 +1146,7 @@ app.post('/api/draft/review', async (req, res) => {
       return res.json({ edits: [] });
     }
 
+    const bodyStart = reviewableFrom(report);
     const rawEdits = Array.isArray(parsed) ? parsed : (parsed.edits || []);
     const edits = rawEdits
       .filter(e => e && typeof e.original_text === 'string' && typeof e.suggested_text === 'string')
@@ -884,9 +1157,14 @@ app.post('/api/draft/review', async (req, res) => {
         category: e.category === 'typo' ? 'typo' : 'style'
       }))
       // Drop edits whose original_text can't be located in the report
-      .filter(e => report.includes(e.original_text) && e.original_text !== e.suggested_text);
+      .filter(e => report.includes(e.original_text) && e.original_text !== e.suggested_text)
+      // Enforce the scope rule: an edit that only ever lands in the header
+      // block is dropped, whatever the model proposed
+      .filter(e => report.lastIndexOf(e.original_text) >= bodyStart);
 
-    res.json({ edits });
+    // body_start lets the client anchor each edit inside the body too, so a
+    // phrase that also appears in the header can't be highlighted up there
+    res.json({ edits, body_start: bodyStart });
   } catch (error) {
     console.error('Draft review error:', error);
     res.status(500).json({ error: 'Review failed', details: error.message });
@@ -1146,24 +1424,91 @@ app.post('/api/reports', async (req, res) => {
   }
 });
 
+// ---- Full-text search over report content (Review page) ----
+
+// Columns a keyword search looks in: the report itself in all three of its
+// states, plus what was said about it.
+const SEARCH_COLUMNS = ['raw_text', 'draft_text', 'final_text', 'readout_notes', 'rpr_note', 'study_id_label'];
+
+// "a phrase in quotes" stays one term; bare words are separate terms that must
+// ALL appear somewhere in the report.
+function parseSearchTerms(q) {
+  const terms = [];
+  const re = /"([^"]+)"|(\S+)/g;
+  let m;
+  while ((m = re.exec(q)) !== null) {
+    const t = (m[1] || m[2]).trim();
+    if (t) terms.push(t.slice(0, 200));
+  }
+  return terms.slice(0, 8);   // a sane ceiling; each term is its own AND clause
+}
+
+// % and _ are LIKE wildcards — a search for "50%" must mean "50%", not
+// "50 followed by anything". Backslash is LIKE's default escape character.
+function escapeLike(term) {
+  return term.replace(/([\\%_])/g, '\\$1');
+}
+
+// PostgREST splits or() on commas and parentheses, so every value is
+// double-quoted with inner quotes and backslashes escaped.
+function pgrstQuoted(value) {
+  return '"' + value.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+}
+
+// ~150 characters of context around the first hit, so a result shows WHY it matched
+function buildSnippet(row, terms) {
+  for (const col of SEARCH_COLUMNS) {
+    const text = row[col];
+    if (typeof text !== 'string' || !text) continue;
+    for (const term of terms) {
+      const at = text.toLowerCase().indexOf(term.toLowerCase());
+      if (at === -1) continue;
+      const start = Math.max(0, at - 60);
+      const end = Math.min(text.length, at + term.length + 90);
+      return (start > 0 ? '…' : '') +
+             text.slice(start, end).replace(/\s+/g, ' ').trim() +
+             (end < text.length ? '…' : '');
+    }
+  }
+  return '';
+}
+
 app.get('/api/reports', async (req, res) => {
   if (!requireSupabase(res)) return;
   try {
-    // Filters combine (Review page): any subset of shift, grade, study type.
-    // This only ever searches the user's own drafted reports — PARROT exemplars
-    // live in exemplar_reports and cannot appear here.
-    const { shift_id, grade, study_type } = req.query;
+    // Filters combine (Review page): any subset of shift, grade, study type, and
+    // a keyword/phrase search of the report text. This only ever searches the
+    // user's own drafted reports — PARROT exemplars live in exemplar_reports
+    // and cannot appear here.
+    const { shift_id, grade, study_type, q } = req.query;
+    const terms = parseSearchTerms((q || '').trim());
+    const LIST_COLUMNS = 'id, shift_id, study_type, study_id_label, report_type, created_at, final_saved_at, rpr_grade, rpr_note, readout_notes, notes_integrated_at, read_out_at, finalized_at';
     let query = supabase
       .from('reports')
-      .select('id, shift_id, study_type, study_id_label, report_type, created_at, final_saved_at, rpr_grade, rpr_note, readout_notes, notes_integrated_at, read_out_at, finalized_at')
+      // Searching needs the text columns to build snippets; they are stripped
+      // from the response below rather than shipped to the browser
+      .select(terms.length ? LIST_COLUMNS + ', raw_text, draft_text, final_text' : LIST_COLUMNS)
       .order('created_at', { ascending: false });
     if (shift_id) query = query.eq('shift_id', shift_id);
     if (grade === 'ungraded') query = query.is('rpr_grade', null);
     else if (VALID_RPR.test(grade || '')) query = query.eq('rpr_grade', grade);
     if (study_type && study_type.trim()) query = query.ilike('study_type', '%' + study_type.trim() + '%');
+    // Each term is its own or() across the searchable columns; consecutive
+    // or() calls are ANDed, so every term must match somewhere in the report.
+    for (const term of terms) {
+      const value = pgrstQuoted('%' + escapeLike(term) + '%');
+      query = query.or(SEARCH_COLUMNS.map(c => `${c}.ilike.${value}`).join(','));
+    }
     const { data, error } = await query;
     if (error) throw error;
-    res.json({ reports: data });
+
+    const reports = terms.length
+      ? data.map(row => {
+          const { raw_text, draft_text, final_text, ...rest } = row;
+          return { ...rest, snippet: buildSnippet(row, terms) };
+        })
+      : data;
+    res.json({ reports, terms });
   } catch (error) {
     console.error('List reports error:', error);
     res.status(500).json({ error: 'Failed to load reports', details: error.message });
@@ -1615,6 +1960,7 @@ app.post('/api/library/exemplars', async (req, res) => {
       .select()
       .single();
     if (error) throw error;
+    invalidateExemplars();
     res.json({ exemplar: data });
   } catch (error) {
     console.error('Exemplar create error:', error);
@@ -1638,6 +1984,7 @@ app.put('/api/library/exemplars/:id', async (req, res) => {
       .select()
       .single();
     if (error) throw error;
+    invalidateExemplars();
     res.json({ exemplar: data });
   } catch (error) {
     res.status(500).json({ error: 'Failed to update exemplar', details: error.message });
@@ -1649,6 +1996,7 @@ app.delete('/api/library/exemplars/:id', async (req, res) => {
   try {
     const { error } = await supabase.from('exemplar_reports').delete().eq('id', req.params.id);
     if (error) throw error;
+    invalidateExemplars();
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Failed to delete exemplar', details: error.message });
@@ -1824,7 +2172,7 @@ app.get('/api/health', (req, res) => {
     llm: {
       detect: MODEL_DETECT, report: MODEL_REPORT, review: MODEL_REVIEW,
       impression: MODEL_IMPRESSION, synthesize: MODEL_SYNTHESIZE,
-      radqa: MODEL_RADQA, chat: MODEL_CHAT,
+      chat: MODEL_CHAT,
       fallback: MODEL_FALLBACK
     },
     auth: { google: googleLoginConfigured, password: !!APP_PASSWORD, allowed_emails: ALLOWED_EMAILS.length },

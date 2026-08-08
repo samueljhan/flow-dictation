@@ -299,6 +299,9 @@
             vertical-align: -2px; margin-right: 6px;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
+        /* Note under a streaming answer: what it's doing while nothing is written */
+        .stream-status { display: block; color: #909090; font-size: 13px; }
+        .stream-status:not(:first-child) { margin-top: 8px; }
 
         /* ---------- Draft page ---------- */
         #page-draft { padding: 24px 32px; }
@@ -478,6 +481,13 @@
         .rr-label { color: #909090; }
         .rr-time { color: #808080; }
         .rr-note { grid-column: 1 / -1; white-space: normal !important; }
+        /* Matched text from a keyword search, on its own line under the row */
+        .rr-snippet {
+            grid-column: 1 / -1; white-space: normal !important;
+            font-size: 12px; color: #909090; line-height: 1.5;
+            border-left: 2px solid #4a4a4a; padding-left: 10px;
+        }
+        .rr-snippet mark { background: rgba(224, 168, 50, 0.28); color: #e8c37a; border-radius: 2px; }
         .rr-final { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 8px; }
         .rr-final.yes { background: rgba(40, 167, 69, 0.18); color: #28a745; }
         .rr-final.no { background: #404040; color: #909090; }
@@ -620,7 +630,7 @@
               <div class="chat-inner" id="chatContainer">
                 <div class="welcome-message">
                     <h2>What would you like to do?</h2>
-                    <p>Pick a quick option, or just start typing.</p>
+                    <p>Just type — a question, a report to work on, or a follow-up. Quick options are shortcuts.</p>
                     <div class="example-prompts">
                         <div class="example-prompt" data-action="describe">
                             <strong>Describe a Finding</strong>
@@ -636,7 +646,7 @@
                         </div>
                         <div class="example-prompt" data-action="impression">
                             <strong>Generate Impression</strong>
-                            <span>Numbered impression from a report body</span>
+                            <span>Key findings only, one per line</span>
                         </div>
                         <div class="example-prompt" data-action="fullreport">
                             <strong>Generate Full Report</strong>
@@ -646,10 +656,6 @@
                             <strong>Synthesize Report</strong>
                             <span>Update a prior/template report with new information</span>
                         </div>
-                        <div class="example-prompt" data-action="radqa">
-                            <strong>Quick Rad Question</strong>
-                            <span>Anatomy, protocols, differentials, pitfalls</span>
-                        </div>
                     </div>
                 </div>
               </div>
@@ -657,11 +663,11 @@
             <div class="input-container">
               <div class="input-inner">
                 <div class="quick-bar" id="quickBar"></div>
-                <label class="ref-toggle" id="refToggle" style="display:none">
-                    <input type="checkbox" id="refCheckbox" checked> Include references (searches Radiopaedia, ACR, RadioGraphics…)
+                <label class="ref-toggle" id="refToggle">
+                    <input type="checkbox" id="refCheckbox" checked> Include references on questions (searches Radiopaedia, ACR, RadioGraphics…)
                 </label>
                 <div class="input-wrapper">
-                    <textarea id="userInput" placeholder="Describe what you want to do…" rows="1"></textarea>
+                    <textarea id="userInput" placeholder="Ask a question, or paste text to work on…" rows="1"></textarea>
                     <button id="sendBtn" title="Send message">
                         <svg viewBox="0 0 24 24">
                             <path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.59 5.58L20 12l-8-8z" fill="#d0d0d0" stroke="none"/>
@@ -794,6 +800,9 @@
         <section id="page-review" class="page">
             <div class="final-scroll">
                 <div class="final-toolbar" style="flex-wrap:wrap">
+                    <label>Search</label>
+                    <input id="rvText" placeholder="Words or &quot;exact phrase&quot;…" style="width:240px"
+                           title="Searches the report text, read-out notes, RPR notes and study ID. Every word must appear; wrap in quotes for an exact phrase.">
                     <label>Shift</label>
                     <select id="rvShift"><option value="">All shifts</option></select>
                     <label>RPR</label>
@@ -1007,19 +1016,19 @@
             describe: 'Describe the finding you’re struggling to word — I’ll suggest Findings wording and matching Impression wording.',
             reword: 'Paste the sentence, section, or entire report you’d like reworded.',
             proofread: 'Paste the text to proofread — corrections will be shown in bold (copies as plain text).',
-            impression: 'Paste the report body — I’ll generate a numbered Impression.',
+            impression: 'Paste the report body — I’ll generate an Impression: the findings that change management, one per line.',
             fullreport: 'Dictate or paste your findings — I’ll generate a complete structured report with normals filled in. Review it carefully before use.',
-            synthesize: 'Step 1 of 2 — paste the prior report or template you want to start from.',
-            radqa: 'Ask a quick radiology question — anatomy, protocol selection, differentials, imaging pitfalls, or report language. Follow-ups work.'
+            synthesize: 'Step 1 of 2 — paste the prior report or template you want to start from.'
         };
         const ACTION_LABELS = {
             describe: 'Describe a Finding', reword: 'Reword', proofread: 'Proofread',
             impression: 'Generate Impression', fullreport: 'Generate Full Report',
-            synthesize: 'Synthesize Report', radqa: 'Quick Rad Question'
+            synthesize: 'Synthesize Report'
         };
 
         // Quick options are always available above the composer. Using one is
-        // optional — typing without arming anything is ordinary chat.
+        // optional — typing without arming anything lets Claude work out the
+        // task itself (question, rewording, impression, follow-up…).
         const quickBar = document.getElementById('quickBar');
         for (const [action, label] of Object.entries(ACTION_LABELS)) {
             const chip = document.createElement('button');
@@ -1037,7 +1046,9 @@
         function syncQuickBar() {
             quickBar.querySelectorAll('.quick-chip').forEach(c =>
                 c.classList.toggle('armed', c.dataset.action === pendingAction));
-            document.getElementById('refToggle').style.display = pendingAction === 'radqa' ? 'flex' : 'none';
+            // References are a free-text thing: a quick action transforms text
+            // the user already has, and never needs to look anything up
+            document.getElementById('refToggle').style.display = pendingAction ? 'none' : 'flex';
         }
 
         function armAction(action) {
@@ -1135,10 +1146,112 @@
             return div;
         }
 
-        // Render an assistant response. plainText is EXACTLY what Copy places on the clipboard.
-        function addAssistantResponse({ html, plainText, actionType, userText }) {
+        // Follow a streaming answer only while the user is already at the bottom —
+        // scrolling up to read something must not be yanked back down.
+        function nearBottom() {
+            const s = chatContainer.parentElement;
+            return s.scrollHeight - s.scrollTop - s.clientHeight < 80;
+        }
+
+        // The live bubble a streamed answer is written into. Replaced wholesale by
+        // the formatted render once the final text arrives.
+        function addStreamingMessage() {
+            clearWelcome();
             const div = document.createElement('div');
             div.className = 'message assistant';
+            const content = document.createElement('div');
+            content.className = 'message-content';
+            const textEl = document.createElement('span');
+            const statusEl = document.createElement('span');
+            statusEl.className = 'stream-status';
+            statusEl.innerHTML = '<span class="spinner"></span>Thinking…';
+            content.appendChild(textEl);
+            content.appendChild(statusEl);
+            div.appendChild(content);
+            chatContainer.appendChild(div);
+            scrollChat();
+
+            let text = '';
+            return {
+                div,
+                append(t) {
+                    const follow = nearBottom();
+                    text += t;
+                    textEl.textContent = text;
+                    statusEl.style.display = 'none';
+                    if (follow) scrollChat();
+                },
+                // '' clears the note; while text is streaming there is nothing to say
+                status(msg) {
+                    if (!msg) { statusEl.style.display = text ? 'none' : ''; return; }
+                    statusEl.innerHTML = '<span class="spinner"></span>' + escapeHtml(msg);
+                    statusEl.style.display = '';
+                    if (nearBottom()) scrollChat();
+                },
+                reset() {
+                    text = '';
+                    textEl.textContent = '';
+                    statusEl.style.display = '';
+                },
+                fail(msg) {
+                    content.innerHTML = '<span style="color:#dc7a7a">⚠️ ' + escapeHtml(msg) + '</span>';
+                }
+            };
+        }
+
+        // Streams an assist turn over SSE, resolving with the final `done` payload.
+        // Deltas are for display only — `done` carries the authoritative text.
+        async function streamAssist(body, { onDelta, onStatus, onReset }) {
+            const res = await fetch('/api/assist/stream', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                if (res.status === 401 && data.login_required) {
+                    window.location.href = '/login?error=session_expired';
+                    throw new Error('Session expired');
+                }
+                throw new Error(data.error || ('HTTP ' + res.status));
+            }
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buf = '', done = null, failure = null;
+            for (;;) {
+                const { value, done: finished } = await reader.read();
+                if (finished) break;
+                buf += decoder.decode(value, { stream: true });
+                let split;
+                while ((split = buf.indexOf('\n\n')) !== -1) {
+                    const frame = buf.slice(0, split);
+                    buf = buf.slice(split + 2);
+                    let event = 'message', data = '';
+                    for (const line of frame.split('\n')) {
+                        if (line.startsWith('event:')) event = line.slice(6).trim();
+                        else if (line.startsWith('data:')) data += line.slice(5);
+                    }
+                    if (!data) continue;
+                    let payload;
+                    try { payload = JSON.parse(data); } catch (e) { continue; }
+                    if (event === 'delta') onDelta(payload.t);
+                    else if (event === 'status') onStatus(payload.message);
+                    else if (event === 'reset') onReset();
+                    else if (event === 'done') done = payload;
+                    else if (event === 'error') failure = payload.error;
+                }
+            }
+            if (failure) throw new Error(failure);
+            if (!done) throw new Error('The connection dropped before the answer finished.');
+            return done;
+        }
+
+        // Render an assistant response. plainText is EXACTLY what Copy places on the clipboard.
+        // mount: an existing streaming bubble to render into, in place of a new one.
+        function addAssistantResponse({ html, plainText, actionType, userText, mount }) {
+            const div = mount || document.createElement('div');
+            div.className = 'message assistant';
+            div.innerHTML = '';
             const content = document.createElement('div');
             content.className = 'message-content';
             content.innerHTML = html;
@@ -1197,7 +1310,7 @@
             fb.querySelector('.fb-skip').addEventListener('click', () => finishFeedback('Feedback skipped.'));
 
             div.appendChild(content);
-            chatContainer.appendChild(div);
+            if (!mount) chatContainer.appendChild(div);
             scrollChat();
         }
 
@@ -1245,13 +1358,26 @@
             userInput.style.height = 'auto';
 
             const historyToSend = chatHistory.slice(-12);
-            const loading = addLoadingMessage();
+            const body = { action: actionType, message, history: historyToSend, references: includeRefs, template };
+            // Describe returns a findings/impression pair and Proofread needs the
+            // whole text before it can bold what changed — both stay buffered.
+            // Everything else streams, so the answer starts arriving immediately.
+            const canStream = actionType !== 'describe' && actionType !== 'proofread';
+            const live = canStream ? addStreamingMessage() : null;
+            const loading = canStream ? null : addLoadingMessage();
             try {
-                const data = await api('/api/assist', {
-                    method: 'POST',
-                    body: { action: actionType, message, history: historyToSend, references: includeRefs, template }
-                });
-                loading.remove();
+                let data;
+                if (canStream) {
+                    data = await streamAssist(body, {
+                        onDelta: t => live.append(t),
+                        onStatus: m => live.status(m),
+                        onReset: () => live.reset()
+                    });
+                } else {
+                    data = await api('/api/assist', { method: 'POST', body });
+                    loading.remove();
+                }
+                const mount = live ? live.div : undefined;
 
                 let plainText;
                 if (data.type === 'describe') {
@@ -1259,15 +1385,15 @@
                     const html =
                         '<span class="section-label">FINDINGS</span>' + escapeHtml(data.findings) +
                         '\n\n<span class="section-label">IMPRESSION</span>' + escapeHtml(data.impression);
-                    addAssistantResponse({ html, plainText, actionType, userText: message });
+                    addAssistantResponse({ html, plainText, actionType, userText: message, mount });
                 } else if (actionType === 'proofread') {
                     plainText = data.text;
                     addAssistantResponse({
                         html: proofreadHtml(message, data.text),
-                        plainText, actionType, userText: message
+                        plainText, actionType, userText: message, mount
                     });
-                } else if (actionType === 'radqa') {
-                    // Teaching answers may use **bold**; URLs become clickable links.
+                } else if (!actionType) {
+                    // Free text: answers may use **bold**; URLs become clickable links.
                     // If the answer already has its own References section, trust that
                     // curated list; otherwise surface any cited URLs it didn't write out.
                     const hasOwnRefs = /^\s*(\*\*)?references\b/im.test(data.text);
@@ -1290,10 +1416,10 @@
                     if (data.truncated) {
                         html += '\n\n<span style="color:#e0a832; font-size:12px">(Answer was cut off at the length limit — ask a follow-up to continue.)</span>';
                     }
-                    addAssistantResponse({ html, plainText, actionType, userText: message });
+                    addAssistantResponse({ html, plainText, actionType, userText: message, mount });
                 } else {
                     plainText = data.text;
-                    addAssistantResponse({ html: escapeHtml(data.text), plainText, actionType, userText: message });
+                    addAssistantResponse({ html: escapeHtml(data.text), plainText, actionType, userText: message, mount });
                 }
 
                 chatHistory.push({ role: 'user', content: message });
@@ -1309,7 +1435,8 @@
                     action_type: actionType || 'freeform'
                 }}).catch(e => console.error('History save failed:', e));
             } catch (e) {
-                loading.querySelector('.message-content').innerHTML =
+                if (live) live.fail(e.message);
+                else loading.querySelector('.message-content').innerHTML =
                     '<span style="color:#dc7a7a">⚠️ ' + escapeHtml(e.message) + '</span>';
             }
             userInput.focus();
@@ -1983,7 +2110,7 @@
                     reviewedRaw = draftText.value;
                     currentEdits = [];
                     integrating = false;
-                    await persistReport({ keepOpen: true });
+                    await persistReport();
                     if (!loadedReport) return;   // save cancelled or failed
                 }
                 setDraftStatus('Reviewing with Claude…');
@@ -1993,7 +2120,9 @@
                     report: reviewedRaw,
                     study_type: studyTypeInput.value.trim()
                 } });
-                currentEdits = locateEdits(reviewedRaw, data.edits || []);
+                // Review is scoped to the body, so anchor there: a phrase that
+                // also appears in the header must not highlight the header copy
+                currentEdits = locateEdits(reviewedRaw, data.edits || [], data.body_start || 0);
                 if (currentEdits.length === 0) {
                     setDraftStatus('No edits suggested — draft is already saved.', '');
                 } else {
@@ -2007,11 +2136,13 @@
             }
         });
 
-        function locateEdits(text, edits) {
+        // searchFrom: index before which matches are ignored (the review pass
+        // passes the FINDINGS offset so header text is never anchored)
+        function locateEdits(text, edits, searchFrom = 0) {
             const located = [];
             const used = [];
             for (const e of edits) {
-                let from = 0, pos = -1;
+                let from = searchFrom, pos = -1;
                 while (true) {
                     pos = text.indexOf(e.original_text, from);
                     if (pos === -1) break;
@@ -2183,7 +2314,7 @@
             return out;
         }
 
-        async function persistReport({ keepOpen = false, finalize = false } = {}) {
+        async function persistReport({ finalize = false } = {}) {
             if (saving) return;
             saving = true;
             const statusEl = editsPanel.style.display === 'none' ? draftStatus : reviewStatus;
@@ -2223,15 +2354,12 @@
                     reviewedRaw = '';
                     integrating = false;
                     finalDataStale = true;
-                    if (finalize) {
-                        // Done with this study — clear down for the next one
-                        resetComposer();
-                    } else {
-                        draftText.value = savedDraft;
-                        updateEditingUi();
-                        loadDraftList();
-                        setDraftStatus('', '');
-                    }
+                    // Saving — final or not — stays in the report just saved;
+                    // New Draft is the only way to clear down for the next study
+                    draftText.value = savedDraft;
+                    updateEditingUi();
+                    loadDraftList();
+                    setDraftStatus('', '');
                     showToast((finalize ? 'Final saved — ' : 'Updated ') + savedId);
                     return;
                 }
@@ -2255,17 +2383,18 @@
                 exitReviewMode();
                 currentEdits = [];
                 reviewedRaw = '';
-                if (keepOpen) {
-                    // Review flow: the new report stays open for the review pass
-                    loadedReport = data.report;
-                    studyTypeInput.value = data.report.study_type || '';
-                    readoutNotesEl.value = data.report.readout_notes || '';
-                    updateEditingUi();
-                } else {
-                    draftText.value = '';
-                    studyTypeInput.value = '';
-                    studyIdInput.value = '';
-                }
+                integrating = false;
+                // Saving never opens a blank draft: the report just saved stays
+                // open, exactly as a re-save of a reopened draft does
+                loadedReport = data.report;
+                draftText.value = data.report.draft_text || '';
+                studyTypeInput.value = data.report.study_type || '';
+                studyIdInput.value = data.report.study_id_label || '';
+                setReportType(data.report.report_type === 'prelim' ? 'prelim' : 'complete');
+                readoutNotesEl.value = data.report.readout_notes || '';
+                document.getElementById('readOutFlag').checked = !!data.report.read_out_at;
+                notesStatus.textContent = '';
+                updateEditingUi();
                 // Saving may have created/switched the active shift — refresh both
                 await Promise.all([loadStudyTypes(), loadCurrentShift(), initDraftShifts()]);
                 finalDataStale = true;
@@ -2512,6 +2641,7 @@
         const rvShift = document.getElementById('rvShift');
         const rvGrade = document.getElementById('rvGrade');
         const rvStudyType = document.getElementById('rvStudyType');
+        const rvText = document.getElementById('rvText');
         const rvList = document.getElementById('rvList');
         const rvCount = document.getElementById('rvCount');
         let reviewInited = false;
@@ -2575,24 +2705,60 @@
             }
         });
 
+        // Bold the searched terms inside an already-escaped snippet
+        function highlightTerms(escapedText, terms) {
+            let html = escapedText;
+            for (const term of terms) {
+                const pattern = escapeHtml(term).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                html = html.replace(new RegExp(pattern, 'gi'), m => '<mark>' + m + '</mark>');
+            }
+            return html;
+        }
+
         async function runReviewSearch() {
             const params = new URLSearchParams();
             if (rvShift.value) params.set('shift_id', rvShift.value);
             if (rvGrade.value) params.set('grade', rvGrade.value);
             if (rvStudyType.value.trim()) params.set('study_type', rvStudyType.value.trim());
+            const queryText = rvText.value.trim();
+            if (queryText) params.set('q', queryText);
             rvList.innerHTML = '<div class="list-empty"><span class="spinner"></span>Searching…</div>';
             rvCount.textContent = '';
             try {
                 const data = await api('/api/reports?' + params.toString());
                 const reports = data.reports || [];
-                rvCount.textContent = reports.length + ' report' + (reports.length === 1 ? '' : 's');
+                const terms = data.terms || [];
+                rvCount.textContent = reports.length + ' report' + (reports.length === 1 ? '' : 's') +
+                    (terms.length ? ' containing ' + terms.map(t => '“' + t + '”').join(' + ') : '');
                 if (reports.length === 0) {
-                    rvList.innerHTML = '<div class="list-empty">No drafted studies match these filters.</div>';
+                    if (queryText && rvShift.value) {
+                        // The shift filter is easy to forget — searching a single
+                        // shift and finding nothing usually means widening is wanted
+                        rvList.innerHTML = '<div class="list-empty">No reports in this shift contain that text. ' +
+                            '<a href="#" id="rvSearchAll">Search all shifts</a></div>';
+                        document.getElementById('rvSearchAll').addEventListener('click', (ev) => {
+                            ev.preventDefault();
+                            rvShift.value = '';
+                            updateRvDeleteBtn();
+                            runReviewSearch();
+                        });
+                    } else {
+                        rvList.innerHTML = '<div class="list-empty">' + (queryText
+                            ? 'No reports contain that text.'
+                            : 'No drafted studies match these filters.') + '</div>';
+                    }
                     return;
                 }
                 rvList.innerHTML = '';
                 reports.forEach(r => {
                     const row = renderReportRow(r, { showDate: true, showNote: true });
+                    // Show the matched text in context so a hit is self-explanatory
+                    if (r.snippet) {
+                        const snip = document.createElement('span');
+                        snip.className = 'rr-snippet';
+                        snip.innerHTML = highlightTerms(escapeHtml(r.snippet), terms);
+                        row.appendChild(snip);
+                    }
                     row.addEventListener('click', () => openReportFromReview(r));
                     rvList.appendChild(row);
                 });
@@ -2619,14 +2785,28 @@
         rvShift.addEventListener('change', () => { updateRvDeleteBtn(); runReviewSearch(); });
         rvGrade.addEventListener('change', runReviewSearch);
         let rvDebounce = null;
-        rvStudyType.addEventListener('input', () => {
+        const rvDebounced = () => {
             clearTimeout(rvDebounce);
             rvDebounce = setTimeout(runReviewSearch, 300);
+        };
+        rvStudyType.addEventListener('input', rvDebounced);
+        // Text search scans every report body, so it waits a beat longer than the
+        // other filters; Enter runs it immediately.
+        rvText.addEventListener('input', () => {
+            clearTimeout(rvDebounce);
+            rvDebounce = setTimeout(runReviewSearch, 450);
+        });
+        rvText.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            clearTimeout(rvDebounce);
+            runReviewSearch();
         });
         document.getElementById('rvClear').addEventListener('click', () => {
             rvShift.value = '';
             rvGrade.value = '';
             rvStudyType.value = '';
+            rvText.value = '';
             updateRvDeleteBtn();
             runReviewSearch();
         });

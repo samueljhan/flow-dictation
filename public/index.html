@@ -472,6 +472,21 @@
         .final-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
         .final-toolbar label { font-size: 13px; font-weight: 600; color: #d0d0d0; }
         .final-toolbar select { min-width: 260px; background: #333; }
+        /* Filter bar: wraps by whole label+control groups, never mid-pair. */
+        .filter-bar { flex-wrap: wrap; row-gap: 10px; }
+        .filter-group {
+            display: flex; align-items: center; gap: 8px;
+            white-space: nowrap;          /* the label itself never breaks */
+            min-width: 0;                 /* lets the group shrink instead of overflowing */
+        }
+        /* Shrink before wrapping: the text inputs give up width first, down to a
+           still-usable floor, and only then does a whole group move to the next row. */
+        .filter-group input { flex: 1 1 170px; min-width: 120px; }
+        /* The 260px floor exists for the shift dropdown, whose names are long.
+           RPR only ever holds "All" / "RPR1-4" / "Ungraded", and inheriting that
+           floor is what pushed the bar onto a second row ~150px early. */
+        .filter-group #rvGrade { min-width: 120px; }
+        .filter-bar > .status { margin-left: 2px; }
         .report-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 18px; }
         /* Full-width result rows with aligned columns (ID, study type, study ID,
            date, grade, final) — the note preview wraps onto its own line. */
@@ -609,6 +624,10 @@
             .final-columns { flex-direction: column; gap: 14px; }
             .final-toolbar { flex-wrap: wrap; }
             .final-toolbar select { min-width: 0; flex: 1; }
+            /* One group per row, each filling the width — the label stays beside
+               its control, the control takes whatever is left. */
+            .filter-group { flex: 1 1 100%; }
+            .filter-group input { flex: 1 1 auto; min-width: 0; }
             /* Rows become stacked cards rather than columns */
             .report-head { display: none; }
             .report-row {
@@ -817,24 +836,35 @@
         <!-- ================= PAGE 4: REVIEW ================= -->
         <section id="page-review" class="page">
             <div class="final-scroll">
-                <div class="final-toolbar" style="flex-wrap:wrap">
-                    <label>Shift</label>
-                    <select id="rvShift"><option value="">All shifts</option></select>
-                    <label>RPR</label>
-                    <select id="rvGrade">
-                        <option value="">All</option>
-                        <option value="RPR1">RPR1</option>
-                        <option value="RPR2">RPR2</option>
-                        <option value="RPR3">RPR3</option>
-                        <option value="RPR4">RPR4</option>
-                        <option value="ungraded">Ungraded</option>
-                    </select>
-                    <label>Study type</label>
-                    <input id="rvStudyType" list="rvStudyTypes" placeholder="e.g. CT head" style="width:170px">
-                    <datalist id="rvStudyTypes"></datalist>
-                    <label>Search</label>
-                    <input id="rvText" placeholder="e.g. right brachiocephalic artery" style="width:170px"
-                           title="Searches the report text, read-out notes, RPR notes and study ID. Every word must appear; wrap in quotes for an exact phrase.">
+                <!-- Each label travels with its own control in a .filter-group, so a
+                     wrap can only ever fall between groups, never between a label
+                     and the field it names. -->
+                <div class="final-toolbar filter-bar">
+                    <div class="filter-group">
+                        <label for="rvShift">Shift</label>
+                        <select id="rvShift"><option value="">All shifts</option></select>
+                    </div>
+                    <div class="filter-group">
+                        <label for="rvGrade">RPR</label>
+                        <select id="rvGrade">
+                            <option value="">All</option>
+                            <option value="RPR1">RPR1</option>
+                            <option value="RPR2">RPR2</option>
+                            <option value="RPR3">RPR3</option>
+                            <option value="RPR4">RPR4</option>
+                            <option value="ungraded">Ungraded</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <label for="rvStudyType">Study type</label>
+                        <input id="rvStudyType" list="rvStudyTypes" placeholder="e.g. CT head">
+                        <datalist id="rvStudyTypes"></datalist>
+                    </div>
+                    <div class="filter-group">
+                        <label for="rvText">Search</label>
+                        <input id="rvText" placeholder="e.g. right brachiocephalic artery"
+                               title="Searches the report text, read-out notes, RPR notes and study ID. Every word must appear; wrap in quotes for an exact phrase.">
+                    </div>
                     <button class="ghost" id="rvClear">Clear</button>
                     <button class="ghost danger" id="rvDeleteShift" style="display:none">Delete Shift</button>
                     <span class="status" id="rvCount"></span>

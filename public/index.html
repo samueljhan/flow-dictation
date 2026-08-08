@@ -808,9 +808,6 @@
         <section id="page-review" class="page">
             <div class="final-scroll">
                 <div class="final-toolbar" style="flex-wrap:wrap">
-                    <label>Search</label>
-                    <input id="rvText" placeholder="Words or &quot;exact phrase&quot;…" style="width:240px"
-                           title="Searches the report text, read-out notes, RPR notes and study ID. Every word must appear; wrap in quotes for an exact phrase.">
                     <label>Shift</label>
                     <select id="rvShift"><option value="">All shifts</option></select>
                     <label>RPR</label>
@@ -825,6 +822,9 @@
                     <label>Study type</label>
                     <input id="rvStudyType" list="rvStudyTypes" placeholder="e.g. CT head" style="width:170px">
                     <datalist id="rvStudyTypes"></datalist>
+                    <label>Search</label>
+                    <input id="rvText" placeholder="e.g. right brachiocephalic artery" style="width:170px"
+                           title="Searches the report text, read-out notes, RPR notes and study ID. Every word must appear; wrap in quotes for an exact phrase.">
                     <button class="ghost" id="rvClear">Clear</button>
                     <button class="ghost danger" id="rvDeleteShift" style="display:none">Delete Shift</button>
                     <span class="status" id="rvCount"></span>

@@ -388,6 +388,15 @@
         .draft-item.current { border-color: #8ec9a0; background: #2e3530; }
         .draft-item .di-main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .draft-item .di-time { color: #808080; flex-shrink: 0; }
+        /* Background review state: spinning while it runs, a count when ready */
+        .draft-item .di-badge { flex-shrink: 0; display: flex; }
+        .di-review {
+            font-size: 10px; font-weight: 700; line-height: 1;
+            padding: 3px 6px; border-radius: 7px;
+        }
+        .di-review.running { color: #909090; animation: spin 1.4s linear infinite; padding: 0; }
+        .di-review.ready { background: rgba(224, 168, 50, 0.22); color: #e0a832; }
+        .di-review.error { background: rgba(220, 53, 69, 0.2); color: #dc7a7a; }
         /* Green = finalized (sorted to the bottom), yellow = read out / has notes */
         .note-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
         .note-dot.yellow { background: #e0a832; }
@@ -727,7 +736,8 @@
                             <button class="ghost" id="saveBtn">Save Draft</button>
                             <button class="ghost" id="draftSaveFinalBtn" title="Mark this study done — moves it to the bottom of the list">Save Final</button>
                         </div>
-                        <button class="ghost" id="reviewBtn" title="Run a Claude review pass and show suggested edits">Review</button>
+                        <button class="ghost" id="reviewBtn" title="Run a Claude review pass and show suggested edits. Runs in the background — you can open another study while it works.">Review</button>
+                        <button class="ghost" id="showReviewBtn" style="display:none">Show suggested edits</button>
                         <div class="status" id="draftStatus"></div>
                     </div>
                     <div class="panel" id="editsPanel" style="display:none">
@@ -1559,6 +1569,13 @@
         let integrating = false;   // review-mode edits came from read-out notes
         let draftShifts = [];      // shifts for the drafts-list selector
 
+        // Reviews run in the background, keyed by report id, so pressing Review
+        // never pins you to a study: open another case, or another page, and the
+        // suggestions are waiting when you come back. Each job holds the exact
+        // text it reviewed, since edit positions are offsets into that text.
+        //   { status: 'running' | 'ready' | 'error', baseText, edits, error }
+        const reviewJobs = new Map();
+
         function setDraftStatus(msg, cls) {
             draftStatus.textContent = msg || '';
             draftStatus.className = 'status' + (cls ? ' ' + cls : '');
@@ -1884,6 +1901,7 @@
                 drafts.forEach(r => {
                     const dot = dotFor(r);
                     const item = document.createElement('div');
+                    item.dataset.id = r.id;       // so review badges can be refreshed in place
                     item.className = 'draft-item'
                         + (loadedReport && loadedReport.id === r.id ? ' current' : '')
                         + (r.finalized_at ? ' finalized' : '');
@@ -1897,6 +1915,7 @@
                         (dot ? '<span class="note-dot ' + dot + '" title="' +
                             (dot === 'green' ? 'Final saved' : 'Read out') + '"></span>' : '') +
                         '<span class="di-main">' + label + '</span>' +
+                        '<span class="di-badge">' + reviewBadgeHtml(r.id) + '</span>' +
                         '<span class="di-time">' + pad2(t.getHours()) + ':' + pad2(t.getMinutes()) + '</span>' +
                         '<button type="button" class="di-menu-btn" title="More">…</button>';
                     item.querySelector('.di-menu-btn').addEventListener('click', (ev) => {
@@ -1922,6 +1941,9 @@
             setNotesVisible(editing);
             document.getElementById('newDraftBtn').style.display = editing ? '' : 'none';
             integrateBtn.disabled = !readoutNotesEl.value.trim();
+            // Every path that swaps the loaded study lands here, so the review
+            // buttons follow along without each caller remembering to ask
+            updateReviewUi();
         }
 
         async function openDraft(id) {
@@ -1946,6 +1968,9 @@
                 setDraftStatus('', '');
                 updateEditingUi();
                 loadDraftList();
+                // A review that finished while this study was closed opens straight
+                // into its edit cards; one still running just says so
+                if (!showPendingReview(id)) updateReviewUi();
             } catch (e) {
                 setDraftStatus('Failed to load draft: ' + e.message, 'error');
             }
@@ -2108,42 +2133,138 @@
             await persistReport({ finalize: true });
         });
 
-        // Review: the only path to the Claude review pass. Unsaved text is saved
-        // first (so a failed review never loses work), then reviewed.
+        // Review: the only path to the Claude review pass. The draft is always
+        // saved first, so the review runs against a version that exists on the
+        // server — leaving the study without saving can't lose it.
         document.getElementById('reviewBtn').addEventListener('click', async () => {
             if (!draftText.value.trim()) { setDraftStatus('Paste a report first.', 'error'); return; }
             const btn = document.getElementById('reviewBtn');
             btn.disabled = true;
             try {
-                if (!loadedReport) {
-                    reviewedRaw = draftText.value;
-                    currentEdits = [];
-                    integrating = false;
-                    await persistReport();
-                    if (!loadedReport) return;   // save cancelled or failed
-                }
-                setDraftStatus('Reviewing with Claude…');
                 reviewedRaw = draftText.value;
+                currentEdits = [];
                 integrating = false;
-                const data = await api('/api/draft/review', { method: 'POST', body: {
-                    report: reviewedRaw,
-                    study_type: studyTypeInput.value.trim()
-                } });
-                // Review is scoped to the body, so anchor there: a phrase that
-                // also appears in the header must not highlight the header copy
-                currentEdits = locateEdits(reviewedRaw, data.edits || [], data.body_start || 0);
-                if (currentEdits.length === 0) {
-                    setDraftStatus('No edits suggested — draft is already saved.', '');
-                } else {
-                    setDraftStatus('', '');
-                    enterReviewMode();
-                }
+                await persistReport();
+                if (!loadedReport) return;   // save cancelled or failed
+                // Deliberately not awaited: the request keeps running while the
+                // user moves on to another study
+                startReview(loadedReport.id, draftText.value, studyTypeInput.value.trim());
             } catch (e) {
                 setDraftStatus('Review failed: ' + e.message + ' — your draft is saved; you can retry.', 'error');
             } finally {
                 btn.disabled = false;
+                updateReviewUi();
             }
         });
+
+        // Run a review in the background. Results land in reviewJobs and are
+        // shown immediately if the user is still on that study, or announced
+        // and left waiting if they have moved on.
+        async function startReview(reportId, baseText, studyType) {
+            reviewJobs.set(reportId, { status: 'running', baseText });
+            refreshReviewBadges();
+            updateReviewUi();
+            try {
+                const data = await api('/api/draft/review', { method: 'POST', body: {
+                    report: baseText, study_type: studyType
+                } });
+                // Review is scoped to the body, so anchor there: a phrase that
+                // also appears in the header must not highlight the header copy
+                const edits = locateEdits(baseText, data.edits || [], data.body_start || 0);
+                if (edits.length === 0) {
+                    reviewJobs.delete(reportId);
+                    if (loadedReport && loadedReport.id === reportId) {
+                        setDraftStatus('No edits suggested — draft is already saved.', '');
+                    } else {
+                        showToast('No edits suggested for ' + reportId, 3500);
+                    }
+                } else {
+                    reviewJobs.set(reportId, { status: 'ready', baseText, edits });
+                    if (!showPendingReview(reportId)) {
+                        showToast(edits.length + ' suggested edit' + (edits.length === 1 ? '' : 's') +
+                                  ' ready for ' + reportId, 4500);
+                    }
+                }
+            } catch (e) {
+                reviewJobs.set(reportId, { status: 'error', baseText, error: e.message });
+                if (!(loadedReport && loadedReport.id === reportId)) {
+                    showToast('Review of ' + reportId + ' failed: ' + e.message, 5000);
+                }
+            }
+            refreshReviewBadges();
+            updateReviewUi();
+        }
+
+        // Open a finished review's edit cards. Only when the study is on screen,
+        // nothing else is mid-review, and the draft still matches what was sent —
+        // edit positions are offsets into that exact text.
+        function showPendingReview(reportId) {
+            const job = reviewJobs.get(reportId);
+            if (!job || job.status !== 'ready') return false;
+            if (!loadedReport || loadedReport.id !== reportId) return false;
+            if (editsPanel.style.display !== 'none') return false;
+            if (draftText.value !== job.baseText) return false;
+            reviewedRaw = job.baseText;
+            currentEdits = job.edits;
+            integrating = false;
+            reviewJobs.delete(reportId);
+            setDraftStatus('', '');
+            enterReviewMode();
+            refreshReviewBadges();
+            updateReviewUi();
+            return true;
+        }
+
+        // Reflect the loaded study's review state in the buttons and status line
+        function updateReviewUi() {
+            const btn = document.getElementById('reviewBtn');
+            const showBtn = document.getElementById('showReviewBtn');
+            const job = loadedReport ? reviewJobs.get(loadedReport.id) : null;
+            const inReview = editsPanel.style.display !== 'none';
+            const running = !!job && job.status === 'running';
+            btn.disabled = running;
+            btn.textContent = running ? 'Reviewing…' : 'Review';
+            showBtn.style.display = (job && job.status === 'ready' && !inReview) ? '' : 'none';
+            if (!job || inReview) return;
+            if (running) {
+                setDraftStatus('Reviewing with Claude… you can open another study and come back.', '');
+            } else if (job.status === 'ready') {
+                setDraftStatus(job.edits.length + ' suggested edit' + (job.edits.length === 1 ? '' : 's') +
+                    ' ready' + (draftText.value === job.baseText ? '.' : ' for the version you sent to review.'), '');
+            } else if (job.status === 'error') {
+                setDraftStatus('Review failed: ' + job.error + ' — your draft is saved; you can retry.', 'error');
+            }
+        }
+
+        // The draft moved on since the review started, so showing the edits means
+        // going back to the reviewed version — always the user's call.
+        document.getElementById('showReviewBtn').addEventListener('click', () => {
+            const id = loadedReport && loadedReport.id;
+            const job = id && reviewJobs.get(id);
+            if (!job || job.status !== 'ready') return;
+            if (draftText.value !== job.baseText) {
+                if (!confirm('This review ran on the version you sent, and the draft has changed since.\n\n' +
+                             'Showing the suggestions will restore that reviewed version, replacing your current text.')) return;
+                draftText.value = job.baseText;
+            }
+            showPendingReview(id);
+        });
+
+        // Small marker on each drafts-list row: a review running, or waiting
+        function reviewBadgeHtml(reportId) {
+            const job = reviewJobs.get(reportId);
+            if (!job) return '';
+            if (job.status === 'running') return '<span class="di-review running" title="Review running">⟳</span>';
+            if (job.status === 'ready') return '<span class="di-review ready" title="Suggested edits ready">' + job.edits.length + '</span>';
+            return '<span class="di-review error" title="Review failed">!</span>';
+        }
+
+        function refreshReviewBadges() {
+            document.querySelectorAll('#draftList .draft-item').forEach(el => {
+                const slot = el.querySelector('.di-badge');
+                if (slot) slot.innerHTML = reviewBadgeHtml(el.dataset.id);
+            });
+        }
 
         // searchFrom: index before which matches are ignored (the review pass
         // passes the FINDINGS offset so header text is never anchored)
@@ -2186,7 +2307,10 @@
             setNotesVisible(!!loadedReport);
             reviewStatus.textContent = '';
         }
-        document.getElementById('cancelReviewBtn').addEventListener('click', exitReviewMode);
+        document.getElementById('cancelReviewBtn').addEventListener('click', () => {
+            exitReviewMode();
+            updateReviewUi();
+        });
 
         // Index of an edited span to focus once the next render lands
         let focusEditIdx = null;

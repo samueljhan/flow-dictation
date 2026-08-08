@@ -9,3 +9,4 @@ sk-proj-*
 *.old
 *.sh
 *.backup_*
+!.env.example

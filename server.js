@@ -19,17 +19,18 @@ app.use(express.urlencoded({ extended: false }));
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 // Detection is a trivial classification that runs on nearly every action —
 // Haiku handles it at ~1/10 the price of the frontier models.
-const MODEL_DETECT = process.env.MODEL_DETECT || 'claude-haiku-4-5';      // study type detection
-const MODEL_REPORT = process.env.MODEL_REPORT || 'claude-sonnet-4-6';     // describe / reword / proofread / full report
-// Free text: questions, follow-ups, and any text work typed without arming a
-// quick action. MODEL_RADQA is honoured for continuity with older deployments.
-const MODEL_CHAT = process.env.MODEL_CHAT || process.env.MODEL_RADQA || 'claude-fable-5';
-// Judgement-heavy paths default to Fable. Explicit env wins; otherwise an
-// explicitly-set MODEL_REPORT is inherited, and the Fable default applies only
-// when neither is configured.
-const MODEL_REVIEW = process.env.MODEL_REVIEW || process.env.MODEL_REPORT || 'claude-fable-5';        // draft review + read-out integration
-const MODEL_IMPRESSION = process.env.MODEL_IMPRESSION || process.env.MODEL_REPORT || 'claude-fable-5'; // impression generation
-const MODEL_SYNTHESIZE = process.env.MODEL_SYNTHESIZE || 'claude-fable-5';   // prior report + new info → merged report
+// Every task routes independently so any one can be A/B'd from a Railway
+// variable without touching code. Deliberately NO cross-inheritance: setting
+// MODEL_REPORT must not silently drag review or impression along with it.
+const MODEL_DETECT = process.env.MODEL_DETECT || 'claude-haiku-4-5';      // study-type classification
+const MODEL_REPORT = process.env.MODEL_REPORT || 'claude-sonnet-4-6';     // proofread · reword · describe · full report structure
+const MODEL_REVIEW = process.env.MODEL_REVIEW || 'claude-opus-5';         // draft review + integrate-notes
+const MODEL_IMPRESSION = process.env.MODEL_IMPRESSION || 'claude-opus-5'; // Generate Impression + the full report's impression
+const MODEL_RADQA = process.env.MODEL_RADQA || 'claude-opus-5';           // Quick Rad Question
+// Quick Rad Question and free text are one path — same prompt, search toggled —
+// so MODEL_CHAT follows MODEL_RADQA unless it is set on its own.
+const MODEL_CHAT = process.env.MODEL_CHAT || MODEL_RADQA;
+const MODEL_SYNTHESIZE = process.env.MODEL_SYNTHESIZE || 'claude-opus-5'; // prior report + new info → merged report
 // Used on every path when safety classifiers decline a benign radiology request
 const MODEL_FALLBACK = process.env.MODEL_FALLBACK || 'claude-opus-4-8';
 
@@ -189,13 +190,8 @@ console.log('Supabase:', !!supabase ? '✓' : '✗');
 console.log('Google Client ID:', !!process.env.GOOGLE_CLIENT_ID ? '✓' : '✗');
 console.log('Google Client Secret:', !!process.env.GOOGLE_CLIENT_SECRET ? '✓' : '✗');
 console.log('Models:');
-console.log(`  detect     = ${MODEL_DETECT}`);
-console.log(`  report     = ${MODEL_REPORT}   (describe · reword · proofread · full report)`);
-console.log(`  review     = ${MODEL_REVIEW}   (draft review · read-out integration)`);
-console.log(`  impression = ${MODEL_IMPRESSION}`);
-console.log(`  synthesize = ${MODEL_SYNTHESIZE}`);
-console.log(`  chat       = ${MODEL_CHAT}   (free text: questions · follow-ups · typed requests)`);
-console.log(`  fallback   = ${MODEL_FALLBACK}   (on classifier refusal)`);
+console.log(`  detect=${MODEL_DETECT} report=${MODEL_REPORT} review=${MODEL_REVIEW} impression=${MODEL_IMPRESSION} radqa=${MODEL_RADQA}`);
+console.log(`  synthesize=${MODEL_SYNTHESIZE} chat=${MODEL_CHAT} fallback=${MODEL_FALLBACK}`);
 console.log('========================');
 
 // ============ Claude helpers ============
@@ -209,8 +205,89 @@ const FALLBACK_CAPABLE = /fable|mythos|opus-5/i;
 // default (high) for complex ones. Haiku 4.5 rejects the parameter.
 const EFFORT_CAPABLE = /fable|mythos|opus|sonnet-5|sonnet-4-6/i;
 
+// ============ Cost accounting ============
+
+// US list price per million tokens. Longest-prefix matched against the model
+// the API says served the request, so a dated snapshot or a transparent
+// fallback swap still prices correctly.
+const PRICING = {
+  'claude-opus-5':     { input: 5,  output: 25 },
+  'claude-opus-4-8':   { input: 5,  output: 25 },
+  'claude-opus-4-7':   { input: 5,  output: 25 },
+  'claude-sonnet-5':   { input: 3,  output: 15 },
+  'claude-sonnet-4-6': { input: 3,  output: 15 },
+  'claude-haiku-4-5':  { input: 1,  output: 5 },
+  'claude-fable-5':    { input: 10, output: 50 }
+};
+// Cache writes are 1.25x input at the 5-minute TTL but 2x at the 1-hour TTL,
+// and every cached block here is written with ttl:'1h' (see CACHE_1H). Using
+// 1.25 would quietly understate the cost of exactly the blocks we cache.
+const CACHE_WRITE_MULTIPLIER = 2.0;
+const CACHE_READ_MULTIPLIER = 0.1;
+
+const unpricedModels = new Set();
+function priceFor(model) {
+  const id = String(model || '');
+  let best = null;
+  for (const key of Object.keys(PRICING)) {
+    if (id.startsWith(key) && (!best || key.length > best.length)) best = key;
+  }
+  if (!best) {
+    if (id && !unpricedModels.has(id)) {
+      unpricedModels.add(id);
+      console.warn(`⚠ [cost] no price for "${id}" — est_cost will read 0 for it. Add it to PRICING.`);
+    }
+    return null;
+  }
+  return PRICING[best];
+}
+
+// Dollars for one call, from the usage block the API returns.
+function costFor(model, u) {
+  const p = priceFor(model);
+  if (!p) return 0;
+  const inTok = u.input_tokens || 0;
+  const write = u.cache_creation_input_tokens || 0;
+  const read = u.cache_read_input_tokens || 0;
+  const out = u.output_tokens || 0;
+  return (
+    inTok * p.input +
+    write * p.input * CACHE_WRITE_MULTIPLIER +
+    read * p.input * CACHE_READ_MULTIPLIER +
+    out * p.output
+  ) / 1e6;
+}
+
+// In-process tally, keyed by model AND label so per-task cost is visible.
+// Resets on restart/redeploy — this is a live read-out, not a ledger.
+const usageTally = new Map();   // "<model>|<label>" -> totals
+let usageSince = new Date().toISOString();
+
+// Returns the call's cost so the caller can log it.
+function recordUsage({ model, label, usage, injected }) {
+  const u = usage || {};
+  const cost = costFor(model, u);
+  const key = `${model || 'unknown'}|${label || 'unlabelled'}`;
+  const t = usageTally.get(key) || {
+    model: model || 'unknown', label: label || 'unlabelled',
+    calls: 0, input_tokens: 0, output_tokens: 0,
+    cache_write_tokens: 0, cache_read_tokens: 0, injected_tokens: 0, est_cost: 0
+  };
+  t.calls += 1;
+  t.input_tokens += u.input_tokens || 0;
+  t.output_tokens += u.output_tokens || 0;
+  t.cache_write_tokens += u.cache_creation_input_tokens || 0;
+  t.cache_read_tokens += u.cache_read_input_tokens || 0;
+  t.injected_tokens += injected || 0;
+  t.est_cost += cost;
+  usageTally.set(key, t);
+  return cost;
+}
+
+const usd = n => '$' + n.toFixed(4);
+
 // withFallbacks: request server-side refusal fallbacks where the model supports it.
-async function claudeText({ model, system, message, messages, maxTokens, withFallbacks, effort }) {
+async function claudeText({ model, system, message, messages, maxTokens, withFallbacks, effort, injected, label }) {
   const params = {
     model,
     max_tokens: maxTokens,
@@ -238,7 +315,9 @@ async function claudeText({ model, system, message, messages, maxTokens, withFal
     response = await anthropic.messages.create(params);
   }
   const u = response.usage || {};
-  console.log(`[claude] ${response.model || model} in=${u.input_tokens} out=${u.output_tokens} cache_write=${u.cache_creation_input_tokens || 0} cache_read=${u.cache_read_input_tokens || 0}`);
+  const served = response.model || model;
+  const cost = recordUsage({ model: served, label, usage: u, injected });
+  console.log(`[claude] ${served} label=${label || '-'} injected=${injected || 0} in=${u.input_tokens} out=${u.output_tokens} cache_write=${u.cache_creation_input_tokens || 0} cache_read=${u.cache_read_input_tokens || 0} est_cost=${usd(cost)}`);
   // The server-side `fallbacks` param swaps models transparently — surface it
   // so a primary that keeps getting declined doesn't stay invisible.
   if ((u.iterations || []).some(i => i.type === 'fallback_message')) {
@@ -317,6 +396,8 @@ User's description of the finding:`,
 
 Text to reword:`,
   proofread: `Proofread the following text. Correct spelling, grammar, punctuation, and obvious speech-recognition/dictation errors. Do not otherwise change wording, meaning, or style. Return only the fully corrected text, preserving line breaks exactly.
+
+The style guide and word list in your instructions are REFERENCE ONLY here, to help you recognise a dictation error that happens to be a real word. They are NOT a licence to restyle. If a phrase is correctly spelled and grammatical, leave it exactly as written even when the style guide would phrase it differently — filler constructions ("is seen", "is noted", "is identified"), discouraged words, and long-winded phrasing all stay. Changing them is a bug, not an improvement: the reader is shown a word-level diff of your output, and every unnecessary change buries the real corrections.
 
 Text to proofread:`,
   impression: `Generate an IMPRESSION for the following radiology report body. Rules:
@@ -469,12 +550,51 @@ const VALID_RPR = /^RPR[1-4]$/;
 
 // ============ Knowledge layer (style guide, language library, exemplars) ============
 
+// Rough size estimate at ~4 chars/token. Used only to compare injected payloads
+// between actions and to budget conversation history — never for billing.
+function estimateTokens(text) {
+  return Math.ceil((text || '').length / 4);
+}
+
+// Prompt caching is a prefix match, so the static block is cached on a 1-hour
+// TTL: a shift's worth of dictation has long gaps between actions, and the
+// 5-minute default expires across nearly all of them. Writes cost 2x instead of
+// 1.25x, so a block needs ~3 reads within the hour to pay for itself.
+const CACHE_1H = { type: 'ephemeral', ttl: '1h' };
+
+// What each action actually needs injected. Everything-everywhere was costing
+// full style guide + full language library + 3 exemplars on every call, most of
+// which no single action can use: Proofread must not change wording, so phrasing
+// guidance and exemplars can only mislead it.
+//   style: include the style guide · language: 'all' or a category allowlist
+//   exemplars: how many report exemplars · impressionPairs: prefer stored
+//   findings/impression pairs, injecting the impression text alone
+const DEFAULT_EXEMPLARS = 2;
+const KNOWLEDGE_PROFILES = {
+  proofread:  { style: true,  language: ['words_to_avoid'], exemplars: 0 },
+  reword:     { style: true,  language: 'all',              exemplars: 1 },
+  describe:   { style: false, language: 'all',              exemplars: 2 },
+  impression: { style: true,  language: 'all',              exemplars: 2, impressionPairs: true },
+  fullreport: { style: true,  language: 'all',              exemplars: 2 },
+  synthesize: { style: true,  language: 'all',              exemplars: 2 },
+  review:     { style: true,  language: ['words_to_avoid'], exemplars: 1 },
+  readout:    { style: true,  language: ['words_to_avoid'], exemplars: 1 },
+  freeform:   { style: true,  language: 'all',              exemplars: 2 }
+};
+const DEFAULT_PROFILE = { style: true, language: 'all', exemplars: DEFAULT_EXEMPLARS };
+const profileFor = key => KNOWLEDGE_PROFILES[key] || DEFAULT_PROFILE;
+
 // The style guide + language library form a static system-prompt block that is
-// prompt-cached (cache_control: ephemeral). Cached in memory so the block stays
-// byte-identical across requests; invalidated when the library is edited.
-let knowledgeCache = { block: null, loadedAt: 0 };
+// prompt-cached. Rows are cached in memory and each action's composed block is
+// memoised, so the bytes stay identical across requests — any drift would miss
+// the cache. Both are invalidated when the library is edited.
+let knowledgeRows = { rules: null, lang: null, loadedAt: 0 };
+const knowledgeBlockCache = new Map();   // profile key -> composed block text
 const KNOWLEDGE_TTL_MS = 5 * 60 * 1000;
-function invalidateKnowledge() { knowledgeCache = { block: null, loadedAt: 0 }; }
+function invalidateKnowledge() {
+  knowledgeRows = { rules: null, lang: null, loadedAt: 0 };
+  knowledgeBlockCache.clear();
+}
 
 // Supabase caps selects at 1000 rows — page through everything.
 async function fetchAllRows(table, columns) {
@@ -506,26 +626,40 @@ function groupLines(rows, keyField, valueField, fallbackKey) {
   return text;
 }
 
-async function getKnowledgeBlock() {
-  if (!supabase) return '';
-  if (knowledgeCache.block !== null && Date.now() - knowledgeCache.loadedAt < KNOWLEDGE_TTL_MS) {
-    return knowledgeCache.block;
+async function getKnowledgeRows() {
+  if (knowledgeRows.rules && Date.now() - knowledgeRows.loadedAt < KNOWLEDGE_TTL_MS) {
+    return knowledgeRows;
   }
+  const [rules, lang] = await Promise.all([
+    fetchAllRows('style_guide', 'section, rule, created_at'),
+    fetchAllRows('rad_language', 'category, content, created_at')
+  ]);
+  knowledgeRows = { rules, lang, loadedAt: Date.now() };
+  knowledgeBlockCache.clear();   // rows changed, so every composed block is stale
+  return knowledgeRows;
+}
+
+// The static block for one action, composed from its profile.
+async function getKnowledgeBlock(profileKey) {
+  if (!supabase) return '';
+  const memo = knowledgeBlockCache.get(profileKey);
+  if (memo !== undefined && Date.now() - knowledgeRows.loadedAt < KNOWLEDGE_TTL_MS) return memo;
   try {
-    const [rules, lang] = await Promise.all([
-      fetchAllRows('style_guide', 'section, rule, created_at'),
-      fetchAllRows('rad_language', 'category, content, created_at')
-    ]);
+    const profile = profileFor(profileKey);
+    const { rules, lang } = await getKnowledgeRows();
     let block = '';
-    if (rules.length) {
+    if (profile.style && rules.length) {
       block += '\n\nSTYLE GUIDE — follow these reporting rules:\n' +
         groupLines(rules, 'section', 'rule', 'general');
     }
-    if (lang.length) {
+    const langRows = profile.language === 'all'
+      ? lang
+      : lang.filter(r => profile.language.includes((r.category || '').trim()));
+    if (langRows.length) {
       block += '\nRADIOLOGY LANGUAGE REFERENCE — preferred register and phrasing:\n' +
-        groupLines(lang, 'category', 'content', 'general');
+        groupLines(langRows, 'category', 'content', 'general');
     }
-    knowledgeCache = { block, loadedAt: Date.now() };
+    knowledgeBlockCache.set(profileKey, block);
     return block;
   } catch (e) {
     console.error('Knowledge load failed:', e.message);
@@ -533,32 +667,33 @@ async function getKnowledgeBlock() {
   }
 }
 
-// Up to 3 exemplars for the study type: user rows first, PARROT fills the rest;
-// fall back to modality-level matches, then up to 2 general exemplars.
+// Exemplars for the study type: user rows first, PARROT fills the rest; fall
+// back to modality-level matches, then general exemplars. Two is the default —
+// a third full report rarely teaches voice the first two haven't already.
 // 'user' > 'parrot' alphabetically, so order source DESC puts user rows first.
 const EXEMPLAR_COLS = 'id, study_type, title, body, source';
 
 // Exemplar lookup is 1-4 sequential round trips, on the critical path of every
-// report action. Cached per study type on the same TTL as the knowledge block.
-const exemplarCache = new Map();   // normalized study type -> { rows, loadedAt }
+// report action. Cached per study type + count on the knowledge block's TTL.
+const exemplarCache = new Map();   // "<count>:<study type>" -> { rows, loadedAt }
 function invalidateExemplars() { exemplarCache.clear(); }
 
-async function selectExemplars(studyType) {
-  if (!supabase) return [];
-  const cacheKey = (studyType || '').trim().toLowerCase();
+async function selectExemplars(studyType, limit = DEFAULT_EXEMPLARS) {
+  if (!supabase || limit <= 0) return [];
+  const cacheKey = limit + ':' + (studyType || '').trim().toLowerCase();
   const hit = exemplarCache.get(cacheKey);
   if (hit && Date.now() - hit.loadedAt < KNOWLEDGE_TTL_MS) return hit.rows;
-  const rows = await selectExemplarsUncached(studyType);
+  const rows = await selectExemplarsUncached(studyType, limit);
   exemplarCache.set(cacheKey, { rows, loadedAt: Date.now() });
   return rows;
 }
 
-async function selectExemplarsUncached(studyType) {
+async function selectExemplarsUncached(studyType, limit) {
   const chosen = [];
   const seen = new Set();
   const add = rows => {
     for (const r of rows || []) {
-      if (chosen.length >= 3) break;
+      if (chosen.length >= limit) break;
       if (seen.has(r.id)) continue;
       seen.add(r.id);
       chosen.push(r);
@@ -568,11 +703,11 @@ async function selectExemplarsUncached(studyType) {
     if (studyType && studyType.trim()) {
       const st = studyType.trim();
       const { data: userRows } = await supabase.from('exemplar_reports')
-        .select(EXEMPLAR_COLS).ilike('study_type', st).eq('source', 'user').limit(3);
+        .select(EXEMPLAR_COLS).ilike('study_type', st).eq('source', 'user').limit(limit);
       add(userRows);
-      if (chosen.length < 3) {
+      if (chosen.length < limit) {
         const { data: parrotRows } = await supabase.from('exemplar_reports')
-          .select(EXEMPLAR_COLS).ilike('study_type', st).neq('source', 'user').limit(3);
+          .select(EXEMPLAR_COLS).ilike('study_type', st).neq('source', 'user').limit(limit);
         add(parrotRows);
       }
       if (chosen.length === 0) {
@@ -580,14 +715,14 @@ async function selectExemplarsUncached(studyType) {
         if (modality) {
           const { data: modRows } = await supabase.from('exemplar_reports')
             .select(EXEMPLAR_COLS).ilike('study_type', modality + ' %')
-            .order('source', { ascending: false }).limit(3);
+            .order('source', { ascending: false }).limit(limit);
           add(modRows);
         }
       }
     }
     if (chosen.length === 0) {
       const { data: anyRows } = await supabase.from('exemplar_reports')
-        .select(EXEMPLAR_COLS).order('source', { ascending: false }).limit(2);
+        .select(EXEMPLAR_COLS).order('source', { ascending: false }).limit(limit);
       add(anyRows);
     }
   } catch (e) {
@@ -604,22 +739,94 @@ function exemplarBlockText(exemplars) {
     ).join('\n');
 }
 
-// System prompt as content blocks: [static block (cached), exemplar block (varies)]
-async function buildKnowledgeSystem(baseSystem, studyType) {
+// ---- Impression exemplars, for impression work only ----
+// A whole prior report is mostly findings the impression task can't use. The
+// stored findings/impression pairs let us inject the impression alone: same
+// voice, a fraction of the tokens.
+const impressionExemplarCache = new Map();
+function invalidateImpressionExemplars() { impressionExemplarCache.clear(); }
+
+// Stored impressions predate the no-numbering rule, so their leading "1." /
+// "2." markers would re-teach exactly what the style guide forbids.
+function stripEnumeration(impression) {
+  return impression
+    .split('\n')
+    .map(line => line.replace(/^\s*(?:\d+[.)]|[a-z][.)]|[-•*])\s*/i, '').trim())
+    .filter(Boolean)
+    .join('\n');
+}
+
+async function selectImpressionExemplars(studyType, limit) {
+  if (!supabase || limit <= 0) return [];
+  const cacheKey = limit + ':' + (studyType || '').trim().toLowerCase();
+  const hit = impressionExemplarCache.get(cacheKey);
+  if (hit && Date.now() - hit.loadedAt < KNOWLEDGE_TTL_MS) return hit.rows;
+  let rows = [];
+  try {
+    const base = () => supabase.from('report_sections')
+      .select('study_type, impression')
+      .not('impression', 'is', null)
+      .order('created_at', { ascending: false });
+    const st = (studyType || '').trim();
+    if (st) {
+      const { data } = await base().ilike('study_type', st).limit(limit);
+      rows = data || [];
+      if (rows.length === 0) {
+        const modality = st.split(/\s+/)[0];
+        if (modality) {
+          const { data: mod } = await base().ilike('study_type', modality + '%').limit(limit);
+          rows = mod || [];
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Impression exemplar selection failed:', e.message);
+    rows = [];
+  }
+  impressionExemplarCache.set(cacheKey, { rows, loadedAt: Date.now() });
+  return rows;
+}
+
+function impressionBlockText(rows) {
+  const items = rows
+    .map(r => ({ studyType: r.study_type, text: stripEnumeration(r.impression || '') }))
+    .filter(r => r.text);
+  if (!items.length) return '';
+  return '\n\nPRIOR IMPRESSIONS — your own past impressions for this study type. Match their register and level of detail; the current report\'s findings are the only source of content:\n' +
+    items.map((e, i) =>
+      `\n--- Impression ${i + 1} (${e.studyType || 'general'}) ---\n${e.text.slice(0, 2000)}`
+    ).join('\n');
+}
+
+// The varying half of the system prompt: exemplars for this study type, drawn
+// from whichever source the profile calls for.
+async function buildExemplarText(studyType, profile) {
+  if (!profile.exemplars) return '';
+  if (profile.impressionPairs) {
+    const pairs = await selectImpressionExemplars(studyType, profile.exemplars);
+    const text = impressionBlockText(pairs);
+    if (text) return text;      // fall through to full reports when none stored yet
+  }
+  return exemplarBlockText(await selectExemplars(studyType, profile.exemplars));
+}
+
+// System prompt as content blocks: [static block (cached 1h), exemplar block
+// (varies by study type)]. Returns the injected token estimate for logging.
+async function buildKnowledgeSystem(baseSystem, studyType, profileKey) {
+  const profile = profileFor(profileKey);
   // Independent lookups — fetched together, not one after the other
-  const [knowledge, exemplars] = await Promise.all([
-    getKnowledgeBlock(),
-    selectExemplars(studyType)
+  const [knowledge, exText] = await Promise.all([
+    getKnowledgeBlock(profileKey),
+    buildExemplarText(studyType, profile)
   ]);
   const blocks = [];
   if (knowledge) {
-    blocks.push({ type: 'text', text: baseSystem + knowledge, cache_control: { type: 'ephemeral' } });
+    blocks.push({ type: 'text', text: baseSystem + knowledge, cache_control: CACHE_1H });
   } else {
     blocks.push({ type: 'text', text: baseSystem });
   }
-  const exText = exemplarBlockText(exemplars);
   if (exText) blocks.push({ type: 'text', text: exText });
-  return blocks;
+  return { system: blocks, injected: estimateTokens(knowledge) + estimateTokens(exText) };
 }
 
 // Heuristic: pasted report content is long; short inputs (finding descriptions,
@@ -656,10 +863,12 @@ async function upgradeImpression(reportText, studyType) {
   if (!m) return reportText;
   const body = reportText.slice(0, m.index).trimEnd();
   if (!body) return reportText;
-  const system = await buildKnowledgeSystem(ASSIST_SYSTEM, studyType);
+  const { system, injected } = await buildKnowledgeSystem(ASSIST_SYSTEM, studyType, 'impression');
   const impression = (await claudeTextFallback({
     model: MODEL_IMPRESSION,
+    label: 'fullreport:impression',
     system,
+    injected,
     message: `${ASSIST_ACTIONS.impression}\n\n${body}`,
     maxTokens: 2000,
     effort: ACTION_EFFORT.impression
@@ -693,22 +902,54 @@ function wantsReferences({ action, references }) {
   return references === true || action === 'radqa';
 }
 
+// History is carried for follow-ups ("shorter", "now the impression"), and a
+// fixed count of exchanges is a poor proxy for what that costs: twelve one-line
+// turns are free, while two pasted reports are most of a prompt. Budget it in
+// tokens instead, dropping the oldest first.
+const HISTORY_TOKEN_BUDGET = 1500;
+const HISTORY_MSG_TOKEN_CAP = 600;   // above this, a pasted report is elided
+const ELIDE_HEAD_WORDS = 150;
+const ELIDE_TAIL_WORDS = 50;
+
+// A pasted report kept for context only needs its shape: the header and
+// opening findings, and the impression it ends on.
+function elideMessage(text) {
+  const words = text.trim().split(/\s+/);
+  const dropped = words.length - ELIDE_HEAD_WORDS - ELIDE_TAIL_WORDS;
+  if (dropped <= 0) return text;
+  return words.slice(0, ELIDE_HEAD_WORDS).join(' ') +
+    `\n\n[… ${dropped} words omitted …]\n\n` +
+    words.slice(-ELIDE_TAIL_WORDS).join(' ');
+}
+
+function budgetHistory(history) {
+  if (!Array.isArray(history)) return [];
+  const kept = [];
+  let used = 0;
+  // Newest first, so what survives is always the most recent context
+  for (let i = history.length - 1; i >= 0; i--) {
+    const h = history[i];
+    if (!h || (h.role !== 'user' && h.role !== 'assistant')) continue;
+    if (typeof h.content !== 'string' || !h.content.trim()) continue;
+    let content = h.content.slice(0, 20000);
+    if (estimateTokens(content) > HISTORY_MSG_TOKEN_CAP && looksLikeReport(content)) {
+      content = elideMessage(content);
+    }
+    const cost = estimateTokens(content);
+    if (used + cost > HISTORY_TOKEN_BUDGET) break;   // this and everything older
+    used += cost;
+    kept.push({ role: h.role, content });
+  }
+  return kept.reverse();
+}
+
 function assistMessages({ action, instruction, message, template, history }) {
   // Synthesize is the one two-part action: prior report + the new information
   const userMessage = action === 'synthesize'
     ? `${instruction}\n\nPRIOR REPORT:\n${template}\n\nNEW INFORMATION:\n${message}`
     : (instruction ? `${instruction}\n\n${message}` : message);
 
-  // Recent conversation history so follow-ups ("shorter", "now the impression") work
-  const messages = [];
-  if (Array.isArray(history)) {
-    for (const h of history.slice(-12)) {
-      if ((h.role === 'user' || h.role === 'assistant') &&
-          typeof h.content === 'string' && h.content.trim()) {
-        messages.push({ role: h.role, content: h.content.slice(0, 20000) });
-      }
-    }
-  }
+  const messages = budgetHistory(history);
   messages.push({ role: 'user', content: userMessage });
   return messages;
 }
@@ -717,6 +958,7 @@ function assistMessages({ action, instruction, message, template, history }) {
 // to work on; a typed question doesn't need them, and detection costs ~1s.
 // Resolved once per turn — runFreeform's loop can re-send several times.
 async function freeformSystemFactory(message) {
+  const profile = profileFor('freeform');
   let knowledgeBlock = '';
   let exemplarText = '';
   if (looksLikeReport(message) && !looksLikeQuestion(message)) {
@@ -724,49 +966,53 @@ async function freeformSystemFactory(message) {
       // Detection and the style guide are independent — overlap them
       const [studyType, block] = await Promise.all([
         detectStudyType(message).catch(() => null),
-        getKnowledgeBlock()
+        getKnowledgeBlock('freeform')
       ]);
       knowledgeBlock = block;
-      exemplarText = exemplarBlockText(await selectExemplars(studyType));
+      exemplarText = await buildExemplarText(studyType, profile);
     } catch (e) {
       console.error('Knowledge load failed for free text:', e.message);
     }
   }
-  return (searchOn) => {
+  const systemFor = (searchOn) => {
     const blocks = [{
       type: 'text',
       text: buildFreeformSystem(searchOn, knowledgeBlock),
-      ...(knowledgeBlock ? { cache_control: { type: 'ephemeral' } } : {})
+      ...(knowledgeBlock ? { cache_control: CACHE_1H } : {})
     }];
     if (exemplarText) blocks.push({ type: 'text', text: exemplarText });
     return blocks;
   };
+  return { systemFor, injected: estimateTokens(knowledgeBlock) + estimateTokens(exemplarText) };
 }
 
-// An armed quick action: its dedicated prompt plus the knowledge layer (style
-// guide + language + matched exemplars). Proofread is the exception — it must
-// not change wording, so a style guide and exemplars cannot help it, and
-// skipping them also skips a detection call.
+// An armed quick action: its dedicated prompt plus whatever its knowledge
+// profile calls for (see KNOWLEDGE_PROFILES).
 async function actionSystemFor(action, message, template) {
-  if (action === 'proofread') return { system: ASSIST_SYSTEM, studyType: null };
-  // fullreport inputs are often short dictations, but knowing the study type
-  // is what pulls in the right exemplars — always try to detect it. For
-  // synthesize, the prior report is the reliable source for that.
+  const profile = profileFor(action);
+  // Detection only buys anything when exemplars will be pulled — for a profile
+  // with none (Proofread), it is a ~1s round trip for nothing. fullreport
+  // inputs are often short dictations, but knowing the study type is what pulls
+  // in the right exemplars — always try to detect it there. For synthesize, the
+  // prior report is the reliable source.
   const detectFrom = action === 'synthesize' ? template : message;
-  const needsDetect = action === 'fullreport' || action === 'synthesize' || looksLikeReport(detectFrom);
-  // Detection and the style guide are independent — overlap them
+  const needsDetect = profile.exemplars > 0 &&
+    (action === 'fullreport' || action === 'synthesize' || looksLikeReport(detectFrom));
+  // Detection and the static block are independent — overlap them; the block is
+  // memoised, so buildKnowledgeSystem's own lookup is free after this
   const [studyType] = await Promise.all([
     needsDetect ? detectStudyType(detectFrom).catch(() => null) : Promise.resolve(null),
-    getKnowledgeBlock()
+    getKnowledgeBlock(action)
   ]);
-  return { system: await buildKnowledgeSystem(ASSIST_SYSTEM, studyType), studyType };
+  const { system, injected } = await buildKnowledgeSystem(ASSIST_SYSTEM, studyType, action);
+  return { system, injected, studyType };
 }
 
 // One free-text turn. Pass onDelta to stream the answer as it is produced; the
 // returned text is always rebuilt from the final message either way, so a
 // mid-flight retry or a server-side model fallback can never corrupt it.
 // onReset fires when a retry discards what has already been emitted.
-async function runFreeform({ messages, systemFor, useRefs, onDelta, onReset, onStatus }) {
+async function runFreeform({ messages, systemFor, injected, label, useRefs, onDelta, onReset, onStatus }) {
   let msgs = messages;
   let text = '';
   let model = MODEL_CHAT;
@@ -830,7 +1076,9 @@ async function runFreeform({ messages, systemFor, useRefs, onDelta, onReset, onS
 
     const u = response.usage || {};
     const viaServerFallback = (u.iterations || []).some(i => i.type === 'fallback_message');
-    console.log(`[claude] ${response.model} freeform${searchEnabled ? '+search' : ''}${onDelta ? '+stream' : ''}${viaServerFallback ? ' (server-fallback)' : ''} in=${u.input_tokens} out=${u.output_tokens} stop=${response.stop_reason}`);
+    const freeformLabel = label || (searchEnabled ? 'radqa' : 'freeform');
+    const cost = recordUsage({ model: response.model, label: freeformLabel, usage: u, injected });
+    console.log(`[claude] ${response.model} label=${freeformLabel}${onDelta ? '+stream' : ''}${viaServerFallback ? ' (server-fallback)' : ''} injected=${injected || 0} in=${u.input_tokens} out=${u.output_tokens} cache_write=${u.cache_creation_input_tokens || 0} cache_read=${u.cache_read_input_tokens || 0} est_cost=${usd(cost)} stop=${response.stop_reason}`);
 
     if (response.stop_reason === 'refusal') {
       // Safety classifiers occasionally decline benign radiology questions
@@ -879,7 +1127,7 @@ async function runFreeform({ messages, systemFor, useRefs, onDelta, onReset, onS
 // Quick-action equivalent of claudeTextFallback, streaming as it goes. Same
 // refusal → fallback-model behaviour; the text returned is the final message's,
 // not the accumulated deltas.
-async function streamClaudeText({ model, system, messages, maxTokens, effort, onDelta, onReset }) {
+async function streamClaudeText({ model, system, messages, maxTokens, effort, injected, label, onDelta, onReset }) {
   const run = async (m, withFallbacks) => {
     const params = {
       model: m,
@@ -896,7 +1144,9 @@ async function streamClaudeText({ model, system, messages, maxTokens, effort, on
     if (onDelta) s.on('text', onDelta);
     const final = await s.finalMessage();
     const u = final.usage || {};
-    console.log(`[claude] ${final.model || m} stream in=${u.input_tokens} out=${u.output_tokens} stop=${final.stop_reason}`);
+    const served = final.model || m;
+    const cost = recordUsage({ model: served, label, usage: u, injected });
+    console.log(`[claude] ${served} label=${label || '-'}+stream injected=${injected || 0} in=${u.input_tokens} out=${u.output_tokens} cache_write=${u.cache_creation_input_tokens || 0} cache_read=${u.cache_read_input_tokens || 0} est_cost=${usd(cost)} stop=${final.stop_reason}`);
     if (final.stop_reason === 'refusal') {
       const err = new Error('This request was declined by the model’s safety filters. Try rephrasing it.');
       err.isRefusal = true;
@@ -931,17 +1181,20 @@ app.post('/api/assist', async (req, res) => {
     // Free text (no quick action armed): one prompt that works out for itself
     // whether this is a question, text work, or a follow-up.
     if (!instruction) {
-      const systemFor = await freeformSystemFactory(message);
+      const { systemFor, injected } = await freeformSystemFactory(message);
+      const useRefs = wantsReferences(req.body);
       const out = await runFreeform({
-        messages, systemFor, useRefs: wantsReferences(req.body)
+        messages, systemFor, injected, useRefs, label: useRefs ? 'radqa' : 'freeform'
       });
       return res.json({ type: 'text', ...out });
     }
 
-    const { system, studyType } = await actionSystemFor(action, message, template);
+    const { system, injected, studyType } = await actionSystemFor(action, message, template);
     let text = await claudeTextFallback({
       model: ACTION_MODEL[action] || MODEL_REPORT,
+      label: action,
       system,
+      injected,
       messages,
       maxTokens: action === 'synthesize' ? 8000 : 4000,
       effort: ACTION_EFFORT[action]
@@ -1015,21 +1268,26 @@ app.post('/api/assist/stream', async (req, res) => {
   sseInit(res);
   try {
     if (!instruction) {
-      const systemFor = await freeformSystemFactory(message);
+      const { systemFor, injected } = await freeformSystemFactory(message);
+      const useRefs = wantsReferences(req.body);
       const out = await runFreeform({
         messages,
         systemFor,
-        useRefs: wantsReferences(req.body),
+        injected,
+        useRefs,
+        label: useRefs ? 'radqa' : 'freeform',
         onDelta: t => send('delta', { t }),
         onReset: () => send('reset', {}),
         onStatus: m => send('status', { message: m })
       });
       send('done', { type: 'text', ...out });
     } else {
-      const { system, studyType } = await actionSystemFor(action, message, template);
+      const { system, injected, studyType } = await actionSystemFor(action, message, template);
       let text = await streamClaudeText({
         model: ACTION_MODEL[action] || MODEL_REPORT,
+        label: action,
         system,
+        injected,
         messages,
         maxTokens: action === 'synthesize' ? 8000 : 4000,
         effort: ACTION_EFFORT[action],
@@ -1135,11 +1393,13 @@ app.post('/api/draft/review', async (req, res) => {
     if (!studyType) {
       try { studyType = await detectStudyType(report); } catch (e) { /* non-fatal */ }
     }
-    const system = await buildKnowledgeSystem(DRAFT_REVIEW_SYSTEM, studyType);
+    const { system, injected } = await buildKnowledgeSystem(DRAFT_REVIEW_SYSTEM, studyType, 'review');
 
     const text = await claudeTextFallback({
       model: MODEL_REVIEW,
+      label: 'review',
       system,
+      injected,
       message: `Review this radiology report draft:\n\n${report}`,
       maxTokens: 8000,
       effort: DRAFT_REVIEW_EFFORT
@@ -1181,6 +1441,7 @@ app.post('/api/draft/review', async (req, res) => {
 async function detectStudyType(report) {
   const text = await claudeTextFallback({
     model: MODEL_DETECT,
+    label: 'detect',
     system: STUDY_TYPE_SYSTEM,
     message: `Identify the study type of this radiology report:\n\n${report.slice(0, 4000)}`,
     maxTokens: 100
@@ -1619,6 +1880,9 @@ async function saveReportSections(report, source = 'final') {
     updated_at: new Date().toISOString()
   }, { onConflict: 'report_id,source' });
   if (error) throw error;
+  // These rows are what impression work is exemplified from — a newly stored
+  // impression should be reachable without waiting out the TTL
+  invalidateImpressionExemplars();
   return {
     stored: true,
     findings: !!parts.findings,
@@ -1770,10 +2034,12 @@ app.post('/api/reports/:id/integrate-notes', async (req, res) => {
       return res.status(400).json({ error: 'No read-out notes to integrate' });
     }
 
-    const system = await buildKnowledgeSystem(READOUT_INTEGRATE_SYSTEM, report.study_type);
+    const { system, injected } = await buildKnowledgeSystem(READOUT_INTEGRATE_SYSTEM, report.study_type, 'readout');
     const text = await claudeTextFallback({
       model: MODEL_REVIEW,
+      label: 'readout',
       system,
+      injected,
       message: `Attending read-out feedback:\n${notes}\n\nResident's current draft:\n${draft}`,
       maxTokens: 8000
     });
@@ -2178,12 +2444,52 @@ app.get('/api/health', (req, res) => {
     service: 'Flow Dictation API',
     llm: {
       detect: MODEL_DETECT, report: MODEL_REPORT, review: MODEL_REVIEW,
-      impression: MODEL_IMPRESSION, synthesize: MODEL_SYNTHESIZE,
+      impression: MODEL_IMPRESSION, radqa: MODEL_RADQA, synthesize: MODEL_SYNTHESIZE,
       chat: MODEL_CHAT,
       fallback: MODEL_FALLBACK
     },
     auth: { google: googleLoginConfigured, password: !!APP_PASSWORD, allowed_emails: ALLOWED_EMAILS.length },
     supabase: supabase ? 'configured' : 'not configured'
+  });
+});
+
+// Per-task cost read-out. Rows are grouped by model AND label, so the same task
+// running on two models (an A/B) shows up as two rows to compare.
+// In-process only: it starts empty on every restart and redeploy.
+app.get('/api/usage/summary', (req, res) => {
+  const rows = [...usageTally.values()].sort((a, b) => b.est_cost - a.est_cost);
+  const sum = field => rows.reduce((acc, r) => acc + r[field], 0);
+  const round = r => ({ ...r, est_cost: Number(r.est_cost.toFixed(6)) });
+
+  // Same rows rolled up each way, for "which model costs most" vs "which task"
+  const rollUp = (keyField) => {
+    const m = new Map();
+    for (const r of rows) {
+      const t = m.get(r[keyField]) || { [keyField]: r[keyField], calls: 0, est_cost: 0 };
+      t.calls += r.calls;
+      t.est_cost += r.est_cost;
+      m.set(r[keyField], t);
+    }
+    return [...m.values()]
+      .sort((a, b) => b.est_cost - a.est_cost)
+      .map(t => ({ ...t, est_cost: Number(t.est_cost.toFixed(6)) }));
+  };
+
+  res.json({
+    since: usageSince,
+    pricing_note: `per-MTok list price; cache writes x${CACHE_WRITE_MULTIPLIER} (1h TTL), cache reads x${CACHE_READ_MULTIPLIER}`,
+    totals: {
+      calls: sum('calls'),
+      input_tokens: sum('input_tokens'),
+      output_tokens: sum('output_tokens'),
+      cache_write_tokens: sum('cache_write_tokens'),
+      cache_read_tokens: sum('cache_read_tokens'),
+      injected_tokens: sum('injected_tokens'),
+      est_cost: Number(sum('est_cost').toFixed(6))
+    },
+    by_model_and_label: rows.map(round),
+    by_model: rollUp('model'),
+    by_label: rollUp('label')
   });
 });
 

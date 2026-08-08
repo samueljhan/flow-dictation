@@ -686,6 +686,13 @@ function assistValidate(req, res) {
   return true;
 }
 
+// Searching costs the better part of ten seconds, so it is opt-in: the Quick
+// Rad Question action, which exists for exactly that. 'radqa' is deliberately
+// NOT in ASSIST_ACTIONS — it runs the ordinary free-text prompt, with search on.
+function wantsReferences({ action, references }) {
+  return references === true || action === 'radqa';
+}
+
 function assistMessages({ action, instruction, message, template, history }) {
   // Synthesize is the one two-part action: prior report + the new information
   const userMessage = action === 'synthesize'
@@ -926,7 +933,7 @@ app.post('/api/assist', async (req, res) => {
     if (!instruction) {
       const systemFor = await freeformSystemFactory(message);
       const out = await runFreeform({
-        messages, systemFor, useRefs: req.body.references !== false
+        messages, systemFor, useRefs: wantsReferences(req.body)
       });
       return res.json({ type: 'text', ...out });
     }
@@ -1012,7 +1019,7 @@ app.post('/api/assist/stream', async (req, res) => {
       const out = await runFreeform({
         messages,
         systemFor,
-        useRefs: req.body.references !== false,
+        useRefs: wantsReferences(req.body),
         onDelta: t => send('delta', { t }),
         onReset: () => send('reset', {}),
         onStatus: m => send('status', { message: m })

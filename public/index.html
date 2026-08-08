@@ -220,11 +220,6 @@
         .message-content strong { color: #ffffff; font-weight: 700; }
         .message-content a { color: #d0d0d0; text-decoration: underline; word-break: break-all; }
         .message-content a:hover { color: #ffffff; }
-        .ref-toggle {
-            display: flex; align-items: center; gap: 7px;
-            font-size: 12px; color: #909090; padding: 0 8px 10px; cursor: pointer;
-        }
-        .ref-toggle input { accent-color: #909090; }
         /* Persistent quick options above the composer */
         .quick-bar {
             display: flex; gap: 7px; overflow-x: auto; margin-bottom: 9px;
@@ -668,6 +663,10 @@
                             <strong>Synthesize Report</strong>
                             <span>Update a prior/template report with new information</span>
                         </div>
+                        <div class="example-prompt" data-action="radqa">
+                            <strong>Quick Rad Question</strong>
+                            <span>Answer with references (Radiopaedia, ACR, RadioGraphics…)</span>
+                        </div>
                     </div>
                 </div>
               </div>
@@ -675,9 +674,6 @@
             <div class="input-container">
               <div class="input-inner">
                 <div class="quick-bar" id="quickBar"></div>
-                <label class="ref-toggle" id="refToggle">
-                    <input type="checkbox" id="refCheckbox" checked> Include references on questions (searches Radiopaedia, ACR, RadioGraphics…)
-                </label>
                 <div class="input-wrapper">
                     <textarea id="userInput" placeholder="Ask a question, or paste text to work on…" rows="1"></textarea>
                     <button id="sendBtn" title="Send message">
@@ -1030,12 +1026,13 @@
             proofread: 'Paste the text to proofread — corrections will be shown in bold (copies as plain text).',
             impression: 'Paste the report body — I’ll generate an Impression: the findings that change management, one per line.',
             fullreport: 'Dictate or paste your findings — I’ll generate a complete structured report with normals filled in. Review it carefully before use.',
-            synthesize: 'Step 1 of 2 — paste the prior report or template you want to start from.'
+            synthesize: 'Step 1 of 2 — paste the prior report or template you want to start from.',
+            radqa: 'Ask your question — I’ll search Radiopaedia, ACR and RadioGraphics and cite what I used. Slower than asking plainly; skip it when you just want the answer.'
         };
         const ACTION_LABELS = {
             describe: 'Describe a Finding', reword: 'Reword', proofread: 'Proofread',
             impression: 'Generate Impression', fullreport: 'Generate Full Report',
-            synthesize: 'Synthesize Report'
+            synthesize: 'Synthesize Report', radqa: 'Quick Rad Question'
         };
 
         // Quick options are always available above the composer. Using one is
@@ -1058,9 +1055,6 @@
         function syncQuickBar() {
             quickBar.querySelectorAll('.quick-chip').forEach(c =>
                 c.classList.toggle('armed', c.dataset.action === pendingAction));
-            // References are a free-text thing: a quick action transforms text
-            // the user already has, and never needs to look anything up
-            document.getElementById('refToggle').style.display = pendingAction ? 'none' : 'flex';
         }
 
         function armAction(action) {
@@ -1363,7 +1357,9 @@
             pendingAction = null;
             synthTemplate = null;
             syncQuickBar();
-            const includeRefs = document.getElementById('refCheckbox').checked;
+            // Reference search is what Quick Rad Question is for; asking plainly
+            // answers from knowledge, which is markedly faster
+            const includeRefs = actionType === 'radqa';
 
             addUserMessage(message);
             userInput.value = '';
@@ -1404,8 +1400,9 @@
                         html: proofreadHtml(message, data.text),
                         plainText, actionType, userText: message, mount
                     });
-                } else if (!actionType) {
-                    // Free text: answers may use **bold**; URLs become clickable links.
+                } else if (!actionType || actionType === 'radqa') {
+                    // Free text and Quick Rad Question share the one prompt, so they
+                    // share this render: answers may use **bold**; URLs become links.
                     // If the answer already has its own References section, trust that
                     // curated list; otherwise surface any cited URLs it didn't write out.
                     const hasOwnRefs = /^\s*(\*\*)?references\b/im.test(data.text);

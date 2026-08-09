@@ -516,6 +516,8 @@ For all text work: standard radiology register (precise, concise, formal, third 
 
 ANYTHING ELSE — answer briefly and directly.
 
+SOURCES — this applies to every answer, whether or not you searched. Never write a URL that did not come back from a search in this same turn. A link recalled from memory cannot be checked, and a citation that 404s or points at the wrong paper is worse for a radiologist than no citation at all. If you are asked for references and no search results are in front of you, say plainly that you cannot cite sources you have not retrieved and that the Quick Rad Question option searches and cites — then stop. Do not offer a remembered list "to get them started". When you do have search results, cite at most three.
+
 Always: never include patient names, MRNs, dates of birth, or other PHI. Plain text only — no markdown headers, no bullet characters, no code fences. **Bold** is allowed for emphasis in answers to questions, never inside report text.`;
 
 // Appended only when the "Include references" toggle is on (tools provided)
@@ -523,7 +525,7 @@ const REFERENCES_ADDENDUM = `When a reference would genuinely help (classificati
 
 Radiopaedia (radiopaedia.org) is the preferred source. Search it first, and include the relevant Radiopaedia article whenever one exists — list it first in the References. Add other sources only when they cover something Radiopaedia does not: ACR Appropriateness Criteria for protocol/appropriateness questions, and RadioGraphics for in-depth reviews.
 
-Do not search for questions you can answer completely from knowledge (basic anatomy, simple definitions), and never search for text work — rewording, proofreading, impressions, and report generation need no references. In those cases include no references rather than padding. Never fabricate a URL: only include links returned by search.`;
+You are only given this tool when the user has explicitly asked for a sourced answer, so search before you answer even when you already know the answer cold, and even when the question repeats one you just answered — being sure is not the same as being able to cite. The one exception is text work: rewording, proofreading, impressions and report generation need no references, so do not search for those. Never fabricate a URL: only include links returned by search.`;
 
 function buildFreeformSystem(searchEnabled, knowledgeBlock) {
   let s = FREEFORM_SYSTEM;

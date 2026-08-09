@@ -26,10 +26,12 @@ const MODEL_DETECT = process.env.MODEL_DETECT || 'claude-haiku-4-5';      // stu
 const MODEL_REPORT = process.env.MODEL_REPORT || 'claude-sonnet-4-6';     // proofread · reword · describe · full report structure
 const MODEL_REVIEW = process.env.MODEL_REVIEW || 'claude-opus-5';         // draft review + integrate-notes
 const MODEL_IMPRESSION = process.env.MODEL_IMPRESSION || 'claude-opus-5'; // Generate Impression + the full report's impression
-const MODEL_RADQA = process.env.MODEL_RADQA || 'claude-opus-5';           // Quick Rad Question
-// Quick Rad Question and free text are one path — same prompt, search toggled —
-// so MODEL_CHAT follows MODEL_RADQA unless it is set on its own.
-const MODEL_CHAT = process.env.MODEL_CHAT || MODEL_RADQA;
+// Quick Rad Question is the most token-heavy path — a single search puts ~14k
+// tokens of results in context — so the per-token rate is what decides its
+// cost, not the tool or the search budget. Measured on one question: identical
+// searches cost $0.21 on Fable and $0.11 on Opus 5.
+const MODEL_RADQA = process.env.MODEL_RADQA || 'claude-opus-5';          // Quick Rad Question (references on)
+const MODEL_CHAT = process.env.MODEL_CHAT || 'claude-opus-5';            // plain free text (no references)
 const MODEL_SYNTHESIZE = process.env.MODEL_SYNTHESIZE || 'claude-opus-5'; // prior report + new info → merged report
 // Used on every path when safety classifiers decline a benign radiology request
 const MODEL_FALLBACK = process.env.MODEL_FALLBACK || 'claude-opus-4-8';
@@ -1008,14 +1010,15 @@ async function actionSystemFor(action, message, template) {
   return { system, injected, studyType };
 }
 
-// One free-text turn. Pass onDelta to stream the answer as it is produced; the
-// returned text is always rebuilt from the final message either way, so a
-// mid-flight retry or a server-side model fallback can never corrupt it.
-// onReset fires when a retry discards what has already been emitted.
-async function runFreeform({ messages, systemFor, injected, label, useRefs, onDelta, onReset, onStatus }) {
+// One free-text turn. The answer is returned whole; nothing is emitted until
+// the final message is in hand, so a mid-flight retry or a server-side model
+// fallback can never leave partial text behind.
+async function runFreeform({ messages, systemFor, injected, label, useRefs }) {
   let msgs = messages;
   let text = '';
-  let model = MODEL_CHAT;
+  // Quick Rad Question (references on) and plain free text are the same prompt
+  // but route separately, so each can be tuned without moving the other.
+  let model = useRefs ? MODEL_RADQA : MODEL_CHAT;
   let searchEnabled = useRefs;
   let triedFallbackModel = false;
   let refsDropped = false;
@@ -1031,7 +1034,6 @@ async function runFreeform({ messages, systemFor, injected, label, useRefs, onDe
     text = '';
     citations.length = 0;
     seenUrls.clear();
-    if (onReset) onReset();
   };
 
   for (let attempt = 0; attempt < 8; attempt++) {
@@ -1045,40 +1047,20 @@ async function runFreeform({ messages, systemFor, injected, label, useRefs, onDe
       ...(FREEFORM_EFFORT && EFFORT_CAPABLE.test(model)
         ? { output_config: { effort: FREEFORM_EFFORT } }
         : {}),
-      // Only the Fable/Opus-5 tier accepts these; MODEL_CHAT is overridable
+      // Only the Fable/Opus-5 tier accepts these; both models are overridable
       ...(FALLBACK_CAPABLE.test(model)
         ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' }
         : {}),
       ...(searchEnabled ? { tools: [REFERENCE_SEARCH_TOOL] } : {})
     };
 
-    let response;
-    if (onDelta) {
-      const s = anthropic.beta.messages.stream(params);
-      s.on('text', onDelta);
-      // A searched answer writes nothing until the results are back, which is
-      // most of its wall clock — say what it is doing instead of stalling
-      if (onStatus) {
-        let lastStatus = null;
-        const status = m => { if (m !== lastStatus) { lastStatus = m; onStatus(m); } };
-        s.on('streamEvent', ev => {
-          if (ev.type !== 'content_block_start') return;
-          const t = ev.content_block && ev.content_block.type;
-          if (t === 'server_tool_use') status('Searching references…');
-          else if (t === 'web_search_tool_result') status('Reading results…');
-          else if (t === 'text') status('');
-        });
-      }
-      response = await s.finalMessage();
-    } else {
-      response = await anthropic.beta.messages.create(params);
-    }
+    const response = await anthropic.beta.messages.create(params);
 
     const u = response.usage || {};
     const viaServerFallback = (u.iterations || []).some(i => i.type === 'fallback_message');
     const freeformLabel = label || (searchEnabled ? 'radqa' : 'freeform');
     const cost = recordUsage({ model: response.model, label: freeformLabel, usage: u, injected });
-    console.log(`[claude] ${response.model} label=${freeformLabel}${onDelta ? '+stream' : ''}${viaServerFallback ? ' (server-fallback)' : ''} injected=${injected || 0} in=${u.input_tokens} out=${u.output_tokens} cache_write=${u.cache_creation_input_tokens || 0} cache_read=${u.cache_read_input_tokens || 0} est_cost=${usd(cost)} stop=${response.stop_reason}`);
+    console.log(`[claude] ${response.model} label=${freeformLabel}${viaServerFallback ? ' (server-fallback)' : ''} injected=${injected || 0} in=${u.input_tokens} out=${u.output_tokens} cache_write=${u.cache_creation_input_tokens || 0} cache_read=${u.cache_read_input_tokens || 0} est_cost=${usd(cost)} stop=${response.stop_reason}`);
 
     if (response.stop_reason === 'refusal') {
       // Safety classifiers occasionally decline benign radiology questions
@@ -1122,53 +1104,6 @@ async function runFreeform({ messages, systemFor, injected, label, useRefs, onDe
   citations.sort((a, b) =>
     (b.url.includes('radiopaedia.org') ? 1 : 0) - (a.url.includes('radiopaedia.org') ? 1 : 0));
   return { text: text.trim(), citations, refs_dropped: refsDropped, truncated };
-}
-
-// Quick-action equivalent of claudeTextFallback, streaming as it goes. Same
-// refusal → fallback-model behaviour; the text returned is the final message's,
-// not the accumulated deltas.
-async function streamClaudeText({ model, system, messages, maxTokens, effort, injected, label, onDelta, onReset }) {
-  const run = async (m, withFallbacks) => {
-    const params = {
-      model: m,
-      max_tokens: maxTokens,
-      system,
-      messages,
-      ...(effort && EFFORT_CAPABLE.test(m) ? { output_config: { effort } } : {})
-    };
-    const s = withFallbacks && FALLBACK_CAPABLE.test(m)
-      ? anthropic.beta.messages.stream({
-          ...params, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default'
-        })
-      : anthropic.messages.stream(params);
-    if (onDelta) s.on('text', onDelta);
-    const final = await s.finalMessage();
-    const u = final.usage || {};
-    const served = final.model || m;
-    const cost = recordUsage({ model: served, label, usage: u, injected });
-    console.log(`[claude] ${served} label=${label || '-'}+stream injected=${injected || 0} in=${u.input_tokens} out=${u.output_tokens} cache_write=${u.cache_creation_input_tokens || 0} cache_read=${u.cache_read_input_tokens || 0} est_cost=${usd(cost)} stop=${final.stop_reason}`);
-    if (final.stop_reason === 'refusal') {
-      const err = new Error('This request was declined by the model’s safety filters. Try rephrasing it.');
-      err.isRefusal = true;
-      throw err;
-    }
-    return final.content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
-  };
-  try {
-    return await run(model, true);
-  } catch (e) {
-    // Self-heal if a model's fallback support differs from FALLBACK_CAPABLE
-    if (/does not support the .?fallbacks/i.test(e.message || '')) {
-      console.warn(`[claude] ${model} rejected fallbacks — retrying without`);
-      if (onReset) onReset();
-      return await run(model, false);
-    }
-    if (e.isRefusal && MODEL_FALLBACK && MODEL_FALLBACK !== model) {
-      if (onReset) onReset();
-      return await run(MODEL_FALLBACK, true);
-    }
-    throw e;
-  }
 }
 
 app.post('/api/assist', async (req, res) => {
@@ -1228,89 +1163,6 @@ app.post('/api/assist', async (req, res) => {
     console.error('Assist error:', error);
     res.status(500).json({ error: 'Assist request failed', details: error.message });
   }
-});
-
-// Server-Sent Events. Same answers as /api/assist, delivered as they are
-// written — the wait before the first words is what makes the app feel slow.
-// Events: delta {t} · reset {} (discard what was shown) · status {message}
-//         done {type,text,citations,refs_dropped,truncated} · error {error}
-// The client renders deltas live but re-renders from `done`, which is
-// authoritative — deltas are cosmetic.
-function sseInit(res) {
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream; charset=utf-8',
-    'Cache-Control': 'no-cache, no-transform',
-    'Connection': 'keep-alive',
-    'X-Accel-Buffering': 'no'   // don't let a proxy sit on the chunks
-  });
-  if (res.flushHeaders) res.flushHeaders();
-}
-
-app.post('/api/assist/stream', async (req, res) => {
-  if (!assistValidate(req, res)) return;
-  const { action, message, history, template } = req.body;
-  const instruction = action && ASSIST_ACTIONS[action] ? ASSIST_ACTIONS[action] : null;
-  // describe returns a findings/impression pair the client renders as one unit
-  if (action === 'describe') {
-    return res.status(400).json({ error: 'Describe returns structured JSON — use /api/assist' });
-  }
-  const messages = assistMessages({ action, instruction, message, template, history });
-
-  // res, not req: the request stream closes as soon as its body is parsed,
-  // which is immediately — only the response tells us the client went away
-  let aborted = false;
-  res.on('close', () => { aborted = true; });
-  const send = (event, data) => {
-    if (aborted || res.writableEnded) return;
-    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-  };
-
-  sseInit(res);
-  try {
-    if (!instruction) {
-      const { systemFor, injected } = await freeformSystemFactory(message);
-      const useRefs = wantsReferences(req.body);
-      const out = await runFreeform({
-        messages,
-        systemFor,
-        injected,
-        useRefs,
-        label: useRefs ? 'radqa' : 'freeform',
-        onDelta: t => send('delta', { t }),
-        onReset: () => send('reset', {}),
-        onStatus: m => send('status', { message: m })
-      });
-      send('done', { type: 'text', ...out });
-    } else {
-      const { system, injected, studyType } = await actionSystemFor(action, message, template);
-      let text = await streamClaudeText({
-        model: ACTION_MODEL[action] || MODEL_REPORT,
-        label: action,
-        system,
-        injected,
-        messages,
-        maxTokens: action === 'synthesize' ? 8000 : 4000,
-        effort: ACTION_EFFORT[action],
-        onDelta: t => send('delta', { t }),
-        onReset: () => send('reset', {})
-      });
-      if (action === 'fullreport') {
-        // The impression is rewritten on MODEL_IMPRESSION after the body lands,
-        // so say what the pause is for — the text visibly changes at the end
-        send('status', { message: 'Refining impression…' });
-        try {
-          text = await upgradeImpression(text, studyType);
-        } catch (e) {
-          console.error('Impression pass failed — keeping original impression:', e.message);
-        }
-      }
-      send('done', { type: 'text', text });
-    }
-  } catch (error) {
-    console.error('Assist stream error:', error);
-    send('error', { error: error.message || 'Assist request failed' });
-  }
-  if (!res.writableEnded) res.end();
 });
 
 app.post('/api/assist/feedback', async (req, res) => {

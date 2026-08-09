@@ -306,9 +306,6 @@
             vertical-align: -2px; margin-right: 6px;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
-        /* Note under a streaming answer: what it's doing while nothing is written */
-        .stream-status { display: block; color: #909090; font-size: 13px; }
-        .stream-status:not(:first-child) { margin-top: 8px; }
 
         /* ---------- Draft page ---------- */
         #page-draft { padding: 24px 32px; }
@@ -1182,122 +1179,21 @@
             scrollChat();
         }
 
-        function addLoadingMessage() {
+        function addLoadingMessage(note) {
             clearWelcome();
             const div = document.createElement('div');
             div.className = 'message assistant';
-            div.innerHTML = '<div class="message-content"><span class="spinner"></span>Thinking…</div>';
+            div.innerHTML = '<div class="message-content"><span class="spinner"></span>' +
+                escapeHtml(note || 'Thinking…') + '</div>';
             chatContainer.appendChild(div);
             scrollChat();
             return div;
         }
 
-        // Follow a streaming answer only while the user is already at the bottom —
-        // scrolling up to read something must not be yanked back down.
-        function nearBottom() {
-            const s = chatContainer.parentElement;
-            return s.scrollHeight - s.scrollTop - s.clientHeight < 80;
-        }
-
-        // The live bubble a streamed answer is written into. Replaced wholesale by
-        // the formatted render once the final text arrives.
-        function addStreamingMessage() {
-            clearWelcome();
+        // Render an assistant response. plainText is EXACTLY what Copy places on the clipboard.
+        function addAssistantResponse({ html, plainText, actionType, userText }) {
             const div = document.createElement('div');
             div.className = 'message assistant';
-            const content = document.createElement('div');
-            content.className = 'message-content';
-            const textEl = document.createElement('span');
-            const statusEl = document.createElement('span');
-            statusEl.className = 'stream-status';
-            statusEl.innerHTML = '<span class="spinner"></span>Thinking…';
-            content.appendChild(textEl);
-            content.appendChild(statusEl);
-            div.appendChild(content);
-            chatContainer.appendChild(div);
-            scrollChat();
-
-            let text = '';
-            return {
-                div,
-                append(t) {
-                    const follow = nearBottom();
-                    text += t;
-                    textEl.textContent = text;
-                    statusEl.style.display = 'none';
-                    if (follow) scrollChat();
-                },
-                // '' clears the note; while text is streaming there is nothing to say
-                status(msg) {
-                    if (!msg) { statusEl.style.display = text ? 'none' : ''; return; }
-                    statusEl.innerHTML = '<span class="spinner"></span>' + escapeHtml(msg);
-                    statusEl.style.display = '';
-                    if (nearBottom()) scrollChat();
-                },
-                reset() {
-                    text = '';
-                    textEl.textContent = '';
-                    statusEl.style.display = '';
-                },
-                fail(msg) {
-                    content.innerHTML = '<span style="color:#dc7a7a">⚠️ ' + escapeHtml(msg) + '</span>';
-                }
-            };
-        }
-
-        // Streams an assist turn over SSE, resolving with the final `done` payload.
-        // Deltas are for display only — `done` carries the authoritative text.
-        async function streamAssist(body, { onDelta, onStatus, onReset }) {
-            const res = await fetch('/api/assist/stream', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            });
-            if (!res.ok) {
-                const data = await res.json().catch(() => ({}));
-                if (res.status === 401 && data.login_required) {
-                    window.location.href = '/login?error=session_expired';
-                    throw new Error('Session expired');
-                }
-                throw new Error(data.error || ('HTTP ' + res.status));
-            }
-            const reader = res.body.getReader();
-            const decoder = new TextDecoder();
-            let buf = '', done = null, failure = null;
-            for (;;) {
-                const { value, done: finished } = await reader.read();
-                if (finished) break;
-                buf += decoder.decode(value, { stream: true });
-                let split;
-                while ((split = buf.indexOf('\n\n')) !== -1) {
-                    const frame = buf.slice(0, split);
-                    buf = buf.slice(split + 2);
-                    let event = 'message', data = '';
-                    for (const line of frame.split('\n')) {
-                        if (line.startsWith('event:')) event = line.slice(6).trim();
-                        else if (line.startsWith('data:')) data += line.slice(5);
-                    }
-                    if (!data) continue;
-                    let payload;
-                    try { payload = JSON.parse(data); } catch (e) { continue; }
-                    if (event === 'delta') onDelta(payload.t);
-                    else if (event === 'status') onStatus(payload.message);
-                    else if (event === 'reset') onReset();
-                    else if (event === 'done') done = payload;
-                    else if (event === 'error') failure = payload.error;
-                }
-            }
-            if (failure) throw new Error(failure);
-            if (!done) throw new Error('The connection dropped before the answer finished.');
-            return done;
-        }
-
-        // Render an assistant response. plainText is EXACTLY what Copy places on the clipboard.
-        // mount: an existing streaming bubble to render into, in place of a new one.
-        function addAssistantResponse({ html, plainText, actionType, userText, mount }) {
-            const div = mount || document.createElement('div');
-            div.className = 'message assistant';
-            div.innerHTML = '';
             const content = document.createElement('div');
             content.className = 'message-content';
             content.innerHTML = html;
@@ -1356,7 +1252,7 @@
             fb.querySelector('.fb-skip').addEventListener('click', () => finishFeedback('Feedback skipped.'));
 
             div.appendChild(content);
-            if (!mount) chatContainer.appendChild(div);
+            chatContainer.appendChild(div);
             scrollChat();
         }
 
@@ -1407,25 +1303,15 @@
 
             const historyToSend = chatHistory.slice(-12);
             const body = { action: actionType, message, history: historyToSend, references: includeRefs, template };
-            // Describe returns a findings/impression pair and Proofread needs the
-            // whole text before it can bold what changed — both stay buffered.
-            // Everything else streams, so the answer starts arriving immediately.
-            const canStream = actionType !== 'describe' && actionType !== 'proofread';
-            const live = canStream ? addStreamingMessage() : null;
-            const loading = canStream ? null : addLoadingMessage();
+            // Answers arrive whole. Text appearing a word at a time pulls the eye
+            // back to a half-formed sentence; a report you can read in one go is
+            // worth the wait.
+            // A searched answer takes ~20s, most of it before any text exists —
+            // say what the wait is for rather than showing a bare spinner
+            const loading = addLoadingMessage(includeRefs ? 'Searching references…' : 'Thinking…');
             try {
-                let data;
-                if (canStream) {
-                    data = await streamAssist(body, {
-                        onDelta: t => live.append(t),
-                        onStatus: m => live.status(m),
-                        onReset: () => live.reset()
-                    });
-                } else {
-                    data = await api('/api/assist', { method: 'POST', body });
-                    loading.remove();
-                }
-                const mount = live ? live.div : undefined;
+                const data = await api('/api/assist', { method: 'POST', body });
+                loading.remove();
 
                 let plainText;
                 if (data.type === 'describe') {
@@ -1433,12 +1319,12 @@
                     const html =
                         '<span class="section-label">FINDINGS</span>' + escapeHtml(data.findings) +
                         '\n\n<span class="section-label">IMPRESSION</span>' + escapeHtml(data.impression);
-                    addAssistantResponse({ html, plainText, actionType, userText: message, mount });
+                    addAssistantResponse({ html, plainText, actionType, userText: message });
                 } else if (actionType === 'proofread') {
                     plainText = data.text;
                     addAssistantResponse({
                         html: proofreadHtml(message, data.text),
-                        plainText, actionType, userText: message, mount
+                        plainText, actionType, userText: message
                     });
                 } else if (!actionType || actionType === 'radqa') {
                     // Free text and Quick Rad Question share the one prompt, so they
@@ -1465,10 +1351,10 @@
                     if (data.truncated) {
                         html += '\n\n<span style="color:#e0a832; font-size:12px">(Answer was cut off at the length limit — ask a follow-up to continue.)</span>';
                     }
-                    addAssistantResponse({ html, plainText, actionType, userText: message, mount });
+                    addAssistantResponse({ html, plainText, actionType, userText: message });
                 } else {
                     plainText = data.text;
-                    addAssistantResponse({ html: escapeHtml(data.text), plainText, actionType, userText: message, mount });
+                    addAssistantResponse({ html: escapeHtml(data.text), plainText, actionType, userText: message });
                 }
 
                 chatHistory.push({ role: 'user', content: message });
@@ -1484,8 +1370,7 @@
                     action_type: actionType || 'freeform'
                 }}).catch(e => console.error('History save failed:', e));
             } catch (e) {
-                if (live) live.fail(e.message);
-                else loading.querySelector('.message-content').innerHTML =
+                loading.querySelector('.message-content').innerHTML =
                     '<span style="color:#dc7a7a">⚠️ ' + escapeHtml(e.message) + '</span>';
             }
             userInput.focus();

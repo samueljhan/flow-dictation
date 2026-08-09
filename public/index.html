@@ -1332,8 +1332,10 @@
                     // If the answer already has its own References section, trust that
                     // curated list; otherwise surface any cited URLs it didn't write out.
                     const hasOwnRefs = /^\s*(\*\*)?references\b/im.test(data.text);
+                    // Top 3 only — the server already caps this, so the slice is
+                    // belt-and-braces for an older payload
                     const extraCites = hasOwnRefs ? []
-                        : (data.citations || []).filter(c => c.url && !data.text.includes(c.url));
+                        : (data.citations || []).filter(c => c.url && !data.text.includes(c.url)).slice(0, 3);
                     plainText = data.text.replace(/\*\*(.+?)\*\*/g, '$1');
                     let html = linkifyEscaped(escapeHtml(data.text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>'));
                     if (extraCites.length) {

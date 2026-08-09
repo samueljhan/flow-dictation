@@ -519,7 +519,7 @@ ANYTHING ELSE — answer briefly and directly.
 Always: never include patient names, MRNs, dates of birth, or other PHI. Plain text only — no markdown headers, no bullet characters, no code fences. **Bold** is allowed for emphasis in answers to questions, never inside report text.`;
 
 // Appended only when the "Include references" toggle is on (tools provided)
-const REFERENCES_ADDENDUM = `When a reference would genuinely help (classification systems, management guidelines, follow-up criteria, entities the user may want to read further on), use web search to find the specific relevant page and end your answer with a short 'References' line listing 1-3 links with one-phrase descriptions.
+const REFERENCES_ADDENDUM = `When a reference would genuinely help (classification systems, management guidelines, follow-up criteria, entities the user may want to read further on), use web search to find the specific relevant page and end your answer with a short 'References' line listing the best 1-3 links with one-phrase descriptions. Three is a hard ceiling — pick the most useful sources and drop the rest rather than listing everything you found.
 
 Radiopaedia (radiopaedia.org) is the preferred source. Search it first, and include the relevant Radiopaedia article whenever one exists — list it first in the References. Add other sources only when they cover something Radiopaedia does not: ACR Appropriateness Criteria for protocol/appropriateness questions, and RadioGraphics for in-depth reviews.
 
@@ -547,6 +547,10 @@ const REFERENCE_SEARCH_TOOL = {
   ],
   max_uses: 3
 };
+
+// Answers cite at most this many sources — enforced in the prompt, in what the
+// API returns, and again when the client renders a fallback list.
+const MAX_REFERENCES = 3;
 
 const VALID_RPR = /^RPR[1-4]$/;
 
@@ -1100,10 +1104,18 @@ async function runFreeform({ messages, systemFor, injected, label, useRefs }) {
     truncated = response.stop_reason === 'max_tokens';
     break;
   }
-  // Radiopaedia first in any citation list we render
+  // Radiopaedia first in any citation list we render, then keep only the top
+  // few: a search can collect a dozen sources, and a wall of links buries the
+  // one worth opening. The model's own References list is capped in the prompt;
+  // this bounds the fallback list the client renders when it didn't write one.
   citations.sort((a, b) =>
     (b.url.includes('radiopaedia.org') ? 1 : 0) - (a.url.includes('radiopaedia.org') ? 1 : 0));
-  return { text: text.trim(), citations, refs_dropped: refsDropped, truncated };
+  return {
+    text: text.trim(),
+    citations: citations.slice(0, MAX_REFERENCES),
+    refs_dropped: refsDropped,
+    truncated
+  };
 }
 
 app.post('/api/assist', async (req, res) => {

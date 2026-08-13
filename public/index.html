@@ -619,15 +619,13 @@
         /* Mobile: single column everywhere; header tabs scroll horizontally */
         @media (max-width: 768px) {
             .container { height: 100vh; height: 100dvh; }
-            /* Title + hamburger on one row, tabs wrap to a second full-width row */
-            .header {
-                flex-wrap: wrap; align-items: center; gap: 0;
-                padding-left: 16px; padding-right: 16px;
-            }
-            .header h1 { font-size: 17px; padding: 12px 0 8px; flex: 1; }
-            .header-menu { margin-left: 0; }
-            .tabs { order: 3; width: 100%; margin: 0 -16px; padding: 0 16px; }
-            .tab { padding: 8px 14px; }
+            /* Tabs stay on the title row, right-aligned, at every width —
+               they were being forced onto a second row even when they fit.
+               When space genuinely runs out the tabs strip scrolls
+               horizontally (base rule) instead of wrapping. */
+            .header { padding-left: 16px; padding-right: 16px; gap: 12px; }
+            .header h1 { font-size: 17px; }
+            .tab { padding: 0 10px; }
             .chat-container { padding: 16px 14px; }
             .input-container { padding: 12px 14px 16px; }
             .welcome-message { padding: 20px 10px; }

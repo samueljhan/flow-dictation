@@ -485,23 +485,30 @@
         .final-toolbar label { font-size: 13px; font-weight: 600; color: #d0d0d0; }
         .final-toolbar select { min-width: 260px; background: #333; }
         /* Filter bar: wraps by whole label+control groups, never mid-pair. */
-        .filter-bar { flex-wrap: wrap; row-gap: 10px; }
-        .filter-group {
-            display: flex; align-items: center; gap: 8px;
-            white-space: nowrap;          /* the label itself never breaks */
-            min-width: 0;                 /* lets the group shrink instead of overflowing */
+        /* Wide widths: a two-row grid of three label/control pairs sharing
+           column tracks, so the control under Shift starts at exactly the same
+           x as Shift's, and so on across all three pairs:
+              Shift      | Section | RPR
+              Study type | Search  | Clear · Delete Shift · count
+           display:contents lifts each group's label and control into the grid;
+           labels right-align against their controls. */
+        .filter-bar {
+            display: grid;
+            grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr) max-content minmax(0, 1fr);
+            column-gap: 12px; row-gap: 10px; align-items: center;
         }
-        /* Shrink before wrapping: the text inputs give up width first, down to a
-           still-usable floor, and only then does a whole group move to the next row. */
-        .filter-group input { flex: 1 1 170px; min-width: 120px; }
-        .filter-actions { display: flex; align-items: center; gap: 10px; }
-        /* In the stacked grid the actions row spans the control column, so the
-           count sits right-aligned on the Clear/Delete row */
-        .filter-actions .status { margin-left: auto; }
-        /* The 260px floor exists for the shift dropdown, whose names are long.
-           RPR only ever holds "All" / "RPR1-4" / "Ungraded", and inheriting that
-           floor is what pushed the bar onto a second row ~150px early. */
-        .filter-group #rvGrade { min-width: 120px; }
+        .filter-bar .filter-group { display: contents; }
+        .filter-bar .filter-group > label { text-align: right; white-space: nowrap; }
+        .filter-bar .filter-group > select,
+        .filter-bar .filter-group > input { width: 100%; min-width: 0; }
+        /* Breathing room between one pair's control and the next pair's label
+           (groups 2, 3 and 5 hold the labels of columns 3 and 5) */
+        .filter-bar .filter-group:nth-child(2) > label,
+        .filter-bar .filter-group:nth-child(3) > label,
+        .filter-bar .filter-group:nth-child(5) > label { margin-left: 16px; }
+        /* Buttons live in the last control cell, left-aligned with RPR's box */
+        .filter-actions { grid-column: 6; display: flex; align-items: center; gap: 10px; min-width: 0; }
+        .filter-actions .status { margin-left: auto; white-space: nowrap; }
         .filter-bar > .status { margin-left: 2px; }
         .report-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 18px; }
         /* Full-width result rows with aligned columns (ID, study type, study ID,
@@ -668,7 +675,7 @@
                 column-gap: 12px; row-gap: 10px; align-items: center;
             }
             .filter-bar .filter-group { display: contents; }
-            .filter-bar .filter-group > label { text-align: right; }
+            .filter-bar .filter-group > label { text-align: right; margin-left: 0; }
             .filter-bar .filter-group > select,
             .filter-bar .filter-group > input { width: 100%; min-width: 0; }
             /* Buttons and the bulk controls live in the control column, so

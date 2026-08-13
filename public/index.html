@@ -600,15 +600,27 @@
         .grade-btn { padding: 4px 10px; font-size: 12px; }
         .grade-btn.on { background: #e0e0e0; color: #1a1a1a; }
 
-        .final-columns { display: flex; gap: 24px; margin-bottom: 16px; }
-        .final-col { flex: 1 1 50%; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+        /* Draft and final boxes share one grid row, so they are always exactly
+           equal height — whichever side is taller sets the row, the other
+           stretches to match. The save row sits in its own row directly under
+           the final box, just below the shared bottom edge. */
+        .final-columns {
+            display: grid; grid-template-columns: 1fr 1fr;
+            column-gap: 24px; row-gap: 8px; margin-bottom: 16px;
+        }
+        .final-col { display: contents; }
+        .final-col:first-child > .col-title { grid-column: 1; grid-row: 1; }
+        #finalDraftView { grid-column: 1; grid-row: 2; }
+        .final-col:last-child > .col-title { grid-column: 2; grid-row: 1; }
+        #finalText { grid-column: 2; grid-row: 2; }
+        .final-save-row { grid-column: 2; grid-row: 3; }
         .col-title { font-size: 11px; font-weight: 700; color: #909090; text-transform: uppercase; letter-spacing: 0.8px; }
         #finalDraftView {
             background: #333333; border: 1px solid #404040; border-radius: 8px;
             padding: 14px; font-size: 13px; line-height: 1.6; white-space: pre-wrap;
             font-family: inherit; max-height: 420px; overflow-y: auto; user-select: text; color: #d0d0d0;
         }
-        #finalText { min-height: 300px; max-height: 420px; font-size: 13px; background: #242424; }
+        #finalText { min-height: 300px; max-height: 420px; font-size: 13px; background: #242424; overflow-y: auto; }
         .final-save-row { display: flex; align-items: center; gap: 10px; }
         .diff-view {
             background: #333333; border: 1px solid #404040; border-radius: 8px;
@@ -681,7 +693,8 @@
                further than its desktop floor. */
             .draft-right { min-width: 170px; }
             .final-scroll { padding: 14px; }
-            .final-columns { flex-direction: column; gap: 14px; }
+            .final-columns { display: flex; flex-direction: column; gap: 14px; }
+            .final-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
             .final-toolbar { flex-wrap: wrap; }
             .final-toolbar select { min-width: 0; flex: 1; }
             /* Stacked mode: one label/control grid. display:contents lifts each
@@ -917,7 +930,7 @@
                             <div class="col-title">Final report (attending-corrected)</div>
                             <textarea id="finalText" placeholder="Paste the finalized report here…"></textarea>
                             <div class="final-save-row">
-                                <button class="primary" id="saveFinalBtn">Save Final</button>
+                                <button class="ghost" id="saveFinalBtn">Save Final</button>
                                 <span class="status" id="finalStatus"></span>
                             </div>
                         </div>
@@ -936,7 +949,7 @@
                         </div>
                         <input id="gradeNote" placeholder="What I missed / lesson (optional)">
                         <div class="grade-actions">
-                            <button class="primary" id="saveGradeBtn">Save Grade</button>
+                            <button class="ghost" id="saveGradeBtn">Save Grade</button>
                             <span class="status" id="gradeStatus"></span>
                         </div>
                     </div>

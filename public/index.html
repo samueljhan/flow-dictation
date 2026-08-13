@@ -635,14 +635,12 @@
             .example-prompt { height: 60px; padding: 10px; }
             .nav-prompts { grid-template-columns: repeat(2, 1fr); }
             #page-draft { padding: 14px; }
-            /* Stacked layout — dragging is meaningless, so the handles go away
-               and any dragged sizes are overridden back to auto */
-            .draft-layout { flex-direction: column; overflow-y: auto; gap: 14px; }
-            .draft-left { flex: none !important; min-height: 260px; }
-            .draft-right { overflow-y: visible; min-width: 0; gap: 14px; }
-            .draft-right-top { overflow-y: visible; flex: none; gap: 14px; }
-            .splitter-v, .splitter-h { display: none !important; }
-            #notesPanel { height: auto !important; }
+            /* The Draft page deliberately KEEPS its split layout at narrow
+               widths — dictation runs in a half-width window beside PACS, and
+               stacking the report under the panels made both useless. The
+               splitter stays live; the right column just gets to shrink
+               further than its desktop floor. */
+            .draft-right { min-width: 170px; }
             .final-scroll { padding: 14px; }
             .final-columns { flex-direction: column; gap: 14px; }
             .final-toolbar { flex-wrap: wrap; }

@@ -588,6 +588,9 @@
         .modal h3 { color: #e0e0e0; font-size: 17px; }
         .modal p { font-size: 13px; color: #909090; line-height: 1.5; }
         .modal input { background: #333; }
+        .modal select { background: #333; }
+        .modal-label { font-size: 13px; font-weight: 600; color: #d0d0d0; margin-bottom: -6px; }
+        .modal .opt { font-weight: 400; color: #808080; font-size: 11px; }
         .modal-buttons { display: flex; gap: 10px; justify-content: flex-end; }
 
         .toast {
@@ -751,6 +754,14 @@
                             <div id="currentShiftName">Loading…</div>
                             <button class="ghost" id="newShiftBtn">Start New Shift</button>
                         </div>
+                        <!-- The section is a property of the shift: set once here (or in
+                             the new-shift dialog) and stamped onto each report as it is
+                             saved. Changing it affects future saves only. -->
+                        <label>Section <span class="opt">(stamps new saves)</span></label>
+                        <div class="section-row">
+                            <select id="shiftSectionSelect"></select>
+                            <input id="shiftSectionOther" autocomplete="off" placeholder="Section name…" style="display:none">
+                        </div>
                     </div>
                     <div class="panel" id="draftsPanel">
                         <div class="panel-title">Drafts</div>
@@ -767,11 +778,6 @@
                         </div>
                         <label>Study ID <span class="opt">(optional)</span></label>
                         <input id="studyIdInput" autocomplete="off" placeholder="Accession, initials, room…">
-                        <label>Section <span class="opt">(optional)</span></label>
-                        <div class="section-row">
-                            <select id="sectionSelect"></select>
-                            <input id="sectionOtherInput" autocomplete="off" placeholder="Section name…" style="display:none">
-                        </div>
                         <label>Report Type</label>
                         <div class="segmented">
                             <button class="seg" id="segPrelim">Prelim</button>
@@ -920,8 +926,13 @@
     <div class="modal-overlay" id="shiftNameModal">
         <div class="modal">
             <h3>Start New Shift</h3>
-            <p>Edit the shift name if needed, then create.</p>
+            <p>Edit the shift name and select a section if needed, then create.</p>
             <input type="text" id="shiftNameInput">
+            <label class="modal-label">Section <span class="opt">(optional)</span></label>
+            <div class="section-row">
+                <select id="newShiftSection"></select>
+                <input id="newShiftSectionOther" autocomplete="off" placeholder="Section name…" style="display:none">
+            </div>
             <div class="modal-buttons">
                 <button class="ghost" id="shiftNameCancel">Cancel</button>
                 <button class="primary" id="shiftNameCreate">Create Shift</button>
@@ -1467,6 +1478,8 @@
 
         // ==================== Modal helpers (promise-based) ====================
 
+        // Resolves { name, subspecialty } on Create, null on Cancel. The section
+        // chosen here becomes the shift's setting, stamped onto each save.
         function askShiftName(defaultName) {
             return new Promise(resolve => {
                 const modal = document.getElementById('shiftNameModal');
@@ -1474,6 +1487,9 @@
                 const create = document.getElementById('shiftNameCreate');
                 const cancel = document.getElementById('shiftNameCancel');
                 input.value = defaultName;
+                // A new shift starts from a blank section — deliberately no
+                // carry-over from the previous shift
+                setSectionOn(newShiftSection, newShiftSectionOther, null);
                 modal.classList.add('active');
                 input.focus();
                 function cleanup(v) {
@@ -1481,7 +1497,10 @@
                     create.onclick = cancel.onclick = null;
                     resolve(v);
                 }
-                create.onclick = () => cleanup(input.value.trim() || defaultName);
+                create.onclick = () => cleanup({
+                    name: input.value.trim() || defaultName,
+                    subspecialty: sectionPairValue(newShiftSection, newShiftSectionOther)
+                });
                 cancel.onclick = () => cleanup(null);
             });
         }
@@ -1516,21 +1535,23 @@
         const studyTypeDropdown = document.getElementById('studyTypeDropdown');
         const studyIdInput = document.getElementById('studyIdInput');
 
-        // ==================== SECTIONS (manual only) ====================
-        // The radiologist picks the section they're reading; blank stays blank.
-        // Nothing here derives or auto-fills — the select and the bulk shift
-        // action on the Review page are the only writers.
+        // ==================== SECTIONS (shift-level, manual only) ====================
+        // The section is set once per shift — in the new-shift dialog or the
+        // shift header control — and the SERVER stamps it onto each report at
+        // save time. Nothing here writes reports.subspecialty directly, and
+        // nothing derives or auto-fills: a shift with no section stamps null.
         const STANDARD_SECTIONS = [
             'Neuroradiology', 'Musculoskeletal Radiology', 'Body / Abdominal Imaging',
             'Cardiothoracic Radiology', 'Breast Imaging', 'Pediatric Radiology',
-            'Nuclear Radiology', 'Interventional Radiology'
+            'Nuclear Radiology', 'Interventional Radiology', 'On-Call'
         ];
         const OTHER_SECTION = '__other__';
         let customSections = [];        // typed via "Other", most recently used first
-        let stickySubspecialty = null;  // last section saved in the active shift
 
-        const sectionSelect = document.getElementById('sectionSelect');
-        const sectionOtherInput = document.getElementById('sectionOtherInput');
+        const shiftSectionSelect = document.getElementById('shiftSectionSelect');
+        const shiftSectionOther = document.getElementById('shiftSectionOther');
+        const newShiftSection = document.getElementById('newShiftSection');
+        const newShiftSectionOther = document.getElementById('newShiftSectionOther');
 
         // One option list, shared by every section dropdown:
         // blank · standard · remembered customs · Other (customs sit above Other)
@@ -1542,50 +1563,49 @@
                 '<option value="' + OTHER_SECTION + '">Other…</option>';
         }
 
-        function rebuildSectionSelect() {
-            const keep = sectionSelect.value;
-            sectionSelect.innerHTML = sectionOptionsHtml('—');
-            sectionSelect.value = keep;
-            if (sectionSelect.value !== keep) sectionSelect.value = '';
-            syncSectionOther();
+        // "Other" reveals the pair's free-text input inline; anything else hides
+        // and clears it. Shared by the shift header, the dialog, and Review bulk.
+        function syncOtherInput(sel, other) {
+            const isOther = sel.value === OTHER_SECTION;
+            other.style.display = isOther ? '' : 'none';
+            sel.classList.toggle('has-other', isOther);
+            if (!isOther) other.value = '';
         }
 
-        // "Other" reveals its free-text input inline; anything else hides and clears it
-        function syncSectionOther() {
-            const other = sectionSelect.value === OTHER_SECTION;
-            sectionOtherInput.style.display = other ? '' : 'none';
-            sectionSelect.classList.toggle('has-other', other);
-            if (!other) sectionOtherInput.value = '';
-        }
-        sectionSelect.addEventListener('change', () => {
-            syncSectionOther();
-            if (sectionSelect.value === OTHER_SECTION) sectionOtherInput.focus();
-        });
-
-        // The value a save stores: null when blank — never a derived default
-        function currentSection() {
-            if (sectionSelect.value === OTHER_SECTION) return sectionOtherInput.value.trim() || null;
-            return sectionSelect.value || null;
+        // The pair's value: Other -> the typed text verbatim; blank -> null
+        function sectionPairValue(sel, other) {
+            if (sel.value === OTHER_SECTION) return other.value.trim() || null;
+            return sel.value || null;
         }
 
-        // Show a stored value; an unlisted custom (stale list) gets injected so
-        // loading an old draft never silently blanks its section
-        function setSectionValue(v) {
+        // Show a value on a select; an unlisted custom (stale list) is injected
+        // so a shift's stored section never displays as blank
+        function setSectionOn(sel, other, v) {
             const value = (v || '').trim();
             if (value && ![...STANDARD_SECTIONS, ...customSections].includes(value)) {
                 customSections.unshift(value);
-                rebuildSectionSelect();
+                rebuildSectionPickers();
             }
-            sectionSelect.value = value;
-            if (sectionSelect.value !== value) sectionSelect.value = '';
-            syncSectionOther();
+            sel.value = value;
+            if (sel.value !== value) sel.value = '';
+            syncOtherInput(sel, other);
         }
 
-        // A custom value just saved moves to the front of the remembered list (MRU)
+        function rebuildSectionPickers() {
+            for (const [sel, other] of [[shiftSectionSelect, shiftSectionOther], [newShiftSection, newShiftSectionOther]]) {
+                const keep = sel.value;
+                sel.innerHTML = sectionOptionsHtml('—');
+                sel.value = keep;
+                if (sel.value !== keep) sel.value = '';
+                syncOtherInput(sel, other);
+            }
+        }
+
+        // A custom value just used moves to the front of the remembered list (MRU)
         function rememberSection(v) {
             if (!v || STANDARD_SECTIONS.includes(v)) return;
             customSections = [v, ...customSections.filter(x => x !== v)];
-            rebuildSectionSelect();
+            rebuildSectionPickers();
         }
 
         async function loadSections() {
@@ -1593,8 +1613,50 @@
                 const data = await api('/api/subspecialties');
                 customSections = data.custom || [];
             } catch (e) { /* non-fatal — standard options still work */ }
-            rebuildSectionSelect();
+            rebuildSectionPickers();
         }
+
+        // ---- Shift header control: shows the active shift's section ----
+        function syncShiftSectionControl() {
+            const has = !!currentShift;
+            shiftSectionSelect.disabled = !has;
+            shiftSectionOther.disabled = !has;
+            setSectionOn(shiftSectionSelect, shiftSectionOther, has ? currentShift.subspecialty : null);
+        }
+
+        // Changing it updates the shift; already-saved reports keep their stamp
+        async function commitShiftSection(value) {
+            if (!currentShift) return;
+            try {
+                const data = await api('/api/shifts/' + encodeURIComponent(currentShift.id), {
+                    method: 'PUT', body: { subspecialty: value }
+                });
+                currentShift = data.shift;
+                rememberSection(currentShift.subspecialty);
+                syncShiftSectionControl();
+                showToast(value ? 'Section “' + value + '” — stamps saves from now on'
+                                : 'Section cleared — new saves stamp none');
+            } catch (e) {
+                showToast('Could not set section: ' + e.message, 4000);
+                syncShiftSectionControl();   // revert the control to the stored value
+            }
+        }
+        shiftSectionSelect.addEventListener('change', () => {
+            syncOtherInput(shiftSectionSelect, shiftSectionOther);
+            if (shiftSectionSelect.value === OTHER_SECTION) { shiftSectionOther.focus(); return; }
+            commitShiftSection(shiftSectionSelect.value || null);
+        });
+        // The Other text commits on change (Enter or blur); empty reverts
+        shiftSectionOther.addEventListener('change', () => {
+            const v = shiftSectionOther.value.trim();
+            if (v) commitShiftSection(v); else syncShiftSectionControl();
+        });
+
+        // Dialog pair is read at Create time — wire only the reveal behavior
+        newShiftSection.addEventListener('change', () => {
+            syncOtherInput(newShiftSection, newShiftSectionOther);
+            if (newShiftSection.value === OTHER_SECTION) newShiftSectionOther.focus();
+        });
 
         let currentShift = null;
         let reportType = 'complete';
@@ -1632,9 +1694,11 @@
                 currentShift = data.shift;
                 document.getElementById('currentShiftName').textContent =
                     currentShift ? currentShift.name : 'No shift yet — created on first save';
+                syncShiftSectionControl();
             } catch (e) {
                 document.getElementById('currentShiftName').textContent = 'Unavailable';
                 setDraftStatus(e.message, 'error');
+                syncShiftSectionControl();
             }
         }
 
@@ -1684,13 +1748,16 @@
         document.getElementById('segComplete').addEventListener('click', () => setReportType('complete'));
 
         document.getElementById('newShiftBtn').addEventListener('click', async () => {
-            const name = await askShiftName(autoShiftName());
-            if (!name) return;
+            const choice = await askShiftName(autoShiftName());
+            if (!choice) return;
             try {
-                const data = await api('/api/shifts', { method: 'POST', body: { name } });
+                const data = await api('/api/shifts', { method: 'POST', body: choice });
                 currentShift = data.shift;
                 document.getElementById('currentShiftName').textContent = currentShift.name;
-                showToast('Shift started: ' + currentShift.name);
+                rememberSection(currentShift.subspecialty);
+                syncShiftSectionControl();
+                showToast('Shift started: ' + currentShift.name +
+                          (currentShift.subspecialty ? ' (' + currentShift.subspecialty + ')' : ''));
                 await initDraftShifts();
             } catch (e) {
                 setDraftStatus('Failed to create shift: ' + e.message, 'error');
@@ -1927,14 +1994,6 @@
             if (!shiftId) { listEl.innerHTML = ''; return; }
             try {
                 const data = await api('/api/reports?shift_id=' + encodeURIComponent(shiftId));
-                // Sticky within a shift: the next NEW draft defaults to the section
-                // of the shift's most recent save (I read one section per shift).
-                // A shift with no saves yet defaults to blank.
-                if (currentShift && shiftId === currentShift.id) {
-                    const newest = (data.reports || [])[0];
-                    stickySubspecialty = (newest && newest.subspecialty) || null;
-                    if (!loadedReport && !currentSection()) setSectionValue(stickySubspecialty);
-                }
                 const drafts = (data.reports || []).filter(r => !r.final_saved_at);
                 if (drafts.length === 0) {
                     listEl.innerHTML = '<div class="draft-list-empty">No unfinalized drafts in this shift.</div>';
@@ -2007,7 +2066,6 @@
                 draftText.value = r.draft_text || '';
                 studyTypeInput.value = r.study_type || '';
                 studyIdInput.value = r.study_id_label || '';
-                setSectionValue(r.subspecialty);
                 setReportType(r.report_type === 'prelim' ? 'prelim' : 'complete');
                 readoutNotesEl.value = r.readout_notes || '';
                 document.getElementById('readOutFlag').checked = !!r.read_out_at;
@@ -2038,7 +2096,6 @@
             draftText.value = '';
             studyTypeInput.value = '';
             studyIdInput.value = '';
-            setSectionValue(stickySubspecialty);
             readoutNotesEl.value = '';
             document.getElementById('readOutFlag').checked = false;
             setReportType('complete');
@@ -2140,6 +2197,7 @@
                 const data = await api('/api/shifts', { method: 'POST', body: { name: autoShiftName(now) } });
                 currentShift = data.shift;
                 document.getElementById('currentShiftName').textContent = currentShift.name;
+                syncShiftSectionControl();
                 return currentShift;
             }
 
@@ -2153,11 +2211,13 @@
                     : 'A shift transition boundary (08:00/17:00) has passed since the last save on “' + currentShift.name + '”.';
                 const choice = await askNewShift(detail);
                 if (choice === 'new') {
-                    const name = await askShiftName(autoShiftName(now));
-                    if (name === null) return null;
-                    const data = await api('/api/shifts', { method: 'POST', body: { name } });
+                    const picked = await askShiftName(autoShiftName(now));
+                    if (picked === null) return null;
+                    const data = await api('/api/shifts', { method: 'POST', body: picked });
                     currentShift = data.shift;
                     document.getElementById('currentShiftName').textContent = currentShift.name;
+                    rememberSection(currentShift.subspecialty);
+                    syncShiftSectionControl();
                 }
             }
             return currentShift;
@@ -2524,13 +2584,10 @@
                         ...(finalize ? { finalized: true } : {}),
                         study_type: studyTypeInput.value.trim(),
                         study_id_label: studyIdInput.value.trim(),
-                        subspecialty: currentSection(),
                         report_type: reportType
                     };
                     const data = await api('/api/reports/' + encodeURIComponent(loadedReport.id), { method: 'PUT', body });
                     loadedReport = data.report;
-                    rememberSection(loadedReport.subspecialty);
-                    stickySubspecialty = loadedReport.subspecialty || null;
                     const savedId = loadedReport.id;
                     const savedDraft = loadedReport.draft_text;
                     exitReviewMode();
@@ -2556,7 +2613,6 @@
                     shift_id: shift.id,
                     study_type: studyTypeInput.value.trim(),
                     study_id_label: studyIdInput.value.trim(),
-                    subspecialty: currentSection(),
                     report_type: reportType,
                     raw_text: reviewedRaw,
                     draft_text: applyAcceptedEdits(),
@@ -2572,12 +2628,9 @@
                 // Saving never opens a blank draft: the report just saved stays
                 // open, exactly as a re-save of a reopened draft does
                 loadedReport = data.report;
-                rememberSection(data.report.subspecialty);
-                stickySubspecialty = data.report.subspecialty || null;
                 draftText.value = data.report.draft_text || '';
                 studyTypeInput.value = data.report.study_type || '';
                 studyIdInput.value = data.report.study_id_label || '';
-                setSectionValue(data.report.subspecialty);
                 setReportType(data.report.report_type === 'prelim' ? 'prelim' : 'complete');
                 readoutNotesEl.value = data.report.readout_notes || '';
                 document.getElementById('readOutFlag').checked = !!data.report.read_out_at;
@@ -2879,6 +2932,14 @@
                 });
                 if (value) rememberSection(value);
                 rebuildReviewSectionSelects();
+                // The bulk action also sets the shift's own section, so refresh
+                // the labelled dropdown — and the Draft header if it's the
+                // active shift — to match
+                await loadRvShifts(shiftId);
+                if (currentShift && currentShift.id === shiftId) {
+                    currentShift.subspecialty = value;
+                    syncShiftSectionControl();
+                }
                 showToast((value ? 'Section set on ' : 'Section cleared on ') + data.updated +
                           ' report' + (data.updated === 1 ? '' : 's'));
                 runReviewSearch();
@@ -2893,7 +2954,8 @@
             const shifts = shiftsData.shifts || [];
             rvShift.innerHTML = '<option value="">All shifts</option>' +
                 shifts.map(s =>
-                    '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'
+                    '<option value="' + s.id + '">' + escapeHtml(s.name) +
+                    (s.subspecialty ? ' (' + escapeHtml(s.subspecialty) + ')' : '') + '</option>'
                 ).join('');
             if (selectId !== undefined) {
                 rvShift.value = selectId;

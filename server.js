@@ -557,9 +557,12 @@ const MAX_REFERENCES = 3;
 const VALID_RPR = /^RPR[1-4]$/;
 
 // ---- Sections (subspecialties) ----
-// Manual only: the Draft page selector and the bulk shift action are the only
-// writers. Nothing derives, maps, or backfills this field — an unselected
-// draft stays null.
+// Manual only, set once per shift: the shift carries the current section
+// (shifts.subspecialty) and every report save stamps it onto the report at
+// that moment. reports.subspecialty stays the source of truth for filtering —
+// the stamp is written once, so changing the shift mid-way never rewrites
+// earlier cases. Writers of the report column: the save-time stamp and the
+// bulk action. Nothing derives, maps, or backfills; no shift section = null.
 const STANDARD_SECTIONS = [
   'Neuroradiology',
   'Musculoskeletal Radiology',
@@ -568,12 +571,27 @@ const STANDARD_SECTIONS = [
   'Breast Imaging',
   'Pediatric Radiology',
   'Nuclear Radiology',
-  'Interventional Radiology'
+  'Interventional Radiology',
+  'On-Call'
 ];
 // Free text from the "Other" path is stored verbatim (trimmed); ''/absent -> null
 function cleanSubspecialty(v) {
   if (typeof v !== 'string') return null;
   return v.trim().slice(0, 120) || null;
+}
+
+// The value a save stamps: the shift's section AT THIS MOMENT. Read fresh on
+// every save rather than trusted from the client, so two devices on one shift
+// can never stamp different values than the shift shows.
+async function shiftSubspecialty(shiftId) {
+  if (!shiftId) return null;
+  const { data, error } = await supabase
+    .from('shifts').select('subspecialty').eq('id', shiftId).single();
+  if (error) {
+    console.error('Shift section lookup failed:', error.message);
+    return null;   // a failed lookup must not block the save — stamp null
+  }
+  return data ? (data.subspecialty || null) : null;
 }
 
 // ============ Knowledge layer (style guide, language library, exemplars) ============
@@ -1448,7 +1466,12 @@ app.post('/api/shifts', async (req, res) => {
     const now = new Date().toISOString();
     const { data, error } = await supabase
       .from('shifts')
-      .insert({ name: name.trim(), started_at: now, last_activity_at: now })
+      .insert({
+        name: name.trim(),
+        subspecialty: cleanSubspecialty(req.body.subspecialty),
+        started_at: now,
+        last_activity_at: now
+      })
       .select()
       .single();
     if (error) throw error;
@@ -1458,6 +1481,26 @@ app.post('/api/shifts', async (req, res) => {
   } catch (error) {
     console.error('Create shift error:', error);
     res.status(500).json({ error: 'Failed to create shift', details: error.message });
+  }
+});
+
+// Change a shift's section. Affects FUTURE saves only — reports already
+// stamped keep their value (the bulk action below is the way to correct a
+// whole shift after the fact).
+app.put('/api/shifts/:id', async (req, res) => {
+  if (!requireSupabase(res)) return;
+  try {
+    const { data, error } = await supabase
+      .from('shifts')
+      .update({ subspecialty: cleanSubspecialty(req.body && req.body.subspecialty) })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ shift: data });
+  } catch (error) {
+    console.error('Update shift error:', error);
+    res.status(500).json({ error: 'Failed to update shift', details: error.message });
   }
 });
 
@@ -1483,6 +1526,13 @@ app.post('/api/shifts/:id/set-subspecialty', async (req, res) => {
         .in('report_id', ids);
       if (secErr) throw secErr;   // surface it — a silent half-update would drift
     }
+    // The shift carries the setting going forward too, so future saves in this
+    // shift stamp the corrected value
+    const { error: shErr } = await supabase
+      .from('shifts')
+      .update({ subspecialty: value })
+      .eq('id', req.params.id);
+    if (shErr) throw shErr;
     res.json({ subspecialty: value, updated: ids.length });
   } catch (error) {
     console.error('Set shift subspecialty error:', error);
@@ -1496,17 +1546,30 @@ app.post('/api/shifts/:id/set-subspecialty', async (req, res) => {
 app.get('/api/subspecialties', async (req, res) => {
   if (!requireSupabase(res)) return;
   try {
-    const { data, error } = await supabase
-      .from('reports')
-      .select('subspecialty, created_at')
-      .not('subspecialty', 'is', null)
-      .order('created_at', { ascending: false })
-      .limit(500);
-    if (error) throw error;
+    // Shifts are included so a custom section chosen for a brand-new shift is
+    // offered again before its first report ever saves
+    const [{ data: reps, error: repErr }, { data: shs, error: shErr }] = await Promise.all([
+      supabase.from('reports')
+        .select('subspecialty, created_at')
+        .not('subspecialty', 'is', null)
+        .order('created_at', { ascending: false })
+        .limit(500),
+      supabase.from('shifts')
+        .select('subspecialty, started_at')
+        .not('subspecialty', 'is', null)
+        .order('started_at', { ascending: false })
+        .limit(200)
+    ]);
+    if (repErr) throw repErr;
+    if (shErr) throw shErr;
+    const rows = [
+      ...(reps || []).map(r => ({ v: r.subspecialty, t: r.created_at })),
+      ...(shs || []).map(r => ({ v: r.subspecialty, t: r.started_at }))
+    ].sort((a, b) => (a.t < b.t ? 1 : -1));
     const seen = new Set(STANDARD_SECTIONS.map(x => x.toLowerCase()));
     const custom = [];
-    for (const r of data || []) {
-      const v = (r.subspecialty || '').trim();
+    for (const r of rows) {
+      const v = (r.v || '').trim();
       if (!v || seen.has(v.toLowerCase())) continue;
       seen.add(v.toLowerCase());
       custom.push(v);
@@ -1573,7 +1636,7 @@ app.put('/api/shifts/:id/activate', async (req, res) => {
 app.post('/api/reports', async (req, res) => {
   if (!requireSupabase(res)) return;
   try {
-    const { proposed_id, shift_id, study_type, study_id_label, report_type, raw_text, draft_text, edits_json, finalized, subspecialty } = req.body;
+    const { proposed_id, shift_id, study_type, study_id_label, report_type, raw_text, draft_text, edits_json, finalized } = req.body;
     if (!proposed_id || !/^\d{12}$/.test(proposed_id)) {
       return res.status(400).json({ error: 'proposed_id must be a yyyymmddhhmm timestamp' });
     }
@@ -1614,7 +1677,8 @@ app.post('/api/reports', async (req, res) => {
         shift_id,
         study_type: finalStudyType,
         study_id_label: (study_id_label || '').trim() || null,
-        subspecialty: cleanSubspecialty(subspecialty),
+        // Stamped from the shift, not the request — see shiftSubspecialty()
+        subspecialty: await shiftSubspecialty(shift_id),
         report_type: report_type === 'prelim' ? 'prelim' : 'complete',
         raw_text,
         draft_text: draft_text || raw_text,
@@ -1873,7 +1937,8 @@ app.get('/api/training/impression-pairs', async (req, res) => {
 app.post('/api/training/extract-sections', async (req, res) => {
   if (!requireSupabase(res)) return;
   try {
-    const reports = await fetchAllRows('reports', 'id, study_type, final_text, final_saved_at, created_at');
+    // subspecialty included so a batch re-harvest can't null the mirror
+    const reports = await fetchAllRows('reports', 'id, study_type, subspecialty, final_text, final_saved_at, created_at');
     const finals = reports.filter(r => r.final_text && r.final_text.trim());
     let stored = 0, paired = 0;
     const impressionOnly = [], findingsOnly = [], neither = [];
@@ -2022,12 +2087,12 @@ app.post('/api/reports/:id/integrate-notes', async (req, res) => {
 app.put('/api/reports/:id', async (req, res) => {
   if (!requireSupabase(res)) return;
   try {
-    const { draft_text, append_edits, notes_integrated, study_type, study_id_label, report_type, finalized, subspecialty } = req.body;
+    const { draft_text, append_edits, notes_integrated, study_type, study_id_label, report_type, finalized } = req.body;
     if (!draft_text || !draft_text.trim()) {
       return res.status(400).json({ error: 'draft_text is required' });
     }
     const { data: existing, error: exErr } = await supabase
-      .from('reports').select('edits_json, draft_text').eq('id', req.params.id).single();
+      .from('reports').select('edits_json, draft_text, subspecialty, shift_id').eq('id', req.params.id).single();
     if (exErr) throw exErr;
 
     // Snapshot the outgoing draft so "See recent changes" has something to diff
@@ -2060,8 +2125,13 @@ app.put('/api/reports/:id', async (req, res) => {
     };
     if (typeof study_type === 'string' && study_type.trim()) update.study_type = study_type.trim();
     if (typeof study_id_label === 'string') update.study_id_label = study_id_label.trim() || null;
-    // Present-but-blank clears back to null; an absent key leaves it untouched
-    if ('subspecialty' in req.body) update.subspecialty = cleanSubspecialty(subspecialty);
+    // The stamp is written once: a report saved before the shift had a section
+    // picks it up on its next save, but an already-stamped report keeps its
+    // value — changing the shift mid-way never rewrites earlier cases.
+    if (!existing.subspecialty) {
+      const stamped = await shiftSubspecialty(existing.shift_id);
+      if (stamped) update.subspecialty = stamped;
+    }
     if (report_type === 'prelim' || report_type === 'complete') update.report_type = report_type;
     // Only ever set forward — a later plain re-save must not clear the marker
     if (notes_integrated) update.notes_integrated_at = new Date().toISOString();

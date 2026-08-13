@@ -757,7 +757,7 @@
                         <!-- The section is a property of the shift: set once here (or in
                              the new-shift dialog) and stamped onto each report as it is
                              saved. Changing it affects future saves only. -->
-                        <label>Section <span class="opt">(stamps new saves)</span></label>
+                        <label>Section <span class="opt">(optional)</span></label>
                         <div class="section-row">
                             <select id="shiftSectionSelect"></select>
                             <input id="shiftSectionOther" autocomplete="off" placeholder="Section name…" style="display:none">
@@ -1487,9 +1487,11 @@
                 const create = document.getElementById('shiftNameCreate');
                 const cancel = document.getElementById('shiftNameCancel');
                 input.value = defaultName;
-                // A new shift starts from a blank section — deliberately no
-                // carry-over from the previous shift
-                setSectionOn(newShiftSection, newShiftSectionOther, null);
+                // The section carries over from the shift being replaced —
+                // rotations run in week-long blocks, so the common case is
+                // "same section, next shift". Change or clear it to rotate.
+                setSectionOn(newShiftSection, newShiftSectionOther,
+                    currentShift ? currentShift.subspecialty : null);
                 modal.classList.add('active');
                 input.focus();
                 function cleanup(v) {
@@ -1614,6 +1616,11 @@
                 customSections = data.custom || [];
             } catch (e) { /* non-fatal — standard options still work */ }
             rebuildSectionPickers();
+            // Draft init runs this in parallel with loadCurrentShift; if the
+            // shift arrived first, its section couldn't stick to a select that
+            // had no options yet. Both paths end in a sync, so whichever
+            // finishes last shows the right value.
+            syncShiftSectionControl();
         }
 
         // ---- Shift header control: shows the active shift's section ----

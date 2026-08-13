@@ -1463,12 +1463,27 @@ app.post('/api/shifts', async (req, res) => {
     if (!name || !name.trim()) {
       return res.status(400).json({ error: 'Shift name is required' });
     }
+    // The section stays from shift to shift unless the user changes it. The
+    // dialog always sends an explicit value (null = deliberately cleared);
+    // a create that never mentions subspecialty — the auto-created shift on a
+    // first save — inherits the most recent shift's section.
+    let subspecialty;
+    if ('subspecialty' in req.body) {
+      subspecialty = cleanSubspecialty(req.body.subspecialty);
+    } else {
+      const { data: prev } = await supabase
+        .from('shifts')
+        .select('subspecialty')
+        .order('started_at', { ascending: false })
+        .limit(1);
+      subspecialty = (prev && prev[0] && prev[0].subspecialty) || null;
+    }
     const now = new Date().toISOString();
     const { data, error } = await supabase
       .from('shifts')
       .insert({
         name: name.trim(),
-        subspecialty: cleanSubspecialty(req.body.subspecialty),
+        subspecialty,
         started_at: now,
         last_activity_at: now
       })

@@ -604,8 +604,11 @@
            equal height — whichever side is taller sets the row, the other
            stretches to match. The save row sits in its own row directly under
            the final box, just below the shared bottom edge. */
+        /* Side-by-side at every width — reviewing means comparing draft and
+           final, which a stacked layout can't do. minmax(0,1fr) lets each
+           column shrink below its content's natural width in narrow windows. */
         .final-columns {
-            display: grid; grid-template-columns: 1fr 1fr;
+            display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
             column-gap: 24px; row-gap: 8px; margin-bottom: 16px;
         }
         .final-col { display: contents; }
@@ -693,8 +696,6 @@
                further than its desktop floor. */
             .draft-right { min-width: 170px; }
             .final-scroll { padding: 14px; }
-            .final-columns { display: flex; flex-direction: column; gap: 14px; }
-            .final-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
             .final-toolbar { flex-wrap: wrap; }
             .final-toolbar select { min-width: 0; flex: 1; }
             /* Stacked mode: one label/control grid. display:contents lifts each

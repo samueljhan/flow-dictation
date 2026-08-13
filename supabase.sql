@@ -84,6 +84,13 @@ alter table reports add column if not exists notes_integrated_at timestamptz;
 alter table reports add column if not exists read_out_at timestamptz;
 alter table reports add column if not exists finalized_at timestamptz;
 
+-- Section (subspecialty) — manual only. Set by the Draft page selector or the
+-- per-shift bulk action; never derived, mapped, or backfilled. Null = the
+-- radiologist didn't pick one. Free text typed via "Other" is stored verbatim.
+alter table reports add column if not exists subspecialty text;
+create index if not exists reports_subspecialty_idx on reports (subspecialty);
+alter table report_sections add column if not exists subspecialty text;
+
 -- Finalized reports kept whole, alongside their findings/impression split when
 -- those sections can be detected. One row per report, so a findings+impression
 -- pair is intrinsically matched and ready to export as training data.

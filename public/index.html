@@ -362,6 +362,21 @@
         .btn-row { display: flex; gap: 8px; }
         .btn-row button { flex: 1; white-space: normal; line-height: 1.25; }
         .panel label { font-size: 13px; font-weight: 600; color: #d0d0d0; }
+        /* Section select + its "Other" free-text input share one row. The select
+           inherits the same base styling as the Study ID input above it; with
+           "Other" chosen it shrinks to its label and the text input takes the
+           remaining width at the same height. */
+        .section-row { display: flex; gap: 8px; }
+        /* box-sizing + fixed height pin the select to the input's 39px — native
+           select chrome otherwise renders it 2px taller than its pair */
+        .section-row select, .section-row input {
+            box-sizing: border-box; height: 39px; padding-top: 0; padding-bottom: 0;
+        }
+        .section-row select { flex: 1 1 auto; width: 100%; min-width: 0; }
+        /* With "Other" chosen the select collapses to its label; a width:auto
+           select would size to its longest option and hog the row */
+        .section-row select.has-other { flex: 0 0 110px; width: 110px; }
+        .section-row input { flex: 1 1 auto; min-width: 0; }
         .panel .opt { font-weight: 400; color: #808080; font-size: 11px; }
         .shift-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
         #currentShiftName { font-size: 14px; font-weight: 600; color: #e0e0e0; }
@@ -509,6 +524,11 @@
         .rr-label { color: #909090; }
         .rr-time { color: #808080; }
         .rr-note { grid-column: 1 / -1; white-space: normal !important; }
+        /* Review page adds a Section column; Final keeps the 7-column layout */
+        #page-review .report-head, #rvList .report-row {
+            grid-template-columns: 130px minmax(140px, 1.4fr) minmax(0, 1fr) minmax(90px, 0.7fr) 90px 130px 60px 84px;
+        }
+        .rr-section { color: #b0b0b0; }
         /* Matched text from a keyword search, on its own line under the row */
         .rr-snippet {
             grid-column: 1 / -1; white-space: normal !important;
@@ -588,6 +608,9 @@
                 grid-template-columns: 115px minmax(120px, 1.3fr) minmax(0, 1fr) 80px 110px 56px 78px;
                 gap: 12px;
             }
+            #page-review .report-head, #rvList .report-row {
+                grid-template-columns: 115px minmax(120px, 1.3fr) minmax(0, 1fr) minmax(80px, 0.7fr) 80px 110px 56px 78px;
+            }
         }
 
         /* Mobile: single column everywhere; header tabs scroll horizontally */
@@ -632,6 +655,7 @@
             }
             .report-row > span { white-space: normal; }
             .rr-label:empty { display: none; }
+            .rr-section:empty { display: none; }
         }
     </style>
 </head>
@@ -743,6 +767,11 @@
                         </div>
                         <label>Study ID <span class="opt">(optional)</span></label>
                         <input id="studyIdInput" autocomplete="off" placeholder="Accession, initials, room…">
+                        <label>Section <span class="opt">(optional)</span></label>
+                        <div class="section-row">
+                            <select id="sectionSelect"></select>
+                            <input id="sectionOtherInput" autocomplete="off" placeholder="Section name…" style="display:none">
+                        </div>
                         <label>Report Type</label>
                         <div class="segmented">
                             <button class="seg" id="segPrelim">Prelim</button>
@@ -858,17 +887,29 @@
                         <datalist id="rvStudyTypes"></datalist>
                     </div>
                     <div class="filter-group">
+                        <label for="rvSection">Section</label>
+                        <select id="rvSection"></select>
+                    </div>
+                    <div class="filter-group">
                         <label for="rvText">Search</label>
                         <input id="rvText" placeholder="e.g. right brachiocephalic"
                                title="Searches the report text, read-out notes, RPR notes and study ID. Every word must appear; wrap in quotes for an exact phrase.">
                     </div>
                     <button class="ghost" id="rvClear">Clear</button>
                     <button class="ghost danger" id="rvDeleteShift" style="display:none">Delete Shift</button>
+                    <!-- Whole shifts are usually one section — bulk-assign, only
+                         when a specific shift is selected -->
+                    <div class="filter-group" id="rvBulkGroup" style="display:none">
+                        <label for="rvBulkSelect">Set section for this shift</label>
+                        <select id="rvBulkSelect"></select>
+                        <input id="rvBulkOther" autocomplete="off" placeholder="Section name…" style="display:none">
+                        <button class="ghost" id="rvBulkApply">Apply</button>
+                    </div>
                     <span class="status" id="rvCount"></span>
                 </div>
                 <div class="report-head">
                     <span>Report ID</span><span>Study type</span><span>Study ID</span>
-                    <span>Type</span><span>Date</span><span>RPR</span><span>Final</span>
+                    <span>Section</span><span>Type</span><span>Date</span><span>RPR</span><span>Final</span>
                 </div>
                 <div id="rvList" class="report-list"></div>
             </div>
@@ -1475,6 +1516,86 @@
         const studyTypeDropdown = document.getElementById('studyTypeDropdown');
         const studyIdInput = document.getElementById('studyIdInput');
 
+        // ==================== SECTIONS (manual only) ====================
+        // The radiologist picks the section they're reading; blank stays blank.
+        // Nothing here derives or auto-fills — the select and the bulk shift
+        // action on the Review page are the only writers.
+        const STANDARD_SECTIONS = [
+            'Neuroradiology', 'Musculoskeletal Radiology', 'Body / Abdominal Imaging',
+            'Cardiothoracic Radiology', 'Breast Imaging', 'Pediatric Radiology',
+            'Nuclear Radiology', 'Interventional Radiology'
+        ];
+        const OTHER_SECTION = '__other__';
+        let customSections = [];        // typed via "Other", most recently used first
+        let stickySubspecialty = null;  // last section saved in the active shift
+
+        const sectionSelect = document.getElementById('sectionSelect');
+        const sectionOtherInput = document.getElementById('sectionOtherInput');
+
+        // One option list, shared by every section dropdown:
+        // blank · standard · remembered customs · Other (customs sit above Other)
+        function sectionOptionsHtml(blankLabel) {
+            const opt = v => '<option value="' + escapeHtml(v) + '">' + escapeHtml(v) + '</option>';
+            return '<option value="">' + escapeHtml(blankLabel) + '</option>' +
+                STANDARD_SECTIONS.map(opt).join('') +
+                customSections.map(opt).join('') +
+                '<option value="' + OTHER_SECTION + '">Other…</option>';
+        }
+
+        function rebuildSectionSelect() {
+            const keep = sectionSelect.value;
+            sectionSelect.innerHTML = sectionOptionsHtml('—');
+            sectionSelect.value = keep;
+            if (sectionSelect.value !== keep) sectionSelect.value = '';
+            syncSectionOther();
+        }
+
+        // "Other" reveals its free-text input inline; anything else hides and clears it
+        function syncSectionOther() {
+            const other = sectionSelect.value === OTHER_SECTION;
+            sectionOtherInput.style.display = other ? '' : 'none';
+            sectionSelect.classList.toggle('has-other', other);
+            if (!other) sectionOtherInput.value = '';
+        }
+        sectionSelect.addEventListener('change', () => {
+            syncSectionOther();
+            if (sectionSelect.value === OTHER_SECTION) sectionOtherInput.focus();
+        });
+
+        // The value a save stores: null when blank — never a derived default
+        function currentSection() {
+            if (sectionSelect.value === OTHER_SECTION) return sectionOtherInput.value.trim() || null;
+            return sectionSelect.value || null;
+        }
+
+        // Show a stored value; an unlisted custom (stale list) gets injected so
+        // loading an old draft never silently blanks its section
+        function setSectionValue(v) {
+            const value = (v || '').trim();
+            if (value && ![...STANDARD_SECTIONS, ...customSections].includes(value)) {
+                customSections.unshift(value);
+                rebuildSectionSelect();
+            }
+            sectionSelect.value = value;
+            if (sectionSelect.value !== value) sectionSelect.value = '';
+            syncSectionOther();
+        }
+
+        // A custom value just saved moves to the front of the remembered list (MRU)
+        function rememberSection(v) {
+            if (!v || STANDARD_SECTIONS.includes(v)) return;
+            customSections = [v, ...customSections.filter(x => x !== v)];
+            rebuildSectionSelect();
+        }
+
+        async function loadSections() {
+            try {
+                const data = await api('/api/subspecialties');
+                customSections = data.custom || [];
+            } catch (e) { /* non-fatal — standard options still work */ }
+            rebuildSectionSelect();
+        }
+
         let currentShift = null;
         let reportType = 'complete';
         let studyTypes = [];
@@ -1501,7 +1622,7 @@
         async function initDraftPage() {
             if (draftInited) return;
             draftInited = true;
-            await Promise.all([loadCurrentShift(), loadStudyTypes(), initDraftShifts()]);
+            await Promise.all([loadCurrentShift(), loadStudyTypes(), initDraftShifts(), loadSections()]);
         }
 
         // The active shift is server state — same answer on every browser/device
@@ -1806,6 +1927,14 @@
             if (!shiftId) { listEl.innerHTML = ''; return; }
             try {
                 const data = await api('/api/reports?shift_id=' + encodeURIComponent(shiftId));
+                // Sticky within a shift: the next NEW draft defaults to the section
+                // of the shift's most recent save (I read one section per shift).
+                // A shift with no saves yet defaults to blank.
+                if (currentShift && shiftId === currentShift.id) {
+                    const newest = (data.reports || [])[0];
+                    stickySubspecialty = (newest && newest.subspecialty) || null;
+                    if (!loadedReport && !currentSection()) setSectionValue(stickySubspecialty);
+                }
                 const drafts = (data.reports || []).filter(r => !r.final_saved_at);
                 if (drafts.length === 0) {
                     listEl.innerHTML = '<div class="draft-list-empty">No unfinalized drafts in this shift.</div>';
@@ -1878,6 +2007,7 @@
                 draftText.value = r.draft_text || '';
                 studyTypeInput.value = r.study_type || '';
                 studyIdInput.value = r.study_id_label || '';
+                setSectionValue(r.subspecialty);
                 setReportType(r.report_type === 'prelim' ? 'prelim' : 'complete');
                 readoutNotesEl.value = r.readout_notes || '';
                 document.getElementById('readOutFlag').checked = !!r.read_out_at;
@@ -1908,6 +2038,7 @@
             draftText.value = '';
             studyTypeInput.value = '';
             studyIdInput.value = '';
+            setSectionValue(stickySubspecialty);
             readoutNotesEl.value = '';
             document.getElementById('readOutFlag').checked = false;
             setReportType('complete');
@@ -2393,10 +2524,13 @@
                         ...(finalize ? { finalized: true } : {}),
                         study_type: studyTypeInput.value.trim(),
                         study_id_label: studyIdInput.value.trim(),
+                        subspecialty: currentSection(),
                         report_type: reportType
                     };
                     const data = await api('/api/reports/' + encodeURIComponent(loadedReport.id), { method: 'PUT', body });
                     loadedReport = data.report;
+                    rememberSection(loadedReport.subspecialty);
+                    stickySubspecialty = loadedReport.subspecialty || null;
                     const savedId = loadedReport.id;
                     const savedDraft = loadedReport.draft_text;
                     exitReviewMode();
@@ -2422,6 +2556,7 @@
                     shift_id: shift.id,
                     study_type: studyTypeInput.value.trim(),
                     study_id_label: studyIdInput.value.trim(),
+                    subspecialty: currentSection(),
                     report_type: reportType,
                     raw_text: reviewedRaw,
                     draft_text: applyAcceptedEdits(),
@@ -2437,9 +2572,12 @@
                 // Saving never opens a blank draft: the report just saved stays
                 // open, exactly as a re-save of a reopened draft does
                 loadedReport = data.report;
+                rememberSection(data.report.subspecialty);
+                stickySubspecialty = data.report.subspecialty || null;
                 draftText.value = data.report.draft_text || '';
                 studyTypeInput.value = data.report.study_type || '';
                 studyIdInput.value = data.report.study_id_label || '';
+                setSectionValue(data.report.subspecialty);
                 setReportType(data.report.report_type === 'prelim' ? 'prelim' : 'complete');
                 readoutNotesEl.value = data.report.readout_notes || '';
                 document.getElementById('readOutFlag').checked = !!data.report.read_out_at;
@@ -2508,7 +2646,7 @@
         });
 
         // Renders one report row; used by both the Final list and the Review results
-        function renderReportRow(r, { showDate, showNote } = {}) {
+        function renderReportRow(r, { showDate, showNote, showSection } = {}) {
             const row = document.createElement('div');
             row.className = 'report-row';
             row.dataset.id = r.id;
@@ -2520,6 +2658,7 @@
                 '<span class="rr-id">' + escapeHtml(r.id) + '</span>' +
                 '<span class="rr-study">' + escapeHtml(r.study_type || '—') + '</span>' +
                 '<span class="rr-label">' + escapeHtml(r.study_id_label || '') + '</span>' +
+                (showSection ? '<span class="rr-section">' + escapeHtml(r.subspecialty || '') + '</span>' : '') +
                 '<span class="rr-type">' + escapeHtml(r.report_type) + '</span>' +
                 '<span class="rr-time">' + when + '</span>' +
                 '<span>' + (r.rpr_grade ? '<span class="rpr-badge ' + r.rpr_grade.toLowerCase() + '">' + escapeHtml(r.rpr_grade) + '</span>' : '') + '</span>' +
@@ -2692,13 +2831,61 @@
         const rvGrade = document.getElementById('rvGrade');
         const rvStudyType = document.getElementById('rvStudyType');
         const rvText = document.getElementById('rvText');
+        const rvSection = document.getElementById('rvSection');
         const rvList = document.getElementById('rvList');
         const rvCount = document.getElementById('rvCount');
+        const rvBulkSelect = document.getElementById('rvBulkSelect');
+        const rvBulkOther = document.getElementById('rvBulkOther');
         let reviewInited = false;
 
+        // Shift-scoped controls: Delete Shift and the bulk section assignment
+        // only make sense on a specific shift, not "All shifts"
         function updateRvDeleteBtn() {
-            document.getElementById('rvDeleteShift').style.display = rvShift.value ? '' : 'none';
+            const specific = !!rvShift.value;
+            document.getElementById('rvDeleteShift').style.display = specific ? '' : 'none';
+            document.getElementById('rvBulkGroup').style.display = specific ? '' : 'none';
         }
+
+        // Filter options: All · Unassigned · the shared section list (no Other —
+        // filtering is by values that exist). Bulk keeps the Other path.
+        function rebuildReviewSectionSelects() {
+            const keepF = rvSection.value, keepB = rvBulkSelect.value;
+            const opt = v => '<option value="' + escapeHtml(v) + '">' + escapeHtml(v) + '</option>';
+            rvSection.innerHTML = '<option value="">All</option>' +
+                '<option value="__unassigned__">Unassigned</option>' +
+                STANDARD_SECTIONS.map(opt).join('') + customSections.map(opt).join('');
+            rvBulkSelect.innerHTML = sectionOptionsHtml('(clear)');
+            rvSection.value = keepF; if (rvSection.value !== keepF) rvSection.value = '';
+            rvBulkSelect.value = keepB; if (rvBulkSelect.value !== keepB) rvBulkSelect.value = '';
+        }
+        rvBulkSelect.addEventListener('change', () => {
+            const other = rvBulkSelect.value === OTHER_SECTION;
+            rvBulkOther.style.display = other ? '' : 'none';
+            if (!other) rvBulkOther.value = ''; else rvBulkOther.focus();
+        });
+
+        document.getElementById('rvBulkApply').addEventListener('click', async () => {
+            const shiftId = rvShift.value;
+            if (!shiftId) return;
+            const value = rvBulkSelect.value === OTHER_SECTION
+                ? rvBulkOther.value.trim() || null
+                : rvBulkSelect.value || null;
+            const name = rvShift.options[rvShift.selectedIndex].text;
+            const what = value ? 'Set section “' + value + '” on' : 'Clear the section from';
+            if (!confirm(what + ' every report in “' + name + '”?')) return;
+            try {
+                const data = await api('/api/shifts/' + encodeURIComponent(shiftId) + '/set-subspecialty', {
+                    method: 'POST', body: { subspecialty: value }
+                });
+                if (value) rememberSection(value);
+                rebuildReviewSectionSelects();
+                showToast((value ? 'Section set on ' : 'Section cleared on ') + data.updated +
+                          ' report' + (data.updated === 1 ? '' : 's'));
+                runReviewSearch();
+            } catch (e) {
+                showToast('Failed: ' + e.message, 4000);
+            }
+        });
 
         // selectId: undefined = default to the active shift; '' = All shifts
         async function loadRvShifts(selectId) {
@@ -2728,6 +2915,10 @@
                             '<option value="' + escapeHtml(t.name) + '">'
                         ).join('');
                     await loadRvShifts();
+                    // The Review tab can be opened before the Draft page ever
+                    // loads, so fetch the remembered sections here too
+                    if (!customSections.length) await loadSections();
+                    rebuildReviewSectionSelects();
                 } catch (e) {
                     console.error('Review init failed:', e);
                 }
@@ -2770,6 +2961,8 @@
             if (rvShift.value) params.set('shift_id', rvShift.value);
             if (rvGrade.value) params.set('grade', rvGrade.value);
             if (rvStudyType.value.trim()) params.set('study_type', rvStudyType.value.trim());
+            if (rvSection.value === '__unassigned__') params.set('subspecialty', 'unassigned');
+            else if (rvSection.value) params.set('subspecialty', rvSection.value);
             const queryText = rvText.value.trim();
             if (queryText) params.set('q', queryText);
             rvList.innerHTML = '<div class="list-empty"><span class="spinner"></span>Searching…</div>';
@@ -2801,7 +2994,7 @@
                 }
                 rvList.innerHTML = '';
                 reports.forEach(r => {
-                    const row = renderReportRow(r, { showDate: true, showNote: true });
+                    const row = renderReportRow(r, { showDate: true, showNote: true, showSection: true });
                     // Show the matched text in context so a hit is self-explanatory
                     if (r.snippet) {
                         const snip = document.createElement('span');
@@ -2834,6 +3027,7 @@
 
         rvShift.addEventListener('change', () => { updateRvDeleteBtn(); runReviewSearch(); });
         rvGrade.addEventListener('change', runReviewSearch);
+        rvSection.addEventListener('change', runReviewSearch);
         let rvDebounce = null;
         const rvDebounced = () => {
             clearTimeout(rvDebounce);
@@ -2856,6 +3050,7 @@
             rvShift.value = '';
             rvGrade.value = '';
             rvStudyType.value = '';
+            rvSection.value = '';
             rvText.value = '';
             updateRvDeleteBtn();
             runReviewSearch();

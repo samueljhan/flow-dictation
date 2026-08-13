@@ -529,7 +529,6 @@
            date, grade, final) — the note preview wraps onto its own line. */
         .report-row {
             display: grid;
-            grid-template-columns: 130px minmax(140px, 1.4fr) minmax(0, 1fr) 90px 130px 60px 84px;
             align-items: center; gap: 16px; padding: 11px 16px;
             background: #242424; border: 1px solid #333333; border-radius: 8px;
             cursor: pointer; font-size: 13px; transition: all 0.15s; color: #d0d0d0;
@@ -554,20 +553,25 @@
            long study type or section widens the column for every row at once
            instead of misaligning its own. Study ID and RPR are not shown here
            (renderReportRow still emits them for the Final page). */
-        #rvGrid {
+        .report-grid {
             display: grid;
-            grid-template-columns: max-content minmax(0, 1fr) max-content max-content max-content max-content;
             column-gap: 16px; row-gap: 6px;
             margin-bottom: 18px;
         }
-        #rvGrid #rvList { display: contents; }
-        #rvGrid .report-head, #rvList .report-row {
+        .report-grid .report-list { display: contents; }
+        .report-grid .report-head, .report-grid .report-row {
             grid-column: 1 / -1;
             display: grid; grid-template-columns: subgrid;
         }
-        #rvGrid .report-head { margin-bottom: 2px; }
+        .report-grid .report-head { margin-bottom: 2px; }
+        .report-grid .list-empty { grid-column: 1 / -1; }
+        /* Review: ID | Study type | Section | Type | Date | Final */
+        #rvGrid { grid-template-columns: max-content minmax(0, 1fr) max-content max-content max-content max-content; }
         #rvList .rr-label, #rvList .rr-grade { display: none; }
-        #rvList .list-empty { grid-column: 1 / -1; }
+        /* Final: ID | Study type | Study ID | Type | Time | RPR | Final
+           (Final rows carry no section cell — renderReportRow only emits it
+           for the Review page) */
+        #finGrid { grid-template-columns: max-content minmax(0, 1fr) max-content max-content max-content max-content max-content; }
         .rr-section { color: #b0b0b0; }
         /* Matched text from a keyword search, on its own line under the row */
         .rr-snippet {
@@ -696,33 +700,40 @@
                their left edges line up with the boxes above */
             .filter-actions { grid-column: 2; justify-self: end; margin-left: 0; }
             /* Rows become stacked cards rather than columns */
-            .report-head, #rvGrid .report-head { display: none; }
-            .report-row {
-                display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center;
-            }
-            .report-row > span { white-space: normal; }
+            .report-head, .report-grid .report-head { display: none; }
             .rr-label:empty { display: none; }
             .rr-section:empty { display: none; }
-            /* Review rows go two-line, same structure every row:
-               line 1 = ID + study type + Final, line 2 = section · type · date */
-            #rvGrid { display: block; }
-            #rvGrid #rvList { display: flex; flex-direction: column; }
-            #rvList .report-row {
+            /* Both lists go two-line, same structure every row:
+               line 1 = ID + study type + Final; line 2 = the smaller fields
+               (Review: section · type · date — Final: study ID · type · time · RPR) */
+            .report-grid { display: block; }
+            .report-grid .report-list { display: flex; flex-direction: column; }
+            .report-grid .report-row {
                 display: grid;
                 grid-template-columns: max-content minmax(0, 1fr) max-content max-content;
+                gap: 4px 12px; align-items: center;
+            }
+            .report-grid .report-row > span { white-space: nowrap; }
+            .report-grid .rr-id { grid-area: id; }
+            .report-grid .rr-study { grid-area: study; overflow: hidden; text-overflow: ellipsis; }
+            .report-grid .rr-final { grid-area: final; }
+            .report-grid .rr-type { grid-area: type; }
+            .report-grid .rr-time { grid-area: time; }
+            .report-grid .rr-section, .report-grid .rr-type, .report-grid .rr-time,
+            .report-grid .rr-label { font-size: 12px; }
+            #rvList .report-row {
                 grid-template-areas:
                     'id study study final'
                     'section type time time';
-                gap: 4px 12px; align-items: center;
             }
-            #rvList .report-row > span { white-space: nowrap; }
-            #rvList .rr-id { grid-area: id; }
-            #rvList .rr-study { grid-area: study; overflow: hidden; text-overflow: ellipsis; }
-            #rvList .rr-final { grid-area: final; }
             #rvList .rr-section { grid-area: section; }
-            #rvList .rr-type { grid-area: type; }
-            #rvList .rr-time { grid-area: time; }
-            #rvList .rr-section, #rvList .rr-type, #rvList .rr-time { font-size: 12px; }
+            #reportList .report-row {
+                grid-template-areas:
+                    'id study study final'
+                    'label type time grade';
+            }
+            #reportList .rr-label { grid-area: label; }
+            #reportList .rr-grade { grid-area: grade; justify-self: end; }
         }
     </style>
 </head>
@@ -889,7 +900,13 @@
                     <label>Shift</label>
                     <select id="shiftSelect"></select>
                 </div>
-                <div id="reportList" class="report-list"></div>
+                <div class="report-grid" id="finGrid">
+                    <div class="report-head">
+                        <span>Report ID</span><span>Study type</span><span>Study ID</span>
+                        <span>Type</span><span>Time</span><span>RPR</span><span>Final</span>
+                    </div>
+                    <div id="reportList" class="report-list"></div>
+                </div>
                 <div id="finalDetail" style="display:none">
                     <div class="final-columns">
                         <div class="final-col">

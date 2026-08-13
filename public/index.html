@@ -506,9 +506,22 @@
         .filter-bar .filter-group:nth-child(2) > label,
         .filter-bar .filter-group:nth-child(3) > label,
         .filter-bar .filter-group:nth-child(5) > label { margin-left: 16px; }
-        /* Buttons live in the last control cell, left-aligned with RPR's box */
-        .filter-actions { grid-column: 6; display: flex; align-items: center; gap: 10px; min-width: 0; }
-        .filter-actions .status { margin-left: auto; white-space: nowrap; }
+        /* Buttons group: right-aligned in the last control cell by default, so
+           it ends flush with the same right edge the RPR select does. Labels
+           never wrap mid-text — when space runs out the group relocates as a
+           whole (rules below), it does not squeeze. */
+        .filter-actions {
+            grid-column: 6; justify-self: end;
+            display: flex; align-items: center; gap: 10px; min-width: 0;
+        }
+        .filter-actions button, .filter-actions .status { white-space: nowrap; }
+        /* Tight widths: right-alignment in col 6 would clip, so the group tucks
+           in after the Search input instead — spanning the empty label track,
+           a modest gap from Search's box. Buttons have no label column of
+           their own, so this is the one thing allowed off the column grid. */
+        @media (max-width: 1150px) and (min-width: 769px) {
+            .filter-actions { grid-column: 5 / -1; justify-self: start; margin-left: 8px; }
+        }
         .filter-bar > .status { margin-left: 2px; }
         .report-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 18px; }
         /* Full-width result rows with aligned columns (ID, study type, study ID,
@@ -680,7 +693,7 @@
             .filter-bar .filter-group > input { width: 100%; min-width: 0; }
             /* Buttons and the bulk controls live in the control column, so
                their left edges line up with the boxes above */
-            .filter-actions { grid-column: 2; }
+            .filter-actions { grid-column: 2; justify-self: end; margin-left: 0; }
             /* Rows become stacked cards rather than columns */
             .report-head, #rvGrid .report-head { display: none; }
             .report-row {

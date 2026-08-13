@@ -495,7 +495,9 @@
            still-usable floor, and only then does a whole group move to the next row. */
         .filter-group input { flex: 1 1 170px; min-width: 120px; }
         .filter-actions { display: flex; align-items: center; gap: 10px; }
-        .filter-controls { display: flex; align-items: center; gap: 8px; min-width: 0; }
+        /* In the stacked grid the actions row spans the control column, so the
+           count sits right-aligned on the Clear/Delete row */
+        .filter-actions .status { margin-left: auto; }
         /* The 260px floor exists for the shift dropdown, whose names are long.
            RPR only ever holds "All" / "RPR1-4" / "Ungraded", and inheriting that
            floor is what pushed the bar onto a second row ~150px early. */
@@ -526,10 +528,25 @@
         .rr-label { color: #909090; }
         .rr-time { color: #808080; }
         .rr-note { grid-column: 1 / -1; white-space: normal !important; }
-        /* Review page adds a Section column; Final keeps the 7-column layout */
-        #page-review .report-head, #rvList .report-row {
-            grid-template-columns: 130px minmax(140px, 1.4fr) minmax(0, 1fr) minmax(90px, 0.7fr) 90px 130px 60px 84px;
+        /* Review report list: ID | Study type | Section | Type | Date | Final.
+           The outer grid owns the tracks; head and rows are subgrids, so a
+           long study type or section widens the column for every row at once
+           instead of misaligning its own. Study ID and RPR are not shown here
+           (renderReportRow still emits them for the Final page). */
+        #rvGrid {
+            display: grid;
+            grid-template-columns: max-content minmax(0, 1fr) max-content max-content max-content max-content;
+            column-gap: 16px; row-gap: 6px;
+            margin-bottom: 18px;
         }
+        #rvGrid #rvList { display: contents; }
+        #rvGrid .report-head, #rvList .report-row {
+            grid-column: 1 / -1;
+            display: grid; grid-template-columns: subgrid;
+        }
+        #rvGrid .report-head { margin-bottom: 2px; }
+        #rvList .rr-label, #rvList .rr-grade { display: none; }
+        #rvList .list-empty { grid-column: 1 / -1; }
         .rr-section { color: #b0b0b0; }
         /* Matched text from a keyword search, on its own line under the row */
         .rr-snippet {
@@ -613,9 +630,6 @@
                 grid-template-columns: 115px minmax(120px, 1.3fr) minmax(0, 1fr) 80px 110px 56px 78px;
                 gap: 12px;
             }
-            #page-review .report-head, #rvList .report-row {
-                grid-template-columns: 115px minmax(120px, 1.3fr) minmax(0, 1fr) minmax(80px, 0.7fr) 80px 110px 56px 78px;
-            }
         }
 
         /* Mobile: single column everywhere; header tabs scroll horizontally */
@@ -660,17 +674,34 @@
             /* Buttons and the bulk controls live in the control column, so
                their left edges line up with the boxes above */
             .filter-actions { grid-column: 2; }
-            .filter-bar .filter-controls select { flex: 1 1 auto; min-width: 0; width: auto; }
-            .filter-bar .filter-controls input { flex: 1 1 auto; min-width: 0; }
-            .filter-bar .filter-controls button { flex: 0 0 auto; }
             /* Rows become stacked cards rather than columns */
-            .report-head { display: none; }
+            .report-head, #rvGrid .report-head { display: none; }
             .report-row {
                 display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center;
             }
             .report-row > span { white-space: normal; }
             .rr-label:empty { display: none; }
             .rr-section:empty { display: none; }
+            /* Review rows go two-line, same structure every row:
+               line 1 = ID + study type + Final, line 2 = section · type · date */
+            #rvGrid { display: block; }
+            #rvGrid #rvList { display: flex; flex-direction: column; }
+            #rvList .report-row {
+                display: grid;
+                grid-template-columns: max-content minmax(0, 1fr) max-content max-content;
+                grid-template-areas:
+                    'id study study final'
+                    'section type time time';
+                gap: 4px 12px; align-items: center;
+            }
+            #rvList .report-row > span { white-space: nowrap; }
+            #rvList .rr-id { grid-area: id; }
+            #rvList .rr-study { grid-area: study; overflow: hidden; text-overflow: ellipsis; }
+            #rvList .rr-final { grid-area: final; }
+            #rvList .rr-section { grid-area: section; }
+            #rvList .rr-type { grid-area: type; }
+            #rvList .rr-time { grid-area: time; }
+            #rvList .rr-section, #rvList .rr-type, #rvList .rr-time { font-size: 12px; }
         }
     </style>
 </head>
@@ -918,22 +949,17 @@
                         <button class="ghost danger" id="rvDeleteShift" style="display:none">Delete Shift</button>
                         <span class="status" id="rvCount"></span>
                     </div>
-                    <!-- Whole shifts are usually one section — bulk-assign, only
-                         when a specific shift is selected -->
-                    <div class="filter-group" id="rvBulkGroup" style="display:none">
-                        <label for="rvBulkSelect">Set section for this shift</label>
-                        <div class="filter-controls">
-                            <select id="rvBulkSelect"></select>
-                            <input id="rvBulkOther" autocomplete="off" placeholder="Section name…" style="display:none">
-                            <button class="ghost" id="rvBulkApply">Apply</button>
-                        </div>
+                </div>
+                <!-- One grid owns the column tracks; the head and every row are
+                     subgrids of it, so fields align vertically across all rows
+                     no matter how long any one value is. -->
+                <div class="report-grid" id="rvGrid">
+                    <div class="report-head">
+                        <span>Report ID</span><span>Study type</span><span>Section</span>
+                        <span>Type</span><span>Date</span><span>Final</span>
                     </div>
+                    <div id="rvList" class="report-list"></div>
                 </div>
-                <div class="report-head">
-                    <span>Report ID</span><span>Study type</span><span>Study ID</span>
-                    <span>Section</span><span>Type</span><span>Date</span><span>RPR</span><span>Final</span>
-                </div>
-                <div id="rvList" class="report-list"></div>
             </div>
         </section>
     </div>
@@ -2737,7 +2763,7 @@
                 (showSection ? '<span class="rr-section">' + escapeHtml(r.subspecialty || '') + '</span>' : '') +
                 '<span class="rr-type">' + escapeHtml(r.report_type) + '</span>' +
                 '<span class="rr-time">' + when + '</span>' +
-                '<span>' + (r.rpr_grade ? '<span class="rpr-badge ' + r.rpr_grade.toLowerCase() + '">' + escapeHtml(r.rpr_grade) + '</span>' : '') + '</span>' +
+                '<span class="rr-grade">' + (r.rpr_grade ? '<span class="rpr-badge ' + r.rpr_grade.toLowerCase() + '">' + escapeHtml(r.rpr_grade) + '</span>' : '') + '</span>' +
                 '<span class="rr-final ' + (r.final_saved_at ? 'yes' : 'no') + '">' + (r.final_saved_at ? '✓ Final' : 'No final') + '</span>' +
                 (showNote && noteLine ? '<span class="rr-note">' + escapeHtml(noteLine) + '</span>' : '');
             return row;
@@ -2910,75 +2936,47 @@
         const rvSection = document.getElementById('rvSection');
         const rvList = document.getElementById('rvList');
         const rvCount = document.getElementById('rvCount');
-        const rvBulkSelect = document.getElementById('rvBulkSelect');
-        const rvBulkOther = document.getElementById('rvBulkOther');
+        let rvShiftList = [];      // last-loaded shifts, for the section auto-fill
         let reviewInited = false;
 
-        // Shift-scoped controls: Delete Shift and the bulk section assignment
-        // only make sense on a specific shift, not "All shifts"
+        // Delete Shift only makes sense on a specific shift, not "All shifts"
         function updateRvDeleteBtn() {
-            const specific = !!rvShift.value;
-            document.getElementById('rvDeleteShift').style.display = specific ? '' : 'none';
-            document.getElementById('rvBulkGroup').style.display = specific ? '' : 'none';
+            document.getElementById('rvDeleteShift').style.display = rvShift.value ? '' : 'none';
         }
 
         // Filter options: All · Unassigned · the shared section list (no Other —
-        // filtering is by values that exist). Bulk keeps the Other path.
-        function rebuildReviewSectionSelects() {
-            const keepF = rvSection.value, keepB = rvBulkSelect.value;
+        // filtering is by values that exist)
+        function rebuildReviewSectionSelect() {
+            const keep = rvSection.value;
             const opt = v => '<option value="' + escapeHtml(v) + '">' + escapeHtml(v) + '</option>';
             rvSection.innerHTML = '<option value="">All</option>' +
                 '<option value="__unassigned__">Unassigned</option>' +
                 STANDARD_SECTIONS.map(opt).join('') + customSections.map(opt).join('');
-            rvBulkSelect.innerHTML = sectionOptionsHtml('(clear)');
-            rvSection.value = keepF; if (rvSection.value !== keepF) rvSection.value = '';
-            rvBulkSelect.value = keepB; if (rvBulkSelect.value !== keepB) rvBulkSelect.value = '';
+            rvSection.value = keep; if (rvSection.value !== keep) rvSection.value = '';
         }
-        rvBulkSelect.addEventListener('change', () => {
-            const other = rvBulkSelect.value === OTHER_SECTION;
-            rvBulkOther.style.display = other ? '' : 'none';
-            if (!other) rvBulkOther.value = ''; else rvBulkOther.focus();
-        });
 
-        document.getElementById('rvBulkApply').addEventListener('click', async () => {
-            const shiftId = rvShift.value;
-            if (!shiftId) return;
-            const value = rvBulkSelect.value === OTHER_SECTION
-                ? rvBulkOther.value.trim() || null
-                : rvBulkSelect.value || null;
-            const name = rvShift.options[rvShift.selectedIndex].text;
-            const what = value ? 'Set section “' + value + '” on' : 'Clear the section from';
-            if (!confirm(what + ' every report in “' + name + '”?')) return;
-            try {
-                const data = await api('/api/shifts/' + encodeURIComponent(shiftId) + '/set-subspecialty', {
-                    method: 'POST', body: { subspecialty: value }
-                });
-                if (value) rememberSection(value);
-                rebuildReviewSectionSelects();
-                // The bulk action also sets the shift's own section, so refresh
-                // the labelled dropdown — and the Draft header if it's the
-                // active shift — to match
-                await loadRvShifts(shiftId);
-                if (currentShift && currentShift.id === shiftId) {
-                    currentShift.subspecialty = value;
-                    syncShiftSectionControl();
-                }
-                showToast((value ? 'Section set on ' : 'Section cleared on ') + data.updated +
-                          ' report' + (data.updated === 1 ? '' : 's'));
-                runReviewSearch();
-            } catch (e) {
-                showToast('Failed: ' + e.message, 4000);
+        // Picking a shift pre-fills the Section filter with that shift's section
+        // (back to "All" for All-shifts or a sectionless shift). A convenience,
+        // not a lock — the user can still change Section afterward.
+        function applySectionFromShift() {
+            const shift = rvShiftList.find(x => x.id === rvShift.value);
+            const v = (shift && shift.subspecialty) || '';
+            if (v && ![...rvSection.options].some(o => o.value === v)) {
+                const o = document.createElement('option');   // stale customs list
+                o.value = v; o.textContent = v;
+                rvSection.appendChild(o);
             }
-        });
+            rvSection.value = v;
+        }
 
         // selectId: undefined = default to the active shift; '' = All shifts
         async function loadRvShifts(selectId) {
             const shiftsData = await api('/api/shifts');
             const shifts = shiftsData.shifts || [];
+            rvShiftList = shifts;
             rvShift.innerHTML = '<option value="">All shifts</option>' +
                 shifts.map(s =>
-                    '<option value="' + s.id + '">' + escapeHtml(s.name) +
-                    (s.subspecialty ? ' (' + escapeHtml(s.subspecialty) + ')' : '') + '</option>'
+                    '<option value="' + s.id + '">' + escapeHtml(s.name) + '</option>'
                 ).join('');
             if (selectId !== undefined) {
                 rvShift.value = selectId;
@@ -2988,6 +2986,7 @@
                 if (rvActive) rvShift.value = rvActive.id;
             }
             updateRvDeleteBtn();
+            applySectionFromShift();
         }
 
         async function initReviewPage() {
@@ -3003,7 +3002,8 @@
                     // The Review tab can be opened before the Draft page ever
                     // loads, so fetch the remembered sections here too
                     if (!customSections.length) await loadSections();
-                    rebuildReviewSectionSelects();
+                    rebuildReviewSectionSelect();
+                    applySectionFromShift();   // options exist now — land the default
                 } catch (e) {
                     console.error('Review init failed:', e);
                 }
@@ -3110,7 +3110,11 @@
             selectFinalReport(r.id, row);
         }
 
-        rvShift.addEventListener('change', () => { updateRvDeleteBtn(); runReviewSearch(); });
+        rvShift.addEventListener('change', () => {
+            updateRvDeleteBtn();
+            applySectionFromShift();
+            runReviewSearch();
+        });
         rvGrade.addEventListener('change', runReviewSearch);
         rvSection.addEventListener('change', runReviewSearch);
         let rvDebounce = null;

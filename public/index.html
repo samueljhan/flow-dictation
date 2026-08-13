@@ -494,6 +494,8 @@
         /* Shrink before wrapping: the text inputs give up width first, down to a
            still-usable floor, and only then does a whole group move to the next row. */
         .filter-group input { flex: 1 1 170px; min-width: 120px; }
+        .filter-actions { display: flex; align-items: center; gap: 10px; }
+        .filter-controls { display: flex; align-items: center; gap: 8px; min-width: 0; }
         /* The 260px floor exists for the shift dropdown, whose names are long.
            RPR only ever holds "All" / "RPR1-4" / "Ungraded", and inheriting that
            floor is what pushed the bar onto a second row ~150px early. */
@@ -643,10 +645,24 @@
             .final-columns { flex-direction: column; gap: 14px; }
             .final-toolbar { flex-wrap: wrap; }
             .final-toolbar select { min-width: 0; flex: 1; }
-            /* One group per row, each filling the width — the label stays beside
-               its control, the control takes whatever is left. */
-            .filter-group { flex: 1 1 100%; }
-            .filter-group input { flex: 1 1 auto; min-width: 0; }
+            /* Stacked mode: one label/control grid. display:contents lifts each
+               group's label and control into the grid, so every label's right
+               edge sits flush against its control and all the boxes share the
+               same left and right edges. */
+            .filter-bar {
+                display: grid; grid-template-columns: max-content 1fr;
+                column-gap: 12px; row-gap: 10px; align-items: center;
+            }
+            .filter-bar .filter-group { display: contents; }
+            .filter-bar .filter-group > label { text-align: right; }
+            .filter-bar .filter-group > select,
+            .filter-bar .filter-group > input { width: 100%; min-width: 0; }
+            /* Buttons and the bulk controls live in the control column, so
+               their left edges line up with the boxes above */
+            .filter-actions { grid-column: 2; }
+            .filter-bar .filter-controls select { flex: 1 1 auto; min-width: 0; width: auto; }
+            .filter-bar .filter-controls input { flex: 1 1 auto; min-width: 0; }
+            .filter-bar .filter-controls button { flex: 0 0 auto; }
             /* Rows become stacked cards rather than columns */
             .report-head { display: none; }
             .report-row {
@@ -873,6 +889,10 @@
                         <select id="rvShift"><option value="">All shifts</option></select>
                     </div>
                     <div class="filter-group">
+                        <label for="rvSection">Section</label>
+                        <select id="rvSection"></select>
+                    </div>
+                    <div class="filter-group">
                         <label for="rvGrade">RPR</label>
                         <select id="rvGrade">
                             <option value="">All</option>
@@ -889,25 +909,25 @@
                         <datalist id="rvStudyTypes"></datalist>
                     </div>
                     <div class="filter-group">
-                        <label for="rvSection">Section</label>
-                        <select id="rvSection"></select>
-                    </div>
-                    <div class="filter-group">
                         <label for="rvText">Search</label>
                         <input id="rvText" placeholder="e.g. right brachiocephalic"
                                title="Searches the report text, read-out notes, RPR notes and study ID. Every word must appear; wrap in quotes for an exact phrase.">
                     </div>
-                    <button class="ghost" id="rvClear">Clear</button>
-                    <button class="ghost danger" id="rvDeleteShift" style="display:none">Delete Shift</button>
+                    <div class="filter-actions">
+                        <button class="ghost" id="rvClear">Clear</button>
+                        <button class="ghost danger" id="rvDeleteShift" style="display:none">Delete Shift</button>
+                        <span class="status" id="rvCount"></span>
+                    </div>
                     <!-- Whole shifts are usually one section — bulk-assign, only
                          when a specific shift is selected -->
                     <div class="filter-group" id="rvBulkGroup" style="display:none">
                         <label for="rvBulkSelect">Set section for this shift</label>
-                        <select id="rvBulkSelect"></select>
-                        <input id="rvBulkOther" autocomplete="off" placeholder="Section name…" style="display:none">
-                        <button class="ghost" id="rvBulkApply">Apply</button>
+                        <div class="filter-controls">
+                            <select id="rvBulkSelect"></select>
+                            <input id="rvBulkOther" autocomplete="off" placeholder="Section name…" style="display:none">
+                            <button class="ghost" id="rvBulkApply">Apply</button>
+                        </div>
                     </div>
-                    <span class="status" id="rvCount"></span>
                 </div>
                 <div class="report-head">
                     <span>Report ID</span><span>Study type</span><span>Study ID</span>

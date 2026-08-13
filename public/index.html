@@ -54,6 +54,7 @@
         .header h1 {
             color: #e0e0e0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em;
             display: flex; align-items: center; padding: 16px 0; white-space: nowrap;
+            cursor: pointer;
         }
         .tabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; margin-left: auto; }
         .tabs::-webkit-scrollbar { display: none; }
@@ -728,7 +729,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>Flow Dictation</h1>
+            <h1 id="homeLink" role="link" tabindex="0" title="Go to Assist">Flow Dictation</h1>
             <nav class="tabs">
                 <button class="tab active" data-page="assist">Assist</button>
                 <button class="tab" data-page="draft">Draft</button>
@@ -1118,17 +1119,20 @@
 
         // ==================== Tabs ====================
 
+        function showPage(page) {
+            document.querySelectorAll('.tab[data-page]').forEach(t =>
+                t.classList.toggle('active', t.dataset.page === page));
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.getElementById('page-' + page).classList.add('active');
+            if (page === 'draft') initDraftPage();
+            if (page === 'final') initFinalPage();
+            if (page === 'review') initReviewPage();
+        }
         document.querySelectorAll('.tab[data-page]').forEach(tab => {
-            tab.addEventListener('click', () => {
-                document.querySelectorAll('.tab[data-page]').forEach(t => t.classList.remove('active'));
-                document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-                tab.classList.add('active');
-                document.getElementById('page-' + tab.dataset.page).classList.add('active');
-                if (tab.dataset.page === 'draft') initDraftPage();
-                if (tab.dataset.page === 'final') initFinalPage();
-                if (tab.dataset.page === 'review') initReviewPage();
-            });
+            tab.addEventListener('click', () => showPage(tab.dataset.page));
         });
+        // The logo is the way home: clicking "Flow Dictation" opens Assist
+        document.getElementById('homeLink').addEventListener('click', () => showPage('assist'));
 
         // ==================== Header menu ====================
 

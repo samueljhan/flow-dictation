@@ -1155,7 +1155,10 @@
                 t.classList.toggle('active', t.dataset.page === page));
             document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
             document.getElementById('page-' + page).classList.add('active');
-            if (page === 'draft') initDraftPage();
+            // Coming back to Draft refreshes the list — a report finalized on
+            // the Final page (or a shift changed elsewhere) must not linger
+            // here as a stale row
+            if (page === 'draft') { if (draftInited) loadDraftList(); else initDraftPage(); }
             if (page === 'final') initFinalPage();
             if (page === 'review') initReviewPage();
         }

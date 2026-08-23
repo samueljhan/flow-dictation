@@ -10,7 +10,7 @@
 // TRANSLATION text. Pass --original-only to import only English-language
 // originals (currently imports nothing; future-proofing).
 //
-// Usage:
+// Usage (with cloud-sql-proxy running and PG* variables set, see .env.example):
 //   npm run import-parrot            # import English translations (default)
 //   node scripts/import-parrot.js --original-only
 //   node scripts/import-parrot.js --limit 100   # for testing
@@ -18,7 +18,7 @@
 // Idempotent: entries whose PARROT title already exists are skipped.
 
 require('dotenv').config();
-const { createClient } = require('@supabase/supabase-js');
+const db = require('../db');
 
 const DATA_URL = 'https://raw.githubusercontent.com/PARROT-reports/PARROT_v1.0/main/data/PARROT_v1_0.jsonl';
 const MIN_CHARS = 200;
@@ -74,13 +74,10 @@ function normalizeStudyType(modality, area) {
 }
 
 async function main() {
-  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    console.error('Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY in environment.');
+  if (!db.configured) {
+    console.error('Database not configured: set PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE (cloud-sql-proxy) in the environment.');
     process.exit(1);
   }
-  const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
-    auth: { persistSession: false }
-  });
 
   console.log('Downloading PARROT v1.0 …');
   const resp = await fetch(DATA_URL);
@@ -92,18 +89,9 @@ async function main() {
   const lines = jsonl.split('\n').filter(l => l.trim());
   console.log(`Downloaded ${lines.length} records.`);
 
-  // Existing PARROT titles for idempotency (paged past Supabase's 1000-row cap)
-  const existing = new Set();
-  for (let from = 0; ; from += 1000) {
-    const { data, error } = await supabase
-      .from('exemplar_reports')
-      .select('title')
-      .eq('source', 'parrot')
-      .range(from, from + 999);
-    if (error) { console.error('Failed to read existing rows:', error.message); process.exit(1); }
-    data.forEach(r => existing.add(r.title));
-    if (data.length < 1000) break;
-  }
+  // Existing PARROT titles for idempotency
+  const existing = new Set(
+    (await db.many(`select title from exemplar_reports where source = 'parrot'`)).map(r => r.title));
   console.log(`${existing.size} PARROT exemplars already in the database.`);
 
   const rows = [];
@@ -147,8 +135,18 @@ async function main() {
   let inserted = 0;
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
     const batch = rows.slice(i, i + BATCH_SIZE);
-    const { error } = await supabase.from('exemplar_reports').insert(batch);
-    if (error) {
+    // One multi-row INSERT per batch: (study_type, title, body, notes, source) x N
+    const params = [];
+    const tuples = batch.map(r => {
+      params.push(r.study_type, r.title, r.body, r.notes, r.source);
+      const n = params.length;
+      return `($${n - 4}, $${n - 3}, $${n - 2}, $${n - 1}, $${n})`;
+    });
+    try {
+      await db.query(
+        `insert into exemplar_reports (study_type, title, body, notes, source) values ${tuples.join(', ')}`,
+        params);
+    } catch (error) {
       console.error(`Batch ${i / BATCH_SIZE + 1} failed:`, error.message);
       process.exit(1);
     }
@@ -164,6 +162,7 @@ async function main() {
   console.log('\nImported this run, by study type:');
   for (const [st, n] of sorted) console.log(`  ${String(n).padStart(4)}  ${st}`);
   console.log(`  ----\n  ${String(inserted).padStart(4)}  total`);
+  await db.pool.end();
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+main().catch(e => { console.error(e.message); process.exit(1); });

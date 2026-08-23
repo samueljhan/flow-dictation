@@ -1,51 +1,41 @@
 const express = require('express');
-const Anthropic = require('@anthropic-ai/sdk');
-const { createClient } = require('@supabase/supabase-js');
 const { google } = require('googleapis');
 const cors = require('cors');
 const crypto = require('crypto');
 const path = require('path');
 require('dotenv').config();
+const db = require('./db');
+const gemini = require('./gemini');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
-app.set('trust proxy', 1); // Railway terminates TLS upstream
+app.set('trust proxy', 1); // Cloud Run terminates TLS upstream
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: false }));
 
-// Claude API configuration — models are env-configurable
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// Vertex AI Gemini — models are env-configurable.
 // Detection is a trivial classification that runs on nearly every action —
-// Haiku handles it at ~1/10 the price of the frontier models.
-// Every task routes independently so any one can be A/B'd from a Railway
+// Flash-Lite handles it at a fraction of the price of the frontier models.
+// Every task routes independently so any one can be A/B'd from a Cloud Run
 // variable without touching code. Deliberately NO cross-inheritance: setting
 // MODEL_REPORT must not silently drag review or impression along with it.
-const MODEL_DETECT = process.env.MODEL_DETECT || 'claude-haiku-4-5';      // study-type classification
-const MODEL_REPORT = process.env.MODEL_REPORT || 'claude-sonnet-4-6';     // proofread · reword · describe · full report structure
-const MODEL_REVIEW = process.env.MODEL_REVIEW || 'claude-opus-5';         // draft review + integrate-notes
-const MODEL_IMPRESSION = process.env.MODEL_IMPRESSION || 'claude-opus-5'; // Generate Impression + the full report's impression
-// Quick Rad Question is the most token-heavy path — a single search puts ~14k
-// tokens of results in context — so the per-token rate is what decides its
-// cost, not the tool or the search budget. Measured on one question: identical
-// searches cost $0.21 on Fable and $0.11 on Opus 5.
-const MODEL_RADQA = process.env.MODEL_RADQA || 'claude-opus-5';          // Quick Rad Question (references on)
-const MODEL_CHAT = process.env.MODEL_CHAT || 'claude-opus-5';            // plain free text (no references)
-const MODEL_SYNTHESIZE = process.env.MODEL_SYNTHESIZE || 'claude-opus-5'; // prior report + new info → merged report
-// Used on every path when safety classifiers decline a benign radiology request
-const MODEL_FALLBACK = process.env.MODEL_FALLBACK || 'claude-opus-4-8';
+const MODEL_DETECT = process.env.MODEL_DETECT || 'gemini-2.5-flash-lite';   // study-type classification
+const MODEL_REPORT = process.env.MODEL_REPORT || 'gemini-2.5-flash';        // proofread · reword · describe · full report structure
+const MODEL_REVIEW = process.env.MODEL_REVIEW || 'gemini-2.5-pro';          // draft review + integrate-notes
+const MODEL_IMPRESSION = process.env.MODEL_IMPRESSION || 'gemini-2.5-pro';  // Generate Impression + the full report's impression
+// Quick Rad Question is the most token-heavy path — grounded search results
+// land in context — so the per-token rate is what decides its cost.
+const MODEL_RADQA = process.env.MODEL_RADQA || 'gemini-2.5-pro';            // Quick Rad Question (references on)
+const MODEL_CHAT = process.env.MODEL_CHAT || MODEL_RADQA;                   // plain free text (no references)
+const MODEL_SYNTHESIZE = process.env.MODEL_SYNTHESIZE || 'gemini-2.5-pro';  // prior report + new info → merged report
 
-// Supabase (server-side only — service role key, never sent to the browser)
-const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)
-  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
-      auth: { persistSession: false }
-    })
-  : null;
-
-function requireSupabase(res) {
-  if (!supabase) {
-    res.status(503).json({ error: 'Supabase not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.' });
+// Postgres (Cloud SQL). db.configured is false only when no connection
+// variables are set at all; a wrong password surfaces on the first query.
+function requireDb(res) {
+  if (!db.configured) {
+    res.status(503).json({ error: 'Database not configured. Set INSTANCE_CONNECTION_NAME or PGHOST plus PGUSER/PGPASSWORD/PGDATABASE.' });
     return false;
   }
   return true;
@@ -187,45 +177,33 @@ app.get('/api/me', (req, res) => res.json({ user: req.user }));
 app.use(express.static('public'));
 
 console.log('=== Environment Check ===');
-console.log('Anthropic:', !!process.env.ANTHROPIC_API_KEY ? '✓' : '✗');
-console.log('Supabase:', !!supabase ? '✓' : '✗');
+console.log('Vertex AI:', gemini.PROJECT ? `✓ project=${gemini.PROJECT} location=${gemini.LOCATION}` : '✗ (set GOOGLE_CLOUD_PROJECT)');
+console.log('Database:', db.configured ? `✓ ${db.describe()}` : '✗');
 console.log('Google Client ID:', !!process.env.GOOGLE_CLIENT_ID ? '✓' : '✗');
 console.log('Google Client Secret:', !!process.env.GOOGLE_CLIENT_SECRET ? '✓' : '✗');
 console.log('Models:');
 console.log(`  detect=${MODEL_DETECT} report=${MODEL_REPORT} review=${MODEL_REVIEW} impression=${MODEL_IMPRESSION} radqa=${MODEL_RADQA}`);
-console.log(`  synthesize=${MODEL_SYNTHESIZE} chat=${MODEL_CHAT} fallback=${MODEL_FALLBACK}`);
+console.log(`  synthesize=${MODEL_SYNTHESIZE} chat=${MODEL_CHAT}`);
 console.log('========================');
 
-// ============ Claude helpers ============
-
-// Only the Fable/Opus-5 tier accepts the server-side `fallbacks` parameter;
-// Haiku and Sonnet reject it with a 400. Those models also don't exhibit the
-// classifier refusals fallbacks exist to rescue.
-const FALLBACK_CAPABLE = /fable|mythos|opus-5/i;
-
-// output_config.effort is the latency lever: low/medium for mechanical tasks,
-// default (high) for complex ones. Haiku 4.5 rejects the parameter.
-const EFFORT_CAPABLE = /fable|mythos|opus|sonnet-5|sonnet-4-6/i;
+// ============ Gemini helpers ============
 
 // ============ Cost accounting ============
 
-// US list price per million tokens. Longest-prefix matched against the model
-// the API says served the request, so a dated snapshot or a transparent
-// fallback swap still prices correctly.
+// Vertex AI US list price per million tokens (standard tier, prompts ≤200k
+// tokens). Longest-prefix matched against the model version the API says
+// served the request, so a dated snapshot still prices correctly.
 const PRICING = {
-  'claude-opus-5':     { input: 5,  output: 25 },
-  'claude-opus-4-8':   { input: 5,  output: 25 },
-  'claude-opus-4-7':   { input: 5,  output: 25 },
-  'claude-sonnet-5':   { input: 3,  output: 15 },
-  'claude-sonnet-4-6': { input: 3,  output: 15 },
-  'claude-haiku-4-5':  { input: 1,  output: 5 },
-  'claude-fable-5':    { input: 10, output: 50 }
+  'gemini-2.5-pro':        { input: 1.25, output: 10 },
+  'gemini-2.5-flash':      { input: 0.30, output: 2.50 },
+  'gemini-2.5-flash-lite': { input: 0.10, output: 0.40 }
 };
-// Cache writes are 1.25x input at the 5-minute TTL but 2x at the 1-hour TTL,
-// and every cached block here is written with ttl:'1h' (see CACHE_1H). Using
-// 1.25 would quietly understate the cost of exactly the blocks we cache.
-const CACHE_WRITE_MULTIPLIER = 2.0;
-const CACHE_READ_MULTIPLIER = 0.1;
+// Implicit cache hits are billed at a quarter of the input rate on Gemini 2.5.
+// There are no cache writes to price — implicit caching is free to populate.
+const CACHE_READ_MULTIPLIER = 0.25;
+// Grounding with Google Search is a flat per-request charge on Vertex AI
+// ($35 per 1,000 grounded prompts), billed on top of the tokens.
+const GROUNDING_COST_PER_CALL = 0.035;
 
 const unpricedModels = new Set();
 function priceFor(model) {
@@ -244,20 +222,22 @@ function priceFor(model) {
   return PRICING[best];
 }
 
-// Dollars for one call, from the usage block the API returns.
-function costFor(model, u) {
+// Dollars for one call, from the usage Gemini returns. promptTokenCount
+// includes the cached portion, so cached tokens are rebated down to the
+// cache-read rate rather than added. Thinking tokens bill as output.
+function costFor(model, u, grounded) {
   const p = priceFor(model);
   if (!p) return 0;
-  const inTok = u.input_tokens || 0;
-  const write = u.cache_creation_input_tokens || 0;
-  const read = u.cache_read_input_tokens || 0;
-  const out = u.output_tokens || 0;
+  const prompt = u.prompt_tokens || 0;
+  const cached = Math.min(u.cached_tokens || 0, prompt);
+  const tool = u.tool_prompt_tokens || 0;
+  const out = (u.output_tokens || 0) + (u.thought_tokens || 0);
   return (
-    inTok * p.input +
-    write * p.input * CACHE_WRITE_MULTIPLIER +
-    read * p.input * CACHE_READ_MULTIPLIER +
+    (prompt - cached) * p.input +
+    cached * p.input * CACHE_READ_MULTIPLIER +
+    tool * p.input +
     out * p.output
-  ) / 1e6;
+  ) / 1e6 + (grounded ? GROUNDING_COST_PER_CALL : 0);
 }
 
 // In-process tally, keyed by model AND label so per-task cost is visible.
@@ -266,20 +246,22 @@ const usageTally = new Map();   // "<model>|<label>" -> totals
 let usageSince = new Date().toISOString();
 
 // Returns the call's cost so the caller can log it.
-function recordUsage({ model, label, usage, injected }) {
+function recordUsage({ model, label, usage, injected, grounded }) {
   const u = usage || {};
-  const cost = costFor(model, u);
+  const cost = costFor(model, u, grounded);
   const key = `${model || 'unknown'}|${label || 'unlabelled'}`;
   const t = usageTally.get(key) || {
     model: model || 'unknown', label: label || 'unlabelled',
-    calls: 0, input_tokens: 0, output_tokens: 0,
-    cache_write_tokens: 0, cache_read_tokens: 0, injected_tokens: 0, est_cost: 0
+    calls: 0, grounded_calls: 0, input_tokens: 0, output_tokens: 0, thought_tokens: 0,
+    cache_read_tokens: 0, tool_prompt_tokens: 0, injected_tokens: 0, est_cost: 0
   };
   t.calls += 1;
-  t.input_tokens += u.input_tokens || 0;
+  if (grounded) t.grounded_calls += 1;
+  t.input_tokens += u.prompt_tokens || 0;
   t.output_tokens += u.output_tokens || 0;
-  t.cache_write_tokens += u.cache_creation_input_tokens || 0;
-  t.cache_read_tokens += u.cache_read_input_tokens || 0;
+  t.thought_tokens += u.thought_tokens || 0;
+  t.cache_read_tokens += u.cached_tokens || 0;
+  t.tool_prompt_tokens += u.tool_prompt_tokens || 0;
   t.injected_tokens += injected || 0;
   t.est_cost += cost;
   usageTally.set(key, t);
@@ -288,75 +270,32 @@ function recordUsage({ model, label, usage, injected }) {
 
 const usd = n => '$' + n.toFixed(4);
 
-// withFallbacks: request server-side refusal fallbacks where the model supports it.
-async function claudeText({ model, system, message, messages, maxTokens, withFallbacks, effort, injected, label }) {
-  const params = {
-    model,
-    max_tokens: maxTokens,
-    system,
-    messages: messages || [{ role: 'user', content: message }]
-  };
-  if (effort && EFFORT_CAPABLE.test(model)) {
-    params.output_config = { effort };
-  }
-  let response;
-  if (withFallbacks && FALLBACK_CAPABLE.test(model)) {
-    try {
-      response = await anthropic.beta.messages.create({
-        ...params,
-        betas: ['server-side-fallback-2026-07-01'],
-        fallbacks: 'default'
-      });
-    } catch (e) {
-      // Self-heal if a model's fallback support differs from the pattern above
-      if (!/does not support the .?fallbacks/i.test(e.message || '')) throw e;
-      console.warn(`[claude] ${model} rejected fallbacks — retrying without`);
-      response = await anthropic.messages.create(params);
-    }
-  } else {
-    response = await anthropic.messages.create(params);
-  }
-  const u = response.usage || {};
-  const served = response.model || model;
-  const cost = recordUsage({ model: served, label, usage: u, injected });
-  console.log(`[claude] ${served} label=${label || '-'} injected=${injected || 0} in=${u.input_tokens} out=${u.output_tokens} cache_write=${u.cache_creation_input_tokens || 0} cache_read=${u.cache_read_input_tokens || 0} est_cost=${usd(cost)}`);
-  // The server-side `fallbacks` param swaps models transparently — surface it
-  // so a primary that keeps getting declined doesn't stay invisible.
-  if ((u.iterations || []).some(i => i.type === 'fallback_message')) {
-    console.warn(`⚠ [fallback] ${model} was declined by safety classifiers — served by ${response.model || 'fallback model'} instead`);
-  }
-  // Safety classifiers (e.g. on claude-fable-5) can decline a request with a 200 +
-  // stop_reason "refusal" and empty content — surface that instead of returning ''.
-  if (response.stop_reason === 'refusal') {
-    const err = new Error('This request was declined by the model’s safety filters. Try rephrasing it.');
-    err.isRefusal = true;
-    throw err;
-  }
-  // Fable returns thinking blocks alongside text; only text blocks carry the answer.
-  return response.content
-    .filter(block => block.type === 'text')
-    .map(block => block.text)
-    .join('')
-    .trim();
+// Only IDs and counts ever reach the logs — never prompt or answer text.
+function logCall({ served, label, injected, u, cost, grounded, finishReason }) {
+  console.log(`[gemini] ${served} label=${label || '-'}${grounded ? ' grounded' : ''} injected=${injected || 0} in=${u.prompt_tokens} cached=${u.cached_tokens} tool=${u.tool_prompt_tokens} out=${u.output_tokens} thoughts=${u.thought_tokens} est_cost=${usd(cost)} finish=${finishReason}`);
 }
 
-// Every Claude path: run on the primary model, and if safety classifiers decline
-// a benign radiology request, transparently retry on the fallback model.
-async function claudeTextFallback(opts) {
-  try {
-    return await claudeText({ ...opts, withFallbacks: true });
-  } catch (e) {
-    const fallback = opts.fallbackModel || MODEL_FALLBACK;
-    if (e.isRefusal && fallback && fallback !== opts.model) {
-      console.warn(`⚠ [fallback] ${opts.model} refused — retrying on ${fallback}. Reason: ${e.message}`);
-      return await claudeText({ ...opts, model: fallback, withFallbacks: true });
-    }
-    throw e;
-  }
+// Conversation history for Gemini: the assistant's turns are role "model".
+function toContents(messages) {
+  return messages.map(m => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }]
+  }));
 }
 
-// Claude is instructed to return JSON only, but strip markdown fences defensively.
-function parseClaudeJson(text) {
+// One text completion. `system` is a string; `messages` (or a single
+// `message`) become the contents. `schema` switches on JSON mode with that
+// response schema. A safety block throws an error with isRefusal=true.
+async function geminiText({ model, system, message, messages, maxTokens, effort, injected, label, schema }) {
+  const contents = toContents(messages || [{ role: 'user', content: message }]);
+  const r = await gemini.generate({ model, system, contents, maxTokens, effort, responseSchema: schema });
+  const cost = recordUsage({ model: r.served, label, usage: r.usage, injected });
+  logCall({ served: r.served, label, injected, u: r.usage, cost, finishReason: r.finishReason });
+  return r.text.trim();
+}
+
+// Gemini's JSON mode returns bare JSON, but strip markdown fences defensively.
+function parseModelJson(text) {
   let cleaned = text
     .replace(/^\s*```(?:json)?\s*/i, '')
     .replace(/\s*```\s*$/, '')
@@ -485,6 +424,41 @@ Rules:
 const STUDY_TYPE_SYSTEM = `You identify the study type of a radiology report: modality plus body part, normalized in the style "MRI knee", "CT abdomen pelvis", "US thyroid", "XR chest", "PET/CT whole body", "CT head".
 Return JSON only — no markdown fences, no commentary: {"study_type": "..."}`;
 
+// Response schemas for the structured calls — Gemini's JSON mode guarantees
+// the shape, so the prompts' "JSON only" instructions become belt-and-braces.
+// These mirror exactly what the frontend consumes.
+const STUDY_TYPE_SCHEMA = {
+  type: 'OBJECT',
+  properties: { study_type: { type: 'STRING' } },
+  required: ['study_type']
+};
+const DESCRIBE_SCHEMA = {
+  type: 'OBJECT',
+  properties: { findings: { type: 'STRING' }, impression: { type: 'STRING' } },
+  required: ['findings', 'impression']
+};
+const editsSchema = categories => ({
+  type: 'OBJECT',
+  properties: {
+    edits: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: {
+          original_text: { type: 'STRING' },
+          suggested_text: { type: 'STRING' },
+          reason: { type: 'STRING' },
+          category: { type: 'STRING', enum: categories }
+        },
+        required: ['original_text', 'suggested_text', 'reason', 'category']
+      }
+    }
+  },
+  required: ['edits']
+});
+const REVIEW_EDITS_SCHEMA = editsSchema(['typo', 'style']);
+const READOUT_EDITS_SCHEMA = editsSchema(['readout']);
+
 // Free text is the main way in — there are no modes to pick, so this prompt has
 // to work out for itself what the user wants. The quick-action chips exist only
 // as shortcuts; every one of their jobs is described here too, because a typed
@@ -520,12 +494,16 @@ SOURCES — this applies to every answer, whether or not you searched. Never wri
 
 Always: never include patient names, MRNs, dates of birth, or other PHI. Plain text only — no markdown headers, no bullet characters, no code fences. **Bold** is allowed for emphasis in answers to questions, never inside report text.`;
 
-// Appended only when the "Include references" toggle is on (tools provided)
-const REFERENCES_ADDENDUM = `When a reference would genuinely help (classification systems, management guidelines, follow-up criteria, entities the user may want to read further on), use web search to find the specific relevant page and end your answer with a short 'References' line listing the best 1-3 links with one-phrase descriptions. Three is a hard ceiling — pick the most useful sources and drop the rest rather than listing everything you found.
+// Appended only when the "Include references" toggle is on (Google Search
+// grounding attached). Grounding has no domain allowlist, so the preferred
+// sources are steered from the prompt instead; and the model never sees the
+// URLs of what it retrieved, so the References line is written by the server
+// from the grounding metadata rather than by the model.
+const REFERENCES_ADDENDUM = `You have Google Search available and the user has explicitly asked for a sourced answer, so search before you answer even when you already know the answer cold, and even when the question repeats one you just answered — being sure is not the same as being able to cite. The one exception is text work: rewording, proofreading, impressions and report generation need no references, so do not search for those.
 
-Radiopaedia (radiopaedia.org) is the preferred source. Search it first, and include the relevant Radiopaedia article whenever one exists — list it first in the References. Add other sources only when they cover something Radiopaedia does not: ACR Appropriateness Criteria for protocol/appropriateness questions, and RadioGraphics for in-depth reviews.
+Radiopaedia (radiopaedia.org) is the preferred source: search it first and draw on the relevant Radiopaedia article whenever one exists. Use other sources only when they cover something Radiopaedia does not — ACR Appropriateness Criteria (acr.org) for protocol/appropriateness questions, RadioGraphics and Radiology (pubs.rsna.org) for in-depth reviews, Radiology Assistant (radiologyassistant.nl) for pattern-based teaching. Prefer these over forums, commercial sites, and general medical portals.
 
-You are only given this tool when the user has explicitly asked for a sourced answer, so search before you answer even when you already know the answer cold, and even when the question repeats one you just answered — being sure is not the same as being able to cite. The one exception is text work: rewording, proofreading, impressions and report generation need no references, so do not search for those. Never fabricate a URL: only include links returned by search.`;
+Do NOT write a 'References' section or any URLs yourself: the sources you actually used are attached to your answer automatically, with their links. Just answer the question.`;
 
 function buildFreeformSystem(searchEnabled, knowledgeBlock) {
   let s = FREEFORM_SYSTEM;
@@ -534,25 +512,26 @@ function buildFreeformSystem(searchEnabled, knowledgeBlock) {
   return s;
 }
 
-const REFERENCE_SEARCH_TOOL = {
-  type: 'web_search_20250305',
-  name: 'web_search',
-  allowed_domains: [
-    'radiopaedia.org',
-    'radiologyassistant.nl',
-    'acsearch.acr.org',        // ACR Appropriateness Criteria
-    'www.acr.org',
-    'pubs.rsna.org',           // RadioGraphics, Radiology
-    'ajronline.org',
-    'statdx.com',
-    'radiology.wisc.edu'
-  ],
-  max_uses: 3
-};
-
-// Answers cite at most this many sources — enforced in the prompt, in what the
-// API returns, and again when the client renders a fallback list.
+// Answers cite at most this many sources — enforced in what the server
+// appends, and again when the client renders a fallback list.
 const MAX_REFERENCES = 3;
+
+// Which grounded sources to surface, in order: the radiology references the
+// old domain allowlist named, then anything else the answer actually drew on.
+const PREFERRED_SOURCES = [
+  'radiopaedia.org',
+  'radiologyassistant.nl',
+  'acsearch.acr.org',        // ACR Appropriateness Criteria
+  'acr.org',
+  'pubs.rsna.org',           // RadioGraphics, Radiology
+  'ajronline.org',
+  'statdx.com',
+  'radiology.wisc.edu'
+];
+function sourceRank(url) {
+  const i = PREFERRED_SOURCES.findIndex(d => url.includes(d));
+  return i === -1 ? PREFERRED_SOURCES.length : i;
+}
 
 const VALID_RPR = /^RPR[1-4]$/;
 
@@ -585,13 +564,13 @@ function cleanSubspecialty(v) {
 // can never stamp different values than the shift shows.
 async function shiftSubspecialty(shiftId) {
   if (!shiftId) return null;
-  const { data, error } = await supabase
-    .from('shifts').select('subspecialty').eq('id', shiftId).single();
-  if (error) {
+  try {
+    const row = await db.one(`select subspecialty from shifts where id = $1`, [shiftId]);
+    return row ? (row.subspecialty || null) : null;
+  } catch (error) {
     console.error('Shift section lookup failed:', error.message);
     return null;   // a failed lookup must not block the save — stamp null
   }
-  return data ? (data.subspecialty || null) : null;
 }
 
 // ============ Knowledge layer (style guide, language library, exemplars) ============
@@ -602,11 +581,9 @@ function estimateTokens(text) {
   return Math.ceil((text || '').length / 4);
 }
 
-// Prompt caching is a prefix match, so the static block is cached on a 1-hour
-// TTL: a shift's worth of dictation has long gaps between actions, and the
-// 5-minute default expires across nearly all of them. Writes cost 2x instead of
-// 1.25x, so a block needs ~3 reads within the hour to pay for itself.
-const CACHE_1H = { type: 'ephemeral', ttl: '1h' };
+// Gemini caches prompt prefixes implicitly, so the static block is kept
+// byte-identical across requests (memoised below) and placed first in the
+// system instruction — that is all the cache needs; there is no TTL to manage.
 
 // What each action actually needs injected. Everything-everywhere was costing
 // full style guide + full language library + 3 exemplars on every call, most of
@@ -642,21 +619,13 @@ function invalidateKnowledge() {
   knowledgeBlockCache.clear();
 }
 
-// Supabase caps selects at 1000 rows — page through everything.
+// Every row of a knowledge table, oldest first. Table and column names come
+// from code constants only (never from a request), so they are interpolated;
+// the allowlist keeps that true.
+const KNOWLEDGE_TABLES = new Set(['style_guide', 'rad_language', 'exemplar_reports', 'reports']);
 async function fetchAllRows(table, columns) {
-  const out = [];
-  const page = 1000;
-  for (let from = 0; ; from += page) {
-    const { data, error } = await supabase
-      .from(table)
-      .select(columns)
-      .order('created_at', { ascending: true })
-      .range(from, from + page - 1);
-    if (error) throw error;
-    out.push(...data);
-    if (data.length < page) break;
-  }
-  return out;
+  if (!KNOWLEDGE_TABLES.has(table)) throw new Error(`fetchAllRows: unexpected table ${table}`);
+  return db.many(`select ${columns} from ${table} order by created_at asc`);
 }
 
 function groupLines(rows, keyField, valueField, fallbackKey) {
@@ -687,7 +656,7 @@ async function getKnowledgeRows() {
 
 // The static block for one action, composed from its profile.
 async function getKnowledgeBlock(profileKey) {
-  if (!supabase) return '';
+  if (!db.configured) return '';
   const memo = knowledgeBlockCache.get(profileKey);
   if (memo !== undefined && Date.now() - knowledgeRows.loadedAt < KNOWLEDGE_TTL_MS) return memo;
   try {
@@ -725,7 +694,7 @@ const exemplarCache = new Map();   // "<count>:<study type>" -> { rows, loadedAt
 function invalidateExemplars() { exemplarCache.clear(); }
 
 async function selectExemplars(studyType, limit = DEFAULT_EXEMPLARS) {
-  if (!supabase || limit <= 0) return [];
+  if (!db.configured || limit <= 0) return [];
   const cacheKey = limit + ':' + (studyType || '').trim().toLowerCase();
   const hit = exemplarCache.get(cacheKey);
   if (hit && Date.now() - hit.loadedAt < KNOWLEDGE_TTL_MS) return hit.rows;
@@ -745,31 +714,31 @@ async function selectExemplarsUncached(studyType, limit) {
       chosen.push(r);
     }
   };
+  // ILIKE with no wildcard is a case-insensitive equality match on the study
+  // type; the modality fallback adds its own trailing wildcard.
   try {
     if (studyType && studyType.trim()) {
       const st = studyType.trim();
-      const { data: userRows } = await supabase.from('exemplar_reports')
-        .select(EXEMPLAR_COLS).ilike('study_type', st).eq('source', 'user').limit(limit);
-      add(userRows);
+      add(await db.many(
+        `select ${EXEMPLAR_COLS} from exemplar_reports where study_type ilike $1 and source = 'user' limit $2`,
+        [st, limit]));
       if (chosen.length < limit) {
-        const { data: parrotRows } = await supabase.from('exemplar_reports')
-          .select(EXEMPLAR_COLS).ilike('study_type', st).neq('source', 'user').limit(limit);
-        add(parrotRows);
+        add(await db.many(
+          `select ${EXEMPLAR_COLS} from exemplar_reports where study_type ilike $1 and source <> 'user' limit $2`,
+          [st, limit]));
       }
       if (chosen.length === 0) {
         const modality = st.split(/\s+/)[0];
         if (modality) {
-          const { data: modRows } = await supabase.from('exemplar_reports')
-            .select(EXEMPLAR_COLS).ilike('study_type', modality + ' %')
-            .order('source', { ascending: false }).limit(limit);
-          add(modRows);
+          add(await db.many(
+            `select ${EXEMPLAR_COLS} from exemplar_reports where study_type ilike $1 order by source desc limit $2`,
+            [modality + ' %', limit]));
         }
       }
     }
     if (chosen.length === 0) {
-      const { data: anyRows } = await supabase.from('exemplar_reports')
-        .select(EXEMPLAR_COLS).order('source', { ascending: false }).limit(limit);
-      add(anyRows);
+      add(await db.many(
+        `select ${EXEMPLAR_COLS} from exemplar_reports order by source desc limit $1`, [limit]));
     }
   } catch (e) {
     console.error('Exemplar selection failed:', e.message);
@@ -803,26 +772,21 @@ function stripEnumeration(impression) {
 }
 
 async function selectImpressionExemplars(studyType, limit) {
-  if (!supabase || limit <= 0) return [];
+  if (!db.configured || limit <= 0) return [];
   const cacheKey = limit + ':' + (studyType || '').trim().toLowerCase();
   const hit = impressionExemplarCache.get(cacheKey);
   if (hit && Date.now() - hit.loadedAt < KNOWLEDGE_TTL_MS) return hit.rows;
   let rows = [];
   try {
-    const base = () => supabase.from('report_sections')
-      .select('study_type, impression')
-      .not('impression', 'is', null)
-      .order('created_at', { ascending: false });
+    const sql = `select study_type, impression from report_sections
+                 where impression is not null and study_type ilike $1
+                 order by created_at desc limit $2`;
     const st = (studyType || '').trim();
     if (st) {
-      const { data } = await base().ilike('study_type', st).limit(limit);
-      rows = data || [];
+      rows = await db.many(sql, [st, limit]);
       if (rows.length === 0) {
         const modality = st.split(/\s+/)[0];
-        if (modality) {
-          const { data: mod } = await base().ilike('study_type', modality + '%').limit(limit);
-          rows = mod || [];
-        }
+        if (modality) rows = await db.many(sql, [modality + '%', limit]);
       }
     }
   } catch (e) {
@@ -856,8 +820,9 @@ async function buildExemplarText(studyType, profile) {
   return exemplarBlockText(await selectExemplars(studyType, profile.exemplars));
 }
 
-// System prompt as content blocks: [static block (cached 1h), exemplar block
-// (varies by study type)]. Returns the injected token estimate for logging.
+// System instruction: static block first (identical bytes every call, so the
+// implicit cache can hit on it), then the exemplar block that varies by study
+// type. Returns the injected token estimate for logging.
 async function buildKnowledgeSystem(baseSystem, studyType, profileKey) {
   const profile = profileFor(profileKey);
   // Independent lookups — fetched together, not one after the other
@@ -865,14 +830,7 @@ async function buildKnowledgeSystem(baseSystem, studyType, profileKey) {
     getKnowledgeBlock(profileKey),
     buildExemplarText(studyType, profile)
   ]);
-  const blocks = [];
-  if (knowledge) {
-    blocks.push({ type: 'text', text: baseSystem + knowledge, cache_control: CACHE_1H });
-  } else {
-    blocks.push({ type: 'text', text: baseSystem });
-  }
-  if (exText) blocks.push({ type: 'text', text: exText });
-  return { system: blocks, injected: estimateTokens(knowledge) + estimateTokens(exText) };
+  return { system: baseSystem + knowledge + exText, injected: estimateTokens(knowledge) + estimateTokens(exText) };
 }
 
 // Heuristic: pasted report content is long; short inputs (finding descriptions,
@@ -910,7 +868,7 @@ async function upgradeImpression(reportText, studyType) {
   const body = reportText.slice(0, m.index).trimEnd();
   if (!body) return reportText;
   const { system, injected } = await buildKnowledgeSystem(ASSIST_SYSTEM, studyType, 'impression');
-  const impression = (await claudeTextFallback({
+  const impression = (await geminiText({
     model: MODEL_IMPRESSION,
     label: 'fullreport:impression',
     system,
@@ -1020,15 +978,7 @@ async function freeformSystemFactory(message) {
       console.error('Knowledge load failed for free text:', e.message);
     }
   }
-  const systemFor = (searchOn) => {
-    const blocks = [{
-      type: 'text',
-      text: buildFreeformSystem(searchOn, knowledgeBlock),
-      ...(knowledgeBlock ? { cache_control: CACHE_1H } : {})
-    }];
-    if (exemplarText) blocks.push({ type: 'text', text: exemplarText });
-    return blocks;
-  };
+  const systemFor = (searchOn) => buildFreeformSystem(searchOn, knowledgeBlock) + exemplarText;
   return { systemFor, injected: estimateTokens(knowledgeBlock) + estimateTokens(exemplarText) };
 }
 
@@ -1058,103 +1008,66 @@ async function actionSystemFor(action, message, template) {
 // the final message is in hand, so a mid-flight retry or a server-side model
 // fallback can never leave partial text behind.
 async function runFreeform({ messages, systemFor, injected, label, useRefs }) {
-  let msgs = messages;
-  let text = '';
   // Quick Rad Question (references on) and plain free text are the same prompt
   // but route separately, so each can be tuned without moving the other.
-  let model = useRefs ? MODEL_RADQA : MODEL_CHAT;
+  const model = useRefs ? MODEL_RADQA : MODEL_CHAT;
   let searchEnabled = useRefs;
-  let triedFallbackModel = false;
   let refsDropped = false;
-  let truncated = false;
-  const citations = [];
-  const seenUrls = new Set();
+  const contents = toContents(messages);
 
-  // Search-enabled responses interleave text / server_tool_use /
-  // web_search_tool_result blocks, and the server-side tool loop can pause
-  // (stop_reason "pause_turn") — resume by appending the turn and re-sending.
-  const restart = () => {
-    msgs = messages;
-    text = '';
-    citations.length = 0;
-    seenUrls.clear();
-  };
-
-  for (let attempt = 0; attempt < 8; attempt++) {
-    const params = {
-      model,
-      // Referenced answers run long, and the References line comes last —
-      // too low a ceiling truncates it away.
-      max_tokens: 8000,
-      system: systemFor(searchEnabled),
-      messages: msgs,
-      ...(FREEFORM_EFFORT && EFFORT_CAPABLE.test(model)
-        ? { output_config: { effort: FREEFORM_EFFORT } }
-        : {}),
-      // Only the Fable/Opus-5 tier accepts these; both models are overridable
-      ...(FALLBACK_CAPABLE.test(model)
-        ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' }
-        : {}),
-      ...(searchEnabled ? { tools: [REFERENCE_SEARCH_TOOL] } : {})
-    };
-
-    const response = await anthropic.beta.messages.create(params);
-
-    const u = response.usage || {};
-    const viaServerFallback = (u.iterations || []).some(i => i.type === 'fallback_message');
-    const freeformLabel = label || (searchEnabled ? 'radqa' : 'freeform');
-    const cost = recordUsage({ model: response.model, label: freeformLabel, usage: u, injected });
-    console.log(`[claude] ${response.model} label=${freeformLabel}${viaServerFallback ? ' (server-fallback)' : ''} injected=${injected || 0} in=${u.input_tokens} out=${u.output_tokens} cache_write=${u.cache_creation_input_tokens || 0} cache_read=${u.cache_read_input_tokens || 0} est_cost=${usd(cost)} stop=${response.stop_reason}`);
-
-    if (response.stop_reason === 'refusal') {
+  let r;
+  for (;;) {
+    try {
+      r = await gemini.generate({
+        model,
+        // Referenced answers run long — too low a ceiling truncates them.
+        maxTokens: 8000,
+        system: systemFor(searchEnabled),
+        contents,
+        effort: FREEFORM_EFFORT,
+        grounding: searchEnabled
+      });
+      break;
+    } catch (e) {
       // Safety classifiers occasionally decline benign radiology questions
-      // (bone/soft-tissue tumors especially), usually only once web search
-      // results are in context. Degrade in the order that preserves the most:
-      //   1. same question on the fallback model, references intact
-      //   2. fallback model without search (answer from knowledge, no refs)
-      if (!triedFallbackModel && MODEL_FALLBACK && MODEL_FALLBACK !== model) {
-        triedFallbackModel = true;
-        model = MODEL_FALLBACK;
-        restart();
-        continue;
-      }
-      if (searchEnabled) {
+      // (bone/soft-tissue tumors especially), usually only once search results
+      // are in context. Degrade once: answer from knowledge, without search.
+      if (e.isRefusal && searchEnabled) {
+        console.warn(`⚠ [refusal] ${model} declined a grounded question (${e.detail}) — retrying without search`);
         searchEnabled = false;
         refsDropped = true;
-        restart();
         continue;
       }
-      throw new Error('This question was declined by the model’s safety filters. Try rephrasing it.');
+      if (e.isRefusal) throw new Error('This question was declined by the model’s safety filters. Try rephrasing it.');
+      throw e;
     }
-    for (const block of response.content) {
-      if (block.type === 'text') {
-        text += block.text;
-        for (const c of block.citations || []) {
-          if (c.url && !seenUrls.has(c.url)) {
-            seenUrls.add(c.url);
-            citations.push({ url: c.url, title: c.title || '' });
-          }
-        }
-      }
-    }
-    if (response.stop_reason === 'pause_turn') {
-      msgs = [...msgs, { role: 'assistant', content: response.content }];
-      continue;
-    }
-    truncated = response.stop_reason === 'max_tokens';
-    break;
   }
-  // Radiopaedia first in any citation list we render, then keep only the top
-  // few: a search can collect a dozen sources, and a wall of links buries the
-  // one worth opening. The model's own References list is capped in the prompt;
-  // this bounds the fallback list the client renders when it didn't write one.
-  citations.sort((a, b) =>
-    (b.url.includes('radiopaedia.org') ? 1 : 0) - (a.url.includes('radiopaedia.org') ? 1 : 0));
+
+  const freeformLabel = label || (searchEnabled ? 'radqa' : 'freeform');
+  const cost = recordUsage({ model: r.served, label: freeformLabel, usage: r.usage, injected, grounded: searchEnabled });
+  logCall({ served: r.served, label: freeformLabel, injected, u: r.usage, cost, grounded: searchEnabled, finishReason: r.finishReason });
+
+  // The model never sees the URLs of what it retrieved, so the References
+  // line is the server's to write: preferred radiology sources first, then by
+  // how much of the answer drew on each, capped — a wall of links buries the
+  // one worth opening. The client renders the same line as links.
+  let text = r.text.trim();
+  let citations = [];
+  if (searchEnabled) {
+    citations = (await gemini.citationsFrom(r.grounding))
+      .sort((a, b) => sourceRank(a.url) - sourceRank(b.url))
+      .slice(0, MAX_REFERENCES)
+      .map(c => ({ url: c.url, title: c.title }));
+    if (citations.length) {
+      text += '\n\nReferences:\n' +
+        citations.map(c => c.url + (c.title && c.title !== c.url ? ' — ' + c.title : '')).join('\n');
+    }
+  }
   return {
-    text: text.trim(),
-    citations: citations.slice(0, MAX_REFERENCES),
+    text,
+    citations,
     refs_dropped: refsDropped,
-    truncated
+    truncated: r.finishReason === 'MAX_TOKENS'
   };
 }
 
@@ -1177,14 +1090,15 @@ app.post('/api/assist', async (req, res) => {
     }
 
     const { system, injected, studyType } = await actionSystemFor(action, message, template);
-    let text = await claudeTextFallback({
+    let text = await geminiText({
       model: ACTION_MODEL[action] || MODEL_REPORT,
       label: action,
       system,
       injected,
       messages,
       maxTokens: action === 'synthesize' ? 8000 : 4000,
-      effort: ACTION_EFFORT[action]
+      effort: ACTION_EFFORT[action],
+      schema: action === 'describe' ? DESCRIBE_SCHEMA : undefined
     });
 
     // Second pass: rewrite the full report's IMPRESSION on MODEL_IMPRESSION
@@ -1198,7 +1112,7 @@ app.post('/api/assist', async (req, res) => {
 
     if (action === 'describe') {
       try {
-        const parsed = parseClaudeJson(text);
+        const parsed = parseModelJson(text);
         return res.json({
           type: 'describe',
           findings: String(parsed.findings || '').trim(),
@@ -1212,29 +1126,25 @@ app.post('/api/assist', async (req, res) => {
 
     res.json({ type: 'text', text });
   } catch (error) {
-    console.error('Assist error:', error);
+    console.error('Assist error:', error.message);
     res.status(500).json({ error: 'Assist request failed', details: error.message });
   }
 });
 
 app.post('/api/assist/feedback', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
     const { action_type, user_input, model_response, rating, comment } = req.body;
     if (rating !== 'up' && rating !== 'down') {
       return res.status(400).json({ error: 'rating must be "up" or "down"' });
     }
-    const { error } = await supabase.from('assist_feedback').insert({
-      action_type: action_type || 'freeform',
-      user_input: user_input || '',
-      model_response: model_response || '',
-      rating,
-      comment: comment || null
-    });
-    if (error) throw error;
+    await db.query(
+      `insert into assist_feedback (action_type, user_input, model_response, rating, comment)
+       values ($1, $2, $3, $4, $5)`,
+      [action_type || 'freeform', user_input || '', model_response || '', rating, comment || null]);
     res.json({ success: true });
   } catch (error) {
-    console.error('Feedback error:', error);
+    console.error('Feedback error:', error.message);
     res.status(500).json({ error: 'Failed to save feedback', details: error.message });
   }
 });
@@ -1245,18 +1155,15 @@ app.post('/api/assist/feedback', async (req, res) => {
 // Supabase so it follows the login across browsers/computers and is never
 // cleared by the app.
 app.get('/api/assist/messages', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 300, 1000);
-    const { data, error } = await supabase
-      .from('assist_messages')
-      .select('id, role, content, action_type, created_at')
-      .order('id', { ascending: false })
-      .limit(limit);
-    if (error) throw error;
-    res.json({ messages: (data || []).reverse() });
+    const rows = await db.many(
+      `select id, role, content, action_type, created_at from assist_messages order by id desc limit $1`,
+      [limit]);
+    res.json({ messages: rows.reverse() });
   } catch (error) {
-    console.error('Assist history error:', error);
+    console.error('Assist history error:', error.message);
     res.status(500).json({ error: 'Failed to load chat history', details: error.message });
   }
 });
@@ -1264,21 +1171,21 @@ app.get('/api/assist/messages', async (req, res) => {
 // Save one user+assistant exchange. Array insert preserves order, so the
 // identity ids keep the pair in sequence.
 app.post('/api/assist/messages', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
     const { user_text, assistant_text, action_type } = req.body;
     if (!user_text || !assistant_text) {
       return res.status(400).json({ error: 'user_text and assistant_text are required' });
     }
     const at = action_type || 'freeform';
-    const { error } = await supabase.from('assist_messages').insert([
-      { role: 'user', content: user_text, action_type: at },
-      { role: 'assistant', content: assistant_text, action_type: at }
-    ]);
-    if (error) throw error;
+    // One statement, two rows, in order — the identity ids keep the pair in sequence
+    await db.query(
+      `insert into assist_messages (role, content, action_type)
+       values ('user', $1, $3), ('assistant', $2, $3)`,
+      [user_text, assistant_text, at]);
     res.json({ success: true });
   } catch (error) {
-    console.error('Assist history save error:', error);
+    console.error('Assist history save error:', error.message);
     res.status(500).json({ error: 'Failed to save chat history', details: error.message });
   }
 });
@@ -1299,21 +1206,23 @@ app.post('/api/draft/review', async (req, res) => {
     }
     const { system, injected } = await buildKnowledgeSystem(DRAFT_REVIEW_SYSTEM, studyType, 'review');
 
-    const text = await claudeTextFallback({
+    const text = await geminiText({
       model: MODEL_REVIEW,
       label: 'review',
       system,
       injected,
       message: `Review this radiology report draft:\n\n${report}`,
       maxTokens: 8000,
-      effort: DRAFT_REVIEW_EFFORT
+      effort: DRAFT_REVIEW_EFFORT,
+      schema: REVIEW_EDITS_SCHEMA
     });
 
     let parsed;
     try {
-      parsed = parseClaudeJson(text);
+      parsed = parseModelJson(text);
     } catch (e) {
-      console.error('Review JSON parse failed:', text.slice(0, 500));
+      // Never log the payload — it quotes the report
+      console.error(`Review JSON parse failed (${text.length} chars): ${e.message}`);
       return res.json({ edits: [] });
     }
 
@@ -1337,20 +1246,22 @@ app.post('/api/draft/review', async (req, res) => {
     // phrase that also appears in the header can't be highlighted up there
     res.json({ edits, body_start: bodyStart });
   } catch (error) {
-    console.error('Draft review error:', error);
+    console.error('Draft review error:', error.message);
     res.status(500).json({ error: 'Review failed', details: error.message });
   }
 });
 
 async function detectStudyType(report) {
-  const text = await claudeTextFallback({
+  const text = await geminiText({
     model: MODEL_DETECT,
     label: 'detect',
     system: STUDY_TYPE_SYSTEM,
     message: `Identify the study type of this radiology report:\n\n${report.slice(0, 4000)}`,
-    maxTokens: 100
+    maxTokens: 100,
+    effort: 'low',
+    schema: STUDY_TYPE_SCHEMA
   });
-  const parsed = parseClaudeJson(text);
+  const parsed = parseModelJson(text);
   const studyType = String(parsed.study_type || '').trim();
   if (!studyType) throw new Error('Empty study type from model');
   return studyType;
@@ -1365,99 +1276,75 @@ app.post('/api/study-type/detect', async (req, res) => {
     const study_type = await detectStudyType(report);
     res.json({ study_type });
   } catch (error) {
-    console.error('Study type detection error:', error);
+    console.error('Study type detection error:', error.message);
     res.status(500).json({ error: 'Detection failed', details: error.message });
   }
 });
 
 app.get('/api/study-types', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
-    const { data, error } = await supabase
-      .from('study_types')
-      .select('id, name, last_used_at')
-      .order('last_used_at', { ascending: false })
-      .limit(200);
-    if (error) throw error;
-    res.json({ study_types: data });
+    const rows = await db.many(
+      `select id, name, last_used_at from study_types order by last_used_at desc limit 200`);
+    res.json({ study_types: rows });
   } catch (error) {
-    console.error('Study types error:', error);
+    console.error('Study types error:', error.message);
     res.status(500).json({ error: 'Failed to load study types', details: error.message });
   }
 });
 
 async function touchStudyType(name) {
-  const { data: existing, error: selErr } = await supabase
-    .from('study_types')
-    .select('id')
-    .ilike('name', name)
-    .limit(1);
-  if (selErr) throw selErr;
-  if (existing && existing.length > 0) {
-    await supabase.from('study_types')
-      .update({ last_used_at: new Date().toISOString() })
-      .eq('id', existing[0].id);
+  const existing = await db.one(`select id from study_types where name ilike $1 limit 1`, [name]);
+  if (existing) {
+    await db.query(`update study_types set last_used_at = $2 where id = $1`, [existing.id, new Date().toISOString()]);
   } else {
-    await supabase.from('study_types').insert({ name, last_used_at: new Date().toISOString() });
+    await db.query(`insert into study_types (name, last_used_at) values ($1, $2)`, [name, new Date().toISOString()]);
   }
 }
 
 // ============ Shifts ============
 
 app.get('/api/shifts', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
-    const { data, error } = await supabase
-      .from('shifts')
-      .select('*')
-      .order('started_at', { ascending: false });
-    if (error) throw error;
-    res.json({ shifts: data });
+    const rows = await db.many(`select * from shifts order by started_at desc`);
+    res.json({ shifts: rows });
   } catch (error) {
-    console.error('Shifts error:', error);
+    console.error('Shifts error:', error.message);
     res.status(500).json({ error: 'Failed to load shifts', details: error.message });
   }
 });
 
 // The active shift is server state, so every browser/device agrees on it.
-// supabase-js has no transactions; deactivate-then-activate is safe because the
-// one_active_shift partial unique index makes two active shifts impossible —
-// a lost race surfaces as an error here rather than corrupt state.
+// Deactivate-then-activate runs in one transaction, and the one_active_shift
+// partial unique index makes two active shifts impossible regardless.
+// Throws NOT_FOUND when no shift has that id.
 async function activateShift(id) {
-  const { error: deactErr } = await supabase
-    .from('shifts')
-    .update({ is_active: false })
-    .eq('is_active', true)
-    .neq('id', id);
-  if (deactErr) throw deactErr;
-  const { data, error } = await supabase
-    .from('shifts')
-    .update({ is_active: true })
-    .eq('id', id)
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
+  return db.tx(async client => {
+    await client.query(`update shifts set is_active = false where is_active and id <> $1`, [id]);
+    const { rows } = await client.query(`update shifts set is_active = true where id = $1 returning *`, [id]);
+    if (!rows.length) {
+      const err = new Error('Shift not found');
+      err.code = 'NOT_FOUND';
+      throw err;
+    }
+    return rows[0];
+  });
 }
 
 app.get('/api/shifts/active', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
-    const { data, error } = await supabase
-      .from('shifts')
-      .select('*')
-      .eq('is_active', true)
-      .limit(1);
-    if (error) throw error;
-    res.json({ shift: data && data.length ? data[0] : null });
+    const shift = await db.one(`select * from shifts where is_active limit 1`);
+    res.json({ shift });
   } catch (error) {
-    console.error('Active shift error:', error);
+    console.error('Active shift error:', error.message);
     res.status(500).json({ error: 'Failed to load active shift', details: error.message });
   }
 });
 
 app.post('/api/shifts', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
     const { name } = req.body;
     if (!name || !name.trim()) {
@@ -1471,30 +1358,18 @@ app.post('/api/shifts', async (req, res) => {
     if ('subspecialty' in req.body) {
       subspecialty = cleanSubspecialty(req.body.subspecialty);
     } else {
-      const { data: prev } = await supabase
-        .from('shifts')
-        .select('subspecialty')
-        .order('started_at', { ascending: false })
-        .limit(1);
-      subspecialty = (prev && prev[0] && prev[0].subspecialty) || null;
+      const prev = await db.one(`select subspecialty from shifts order by started_at desc limit 1`);
+      subspecialty = (prev && prev.subspecialty) || null;
     }
     const now = new Date().toISOString();
-    const { data, error } = await supabase
-      .from('shifts')
-      .insert({
-        name: name.trim(),
-        subspecialty,
-        started_at: now,
-        last_activity_at: now
-      })
-      .select()
-      .single();
-    if (error) throw error;
+    const created = await db.one(
+      `insert into shifts (name, subspecialty, started_at, last_activity_at) values ($1, $2, $3, $3) returning *`,
+      [name.trim(), subspecialty, now]);
     // A newly started shift is always the active one
-    const shift = await activateShift(data.id);
+    const shift = await activateShift(created.id);
     res.json({ shift });
   } catch (error) {
-    console.error('Create shift error:', error);
+    console.error('Create shift error:', error.message);
     res.status(500).json({ error: 'Failed to create shift', details: error.message });
   }
 });
@@ -1503,18 +1378,15 @@ app.post('/api/shifts', async (req, res) => {
 // stamped keep their value (the bulk action below is the way to correct a
 // whole shift after the fact).
 app.put('/api/shifts/:id', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
-    const { data, error } = await supabase
-      .from('shifts')
-      .update({ subspecialty: cleanSubspecialty(req.body && req.body.subspecialty) })
-      .eq('id', req.params.id)
-      .select()
-      .single();
-    if (error) throw error;
-    res.json({ shift: data });
+    const shift = await db.one(
+      `update shifts set subspecialty = $2 where id = $1 returning *`,
+      [req.params.id, cleanSubspecialty(req.body && req.body.subspecialty)]);
+    if (!shift) return res.status(404).json({ error: 'Shift not found' });
+    res.json({ shift });
   } catch (error) {
-    console.error('Update shift error:', error);
+    console.error('Update shift error:', error.message);
     res.status(500).json({ error: 'Failed to update shift', details: error.message });
   }
 });
@@ -1524,33 +1396,26 @@ app.put('/api/shifts/:id', async (req, res) => {
 // report_sections rows are kept in step so the training export never disagrees
 // with the reports table.
 app.post('/api/shifts/:id/set-subspecialty', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
     const value = cleanSubspecialty(req.body && req.body.subspecialty);
-    const { data: updated, error } = await supabase
-      .from('reports')
-      .update({ subspecialty: value })
-      .eq('shift_id', req.params.id)
-      .select('id');
-    if (error) throw error;
-    const ids = (updated || []).map(r => r.id);
-    if (ids.length) {
-      const { error: secErr } = await supabase
-        .from('report_sections')
-        .update({ subspecialty: value })
-        .in('report_id', ids);
-      if (secErr) throw secErr;   // surface it — a silent half-update would drift
-    }
-    // The shift carries the setting going forward too, so future saves in this
-    // shift stamp the corrected value
-    const { error: shErr } = await supabase
-      .from('shifts')
-      .update({ subspecialty: value })
-      .eq('id', req.params.id);
-    if (shErr) throw shErr;
-    res.json({ subspecialty: value, updated: ids.length });
+    // All three writes in one transaction — a half-update would drift
+    const updated = await db.tx(async client => {
+      const { rows } = await client.query(
+        `update reports set subspecialty = $2 where shift_id = $1 returning id`, [req.params.id, value]);
+      const ids = rows.map(r => r.id);
+      if (ids.length) {
+        await client.query(
+          `update report_sections set subspecialty = $2 where report_id = any($1::text[])`, [ids, value]);
+      }
+      // The shift carries the setting going forward too, so future saves in this
+      // shift stamp the corrected value
+      await client.query(`update shifts set subspecialty = $2 where id = $1`, [req.params.id, value]);
+      return ids.length;
+    });
+    res.json({ subspecialty: value, updated });
   } catch (error) {
-    console.error('Set shift subspecialty error:', error);
+    console.error('Set shift subspecialty error:', error.message);
     res.status(500).json({ error: 'Failed to set section for shift', details: error.message });
   }
 });
@@ -1559,27 +1424,19 @@ app.post('/api/shifts/:id/set-subspecialty', async (req, res) => {
 // these become selectable options on future drafts. Derived by reading reports,
 // so it never writes anything and stays in step with what was actually saved.
 app.get('/api/subspecialties', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
     // Shifts are included so a custom section chosen for a brand-new shift is
     // offered again before its first report ever saves
-    const [{ data: reps, error: repErr }, { data: shs, error: shErr }] = await Promise.all([
-      supabase.from('reports')
-        .select('subspecialty, created_at')
-        .not('subspecialty', 'is', null)
-        .order('created_at', { ascending: false })
-        .limit(500),
-      supabase.from('shifts')
-        .select('subspecialty, started_at')
-        .not('subspecialty', 'is', null)
-        .order('started_at', { ascending: false })
-        .limit(200)
+    const [reps, shs] = await Promise.all([
+      db.many(`select subspecialty, created_at from reports where subspecialty is not null
+               order by created_at desc limit 500`),
+      db.many(`select subspecialty, started_at from shifts where subspecialty is not null
+               order by started_at desc limit 200`)
     ]);
-    if (repErr) throw repErr;
-    if (shErr) throw shErr;
     const rows = [
-      ...(reps || []).map(r => ({ v: r.subspecialty, t: r.created_at })),
-      ...(shs || []).map(r => ({ v: r.subspecialty, t: r.started_at }))
+      ...reps.map(r => ({ v: r.subspecialty, t: r.created_at })),
+      ...shs.map(r => ({ v: r.subspecialty, t: r.started_at }))
     ].sort((a, b) => (a.t < b.t ? 1 : -1));
     const seen = new Set(STANDARD_SECTIONS.map(x => x.toLowerCase()));
     const custom = [];
@@ -1599,49 +1456,42 @@ app.get('/api/subspecialties', async (req, res) => {
 // Delete a shift — empty shifts only (the accidental-duplicate case). Reports
 // reference shifts by FK, so this is also the only deletion that could succeed.
 app.delete('/api/shifts/:id', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
-    const { count, error: cntErr } = await supabase
-      .from('reports')
-      .select('id', { count: 'exact', head: true })
-      .eq('shift_id', req.params.id);
-    if (cntErr) throw cntErr;
+    const { count } = await db.one(
+      `select count(*)::int as count from reports where shift_id = $1`, [req.params.id]);
     if (count > 0) {
       return res.status(400).json({
         error: `Shift has ${count} report${count === 1 ? '' : 's'} — only empty shifts can be deleted`
       });
     }
-    const { data: deleted, error } = await supabase
-      .from('shifts').delete().eq('id', req.params.id).select();
-    if (error) throw error;
-    if (!deleted || deleted.length === 0) {
+    const deleted = await db.one(`delete from shifts where id = $1 returning *`, [req.params.id]);
+    if (!deleted) {
       return res.status(404).json({ error: 'Shift not found' });
     }
     // Deleting the active shift promotes the most recent remaining one
-    if (deleted[0].is_active) {
-      const { data: latest, error: latestErr } = await supabase
-        .from('shifts').select('id').order('started_at', { ascending: false }).limit(1);
-      if (!latestErr && latest && latest.length) await activateShift(latest[0].id);
+    if (deleted.is_active) {
+      const latest = await db.one(`select id from shifts order by started_at desc limit 1`);
+      if (latest) await activateShift(latest.id);
     }
     res.json({ success: true });
   } catch (error) {
-    console.error('Delete shift error:', error);
+    console.error('Delete shift error:', error.message);
     res.status(500).json({ error: 'Failed to delete shift', details: error.message });
   }
 });
 
 // Manually switch the active shift (e.g. resuming an older shift)
 app.put('/api/shifts/:id/activate', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
     const shift = await activateShift(req.params.id);
     res.json({ shift });
   } catch (error) {
-    // .single() on an update that matched no rows → PGRST116
-    if (error.code === 'PGRST116') {
+    if (error.code === 'NOT_FOUND') {
       return res.status(404).json({ error: 'Shift not found' });
     }
-    console.error('Activate shift error:', error);
+    console.error('Activate shift error:', error.message);
     res.status(500).json({ error: 'Failed to activate shift', details: error.message });
   }
 });
@@ -1649,7 +1499,7 @@ app.put('/api/shifts/:id/activate', async (req, res) => {
 // ============ Reports ============
 
 app.post('/api/reports', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
     const { proposed_id, shift_id, study_type, study_id_label, report_type, raw_text, draft_text, edits_json, finalized } = req.body;
     if (!proposed_id || !/^\d{12}$/.test(proposed_id)) {
@@ -1673,44 +1523,39 @@ app.post('/api/reports', async (req, res) => {
     }
 
     // Collision handling: yyyymmddhhmm, then -2, -3, ...
-    const { data: existing, error: existErr } = await supabase
-      .from('reports')
-      .select('id')
-      .like('id', `${proposed_id}%`);
-    if (existErr) throw existErr;
-    const taken = new Set((existing || []).map(r => r.id));
+    const existing = await db.many(`select id from reports where id like $1`, [`${proposed_id}%`]);
+    const taken = new Set(existing.map(r => r.id));
     let id = proposed_id;
     for (let n = 2; taken.has(id); n++) {
       id = `${proposed_id}-${n}`;
     }
 
     const now = new Date().toISOString();
-    const { data, error } = await supabase
-      .from('reports')
-      .insert({
+    const report = await db.one(
+      `insert into reports (id, shift_id, study_type, study_id_label, subspecialty, report_type, raw_text,
+                            draft_text, edits_json, created_at, finalized_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11) returning *`,
+      [
         id,
         shift_id,
-        study_type: finalStudyType,
-        study_id_label: (study_id_label || '').trim() || null,
+        finalStudyType,
+        (study_id_label || '').trim() || null,
         // Stamped from the shift, not the request — see shiftSubspecialty()
-        subspecialty: await shiftSubspecialty(shift_id),
-        report_type: report_type === 'prelim' ? 'prelim' : 'complete',
+        await shiftSubspecialty(shift_id),
+        report_type === 'prelim' ? 'prelim' : 'complete',
         raw_text,
-        draft_text: draft_text || raw_text,
-        edits_json: edits_json || [],
-        created_at: now,
-        finalized_at: finalized ? now : null
-      })
-      .select()
-      .single();
-    if (error) throw error;
+        draft_text || raw_text,
+        JSON.stringify(edits_json || []),
+        now,
+        finalized ? now : null
+      ]);
 
     // last_activity_at drives the 4-hour shift check only
-    await supabase.from('shifts').update({ last_activity_at: now }).eq('id', shift_id);
+    await db.query(`update shifts set last_activity_at = $2 where id = $1`, [shift_id, now]);
 
-    res.json({ report: data });
+    res.json({ report });
   } catch (error) {
-    console.error('Save report error:', error);
+    console.error('Save report error:', error.message);
     res.status(500).json({ error: 'Failed to save report', details: error.message });
   }
 });
@@ -1740,12 +1585,6 @@ function escapeLike(term) {
   return term.replace(/([\\%_])/g, '\\$1');
 }
 
-// PostgREST splits or() on commas and parentheses, so every value is
-// double-quoted with inner quotes and backslashes escaped.
-function pgrstQuoted(value) {
-  return '"' + value.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
-}
-
 // ~150 characters of context around the first hit, so a result shows WHY it matched
 function buildSnippet(row, terms) {
   for (const col of SEARCH_COLUMNS) {
@@ -1765,7 +1604,7 @@ function buildSnippet(row, terms) {
 }
 
 app.get('/api/reports', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
     // Filters combine (Review page): any subset of shift, grade, study type, and
     // a keyword/phrase search of the report text. This only ever searches the
@@ -1774,83 +1613,79 @@ app.get('/api/reports', async (req, res) => {
     const { shift_id, grade, study_type, q } = req.query;
     const terms = parseSearchTerms((q || '').trim());
     const LIST_COLUMNS = 'id, shift_id, study_type, study_id_label, subspecialty, report_type, created_at, final_saved_at, rpr_grade, rpr_note, readout_notes, notes_integrated_at, read_out_at, finalized_at';
-    let query = supabase
-      .from('reports')
-      // Searching needs the text columns to build snippets; they are stripped
-      // from the response below rather than shipped to the browser
-      .select(terms.length ? LIST_COLUMNS + ', raw_text, draft_text, final_text' : LIST_COLUMNS)
-      .order('created_at', { ascending: false });
-    if (shift_id) query = query.eq('shift_id', shift_id);
-    if (grade === 'ungraded') query = query.is('rpr_grade', null);
+    // Searching needs the text columns to build snippets; they are stripped
+    // from the response below rather than shipped to the browser
+    const columns = terms.length ? LIST_COLUMNS + ', raw_text, draft_text, final_text' : LIST_COLUMNS;
+    const where = [];
+    const params = [];
+    const param = v => { params.push(v); return '$' + params.length; };
+    if (shift_id) where.push(`shift_id = ${param(shift_id)}`);
+    if (grade === 'ungraded') where.push('rpr_grade is null');
+    // Same precedence as before: a section filter takes the place of a graded
+    // filter in this else-chain
     const wantSection = (req.query.subspecialty || '').trim();
-    if (wantSection === 'unassigned') query = query.is('subspecialty', null);
-    else if (wantSection) query = query.eq('subspecialty', wantSection);
-    else if (VALID_RPR.test(grade || '')) query = query.eq('rpr_grade', grade);
-    if (study_type && study_type.trim()) query = query.ilike('study_type', '%' + study_type.trim() + '%');
-    // Each term is its own or() across the searchable columns; consecutive
-    // or() calls are ANDed, so every term must match somewhere in the report.
+    if (wantSection === 'unassigned') where.push('subspecialty is null');
+    else if (wantSection) where.push(`subspecialty = ${param(wantSection)}`);
+    else if (VALID_RPR.test(grade || '')) where.push(`rpr_grade = ${param(grade)}`);
+    if (study_type && study_type.trim()) where.push(`study_type ilike ${param('%' + study_type.trim() + '%')}`);
+    // Each term is its own OR across the searchable columns; the terms are
+    // ANDed, so every term must match somewhere in the report.
     for (const term of terms) {
-      const value = pgrstQuoted('%' + escapeLike(term) + '%');
-      query = query.or(SEARCH_COLUMNS.map(c => `${c}.ilike.${value}`).join(','));
+      const p = param('%' + escapeLike(term) + '%');
+      where.push('(' + SEARCH_COLUMNS.map(c => `${c} ilike ${p}`).join(' or ') + ')');
     }
-    const { data, error } = await query;
-    if (error) throw error;
+    const rows = await db.many(
+      `select ${columns} from reports${where.length ? ' where ' + where.join(' and ') : ''} order by created_at desc`,
+      params);
 
     const reports = terms.length
-      ? data.map(row => {
+      ? rows.map(row => {
           const { raw_text, draft_text, final_text, ...rest } = row;
           return { ...rest, snippet: buildSnippet(row, terms) };
         })
-      : data;
+      : rows;
     res.json({ reports, terms });
   } catch (error) {
-    console.error('List reports error:', error);
+    console.error('List reports error:', error.message);
     res.status(500).json({ error: 'Failed to load reports', details: error.message });
   }
 });
 
 app.get('/api/reports/:id', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
-    const { data, error } = await supabase
-      .from('reports')
-      .select('*')
-      .eq('id', req.params.id)
-      .single();
-    if (error) throw error;
-    res.json({ report: data });
+    const report = await db.one(`select * from reports where id = $1`, [req.params.id]);
+    if (!report) return res.status(404).json({ error: 'Report not found' });
+    res.json({ report });
   } catch (error) {
-    console.error('Get report error:', error);
+    console.error('Get report error:', error.message);
     res.status(500).json({ error: 'Failed to load report', details: error.message });
   }
 });
 
 app.put('/api/reports/:id/final', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
     const { final_text } = req.body;
     if (!final_text || !final_text.trim()) {
       return res.status(400).json({ error: 'final_text is required' });
     }
-    const { data, error } = await supabase
-      .from('reports')
-      .update({ final_text, final_saved_at: new Date().toISOString() })
-      .eq('id', req.params.id)
-      .select()
-      .single();
-    if (error) throw error;
+    const report = await db.one(
+      `update reports set final_text = $2, final_saved_at = $3 where id = $1 returning *`,
+      [req.params.id, final_text, new Date().toISOString()]);
+    if (!report) return res.status(404).json({ error: 'Report not found' });
 
     // Harvest the findings/impression pair for training. Never block the save.
     let sections = { stored: false, reason: 'not attempted' };
     try {
-      sections = await saveReportSections(data, 'final');
+      sections = await saveReportSections(report, 'final');
     } catch (e) {
       console.error('Section extraction failed:', e.message);
       sections = { stored: false, reason: e.message };
     }
-    res.json({ report: data, sections });
+    res.json({ report, sections });
   } catch (error) {
-    console.error('Save final error:', error);
+    console.error('Save final error:', error.message);
     res.status(500).json({ error: 'Failed to save final', details: error.message });
   }
 });
@@ -1896,17 +1731,19 @@ async function saveReportSections(report, source = 'final') {
   const text = source === 'final' ? report.final_text : report.draft_text;
   const parts = splitReportSections(text);
   if (!parts) return { stored: false, reason: 'report text is empty' };
-  const { error } = await supabase.from('report_sections').upsert({
-    report_id: report.id,
-    source,
-    study_type: report.study_type || null,
-    subspecialty: report.subspecialty || null,
-    full_text: parts.full_text,
-    findings: parts.findings,
-    impression: parts.impression,
-    updated_at: new Date().toISOString()
-  }, { onConflict: 'report_id,source' });
-  if (error) throw error;
+  // Re-saving a final refreshes its row (unique on report_id, source)
+  await db.query(
+    `insert into report_sections (report_id, source, study_type, subspecialty, full_text, findings, impression, updated_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8)
+     on conflict (report_id, source) do update set
+       study_type = excluded.study_type,
+       subspecialty = excluded.subspecialty,
+       full_text = excluded.full_text,
+       findings = excluded.findings,
+       impression = excluded.impression,
+       updated_at = excluded.updated_at`,
+    [report.id, source, report.study_type || null, report.subspecialty || null, parts.full_text,
+     parts.findings, parts.impression, new Date().toISOString()]);
   // These rows are what impression work is exemplified from — a newly stored
   // impression should be reachable without waiting out the TTL
   invalidateImpressionExemplars();
@@ -1921,36 +1758,40 @@ async function saveReportSections(report, source = 'final') {
 // Paired export for training/fine-tuning. ?format=jsonl returns one JSON object
 // per line, which is what most training pipelines expect.
 app.get('/api/training/impression-pairs', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
     const { study_type, format } = req.query;
-    let q = supabase
-      .from('report_sections')
-      .select('report_id, source, study_type, full_text, findings, impression, created_at')
-      .order('created_at', { ascending: false })
-      .limit(Math.min(parseInt(req.query.limit, 10) || 1000, 5000));
-    if (study_type && study_type.trim()) q = q.ilike('study_type', '%' + study_type.trim() + '%');
+    const where = [];
+    const params = [];
+    if (study_type && study_type.trim()) {
+      params.push('%' + study_type.trim() + '%');
+      where.push(`study_type ilike $${params.length}`);
+    }
     // Training reads complete pairs by default; ?include_partial=true returns
     // impression-only prelims and unparsed reports as well.
     if (req.query.include_partial !== 'true') {
-      q = q.not('findings', 'is', null).not('impression', 'is', null);
+      where.push('findings is not null', 'impression is not null');
     }
-    const { data, error } = await q;
-    if (error) throw error;
+    params.push(Math.min(parseInt(req.query.limit, 10) || 1000, 5000));
+    const rows = await db.many(
+      `select report_id, source, study_type, full_text, findings, impression, created_at
+       from report_sections${where.length ? ' where ' + where.join(' and ') : ''}
+       order by created_at desc limit $${params.length}`,
+      params);
     if (format === 'jsonl') {
       res.type('application/x-ndjson');
-      return res.send(data.map(r => JSON.stringify(r)).join('\n'));
+      return res.send(rows.map(r => JSON.stringify(r)).join('\n'));
     }
-    res.json({ count: data.length, pairs: data });
+    res.json({ count: rows.length, pairs: rows });
   } catch (error) {
-    console.error('Training pairs error:', error);
+    console.error('Training pairs error:', error.message);
     res.status(500).json({ error: 'Failed to load pairs', details: error.message });
   }
 });
 
 // Backfill: parse every finalized report that doesn't have a pair yet
 app.post('/api/training/extract-sections', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
     // subspecialty included so a batch re-harvest can't null the mirror
     const reports = await fetchAllRows('reports', 'id, study_type, subspecialty, final_text, final_saved_at, created_at');
@@ -1971,7 +1812,7 @@ app.post('/api/training/extract-sections', async (req, res) => {
       impression_only: impressionOnly, findings_only: findingsOnly, unparsed: neither
     });
   } catch (error) {
-    console.error('Extract sections error:', error);
+    console.error('Extract sections error:', error.message);
     res.status(500).json({ error: 'Extraction failed', details: error.message });
   }
 });
@@ -1980,46 +1821,37 @@ app.post('/api/training/extract-sections', async (req, res) => {
 
 // Jot/replace the attending's verbal feedback for one study
 app.put('/api/reports/:id/notes', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
     const notes = typeof req.body.readout_notes === 'string' ? req.body.readout_notes : '';
-    const { data, error } = await supabase
-      .from('reports')
-      .update({ readout_notes: notes.trim() ? notes : null })
-      .eq('id', req.params.id)
-      .select()
-      .single();
-    if (error) throw error;
-    res.json({ report: data });
+    const report = await db.one(
+      `update reports set readout_notes = $2 where id = $1 returning *`,
+      [req.params.id, notes.trim() ? notes : null]);
+    if (!report) return res.status(404).json({ error: 'Report not found' });
+    res.json({ report });
   } catch (error) {
-    console.error('Save notes error:', error);
+    console.error('Save notes error:', error.message);
     res.status(500).json({ error: 'Failed to save notes', details: error.message });
   }
 });
 
 // Current draft vs. the one saved immediately before it
 app.get('/api/reports/:id/changes', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
-    const { data: report, error: repErr } = await supabase
-      .from('reports').select('id, draft_text, raw_text').eq('id', req.params.id).single();
-    if (repErr) throw repErr;
-    const { data: revs, error: revErr } = await supabase
-      .from('report_revisions')
-      .select('draft_text, created_at')
-      .eq('report_id', req.params.id)
-      .order('id', { ascending: false })
-      .limit(1);
-    if (revErr) throw revErr;
+    const report = await db.one(`select id, draft_text, raw_text from reports where id = $1`, [req.params.id]);
+    if (!report) return res.status(404).json({ error: 'Report not found' });
+    const prior = await db.one(
+      `select draft_text, created_at from report_revisions where report_id = $1 order by id desc limit 1`,
+      [req.params.id]);
 
-    const prior = revs && revs.length ? revs[0] : null;
     res.json({
       current: report.draft_text || '',
       previous: prior ? prior.draft_text : null,
       previous_at: prior ? prior.created_at : null
     });
   } catch (error) {
-    console.error('Changes error:', error);
+    console.error('Changes error:', error.message);
     res.status(500).json({ error: 'Failed to load changes', details: error.message });
   }
 });
@@ -2027,18 +1859,15 @@ app.get('/api/reports/:id/changes', async (req, res) => {
 // Manually mark a study as read out with the attending — independent of whether
 // any read-out notes were typed.
 app.put('/api/reports/:id/read-out', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
-    const { data, error } = await supabase
-      .from('reports')
-      .update({ read_out_at: req.body.read_out ? new Date().toISOString() : null })
-      .eq('id', req.params.id)
-      .select()
-      .single();
-    if (error) throw error;
-    res.json({ report: data });
+    const report = await db.one(
+      `update reports set read_out_at = $2 where id = $1 returning *`,
+      [req.params.id, req.body.read_out ? new Date().toISOString() : null]);
+    if (!report) return res.status(404).json({ error: 'Report not found' });
+    res.json({ report });
   } catch (error) {
-    console.error('Read-out flag error:', error);
+    console.error('Read-out flag error:', error.message);
     res.status(500).json({ error: 'Failed to set read-out status', details: error.message });
   }
 });
@@ -2046,11 +1875,10 @@ app.put('/api/reports/:id/read-out', async (req, res) => {
 // Turn read-out notes into targeted edit proposals (same shape as /api/draft/review;
 // the client renders the same accept/reject cards). Never rewrites the draft.
 app.post('/api/reports/:id/integrate-notes', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
-    const { data: report, error: repErr } = await supabase
-      .from('reports').select('*').eq('id', req.params.id).single();
-    if (repErr) throw repErr;
+    const report = await db.one(`select * from reports where id = $1`, [req.params.id]);
+    if (!report) return res.status(404).json({ error: 'Report not found' });
 
     // The client sends the live textarea contents so unsaved tweaks are honored;
     // stored values are the fallback.
@@ -2063,20 +1891,22 @@ app.post('/api/reports/:id/integrate-notes', async (req, res) => {
     }
 
     const { system, injected } = await buildKnowledgeSystem(READOUT_INTEGRATE_SYSTEM, report.study_type, 'readout');
-    const text = await claudeTextFallback({
+    const text = await geminiText({
       model: MODEL_REVIEW,
       label: 'readout',
       system,
       injected,
       message: `Attending read-out feedback:\n${notes}\n\nResident's current draft:\n${draft}`,
-      maxTokens: 8000
+      maxTokens: 8000,
+      schema: READOUT_EDITS_SCHEMA
     });
 
     let parsed;
     try {
-      parsed = parseClaudeJson(text);
+      parsed = parseModelJson(text);
     } catch (e) {
-      console.error('Integrate JSON parse failed:', text.slice(0, 500));
+      // Never log the payload — it quotes the draft and the notes
+      console.error(`Integrate JSON parse failed (${text.length} chars): ${e.message}`);
       return res.json({ edits: [] });
     }
     const rawEdits = Array.isArray(parsed) ? parsed : (parsed.edits || []);
@@ -2092,7 +1922,7 @@ app.post('/api/reports/:id/integrate-notes', async (req, res) => {
 
     res.json({ edits });
   } catch (error) {
-    console.error('Integrate notes error:', error);
+    console.error('Integrate notes error:', error.message);
     res.status(500).json({ error: 'Integration failed', details: error.message });
   }
 });
@@ -2100,23 +1930,25 @@ app.post('/api/reports/:id/integrate-notes', async (req, res) => {
 // Re-save a reopened draft: new draft_text, edits appended to the audit trail.
 // raw_text is never touched; notes stay stored after integration.
 app.put('/api/reports/:id', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
     const { draft_text, append_edits, notes_integrated, study_type, study_id_label, report_type, finalized } = req.body;
     if (!draft_text || !draft_text.trim()) {
       return res.status(400).json({ error: 'draft_text is required' });
     }
-    const { data: existing, error: exErr } = await supabase
-      .from('reports').select('edits_json, draft_text, subspecialty, shift_id').eq('id', req.params.id).single();
-    if (exErr) throw exErr;
+    const existing = await db.one(
+      `select edits_json, draft_text, subspecialty, shift_id from reports where id = $1`, [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Report not found' });
 
     // Snapshot the outgoing draft so "See recent changes" has something to diff
     // against. Skipped when the text is unchanged (metadata-only saves).
     if (existing.draft_text && existing.draft_text !== draft_text) {
-      const { error: revErr } = await supabase
-        .from('report_revisions')
-        .insert({ report_id: req.params.id, draft_text: existing.draft_text });
-      if (revErr) console.error('Revision snapshot failed:', revErr.message);
+      try {
+        await db.query(`insert into report_revisions (report_id, draft_text) values ($1, $2)`,
+          [req.params.id, existing.draft_text]);
+      } catch (revErr) {
+        console.error('Revision snapshot failed:', revErr.message);
+      }
     }
 
     // 'edited' = the reviewer wrote their own wording; keep it in the trail
@@ -2134,33 +1966,35 @@ app.put('/api/reports/:id', async (req, res) => {
         };
       });
 
-    const update = {
-      draft_text,
-      edits_json: (existing.edits_json || []).concat(cleanAppend)
-    };
-    if (typeof study_type === 'string' && study_type.trim()) update.study_type = study_type.trim();
-    if (typeof study_id_label === 'string') update.study_id_label = study_id_label.trim() || null;
+    // Only the columns the request touches are updated — the SET list is
+    // assembled from fixed column names, the values are all parameters.
+    const sets = [];
+    const params = [req.params.id];
+    const set = (col, v, cast = '') => { params.push(v); sets.push(`${col} = $${params.length}${cast}`); };
+    set('draft_text', draft_text);
+    set('edits_json', JSON.stringify((existing.edits_json || []).concat(cleanAppend)), '::jsonb');
+    if (typeof study_type === 'string' && study_type.trim()) set('study_type', study_type.trim());
+    if (typeof study_id_label === 'string') set('study_id_label', study_id_label.trim() || null);
     // The stamp is written once: a report saved before the shift had a section
     // picks it up on its next save, but an already-stamped report keeps its
     // value — changing the shift mid-way never rewrites earlier cases.
     if (!existing.subspecialty) {
       const stamped = await shiftSubspecialty(existing.shift_id);
-      if (stamped) update.subspecialty = stamped;
+      if (stamped) set('subspecialty', stamped);
     }
-    if (report_type === 'prelim' || report_type === 'complete') update.report_type = report_type;
+    if (report_type === 'prelim' || report_type === 'complete') set('report_type', report_type);
     // Only ever set forward — a later plain re-save must not clear the marker
-    if (notes_integrated) update.notes_integrated_at = new Date().toISOString();
+    if (notes_integrated) set('notes_integrated_at', new Date().toISOString());
     // "Save Final" marks it done; a plain "Save Draft" reopens it (clears the mark)
     if (typeof finalized === 'boolean') {
-      update.finalized_at = finalized ? new Date().toISOString() : null;
+      set('finalized_at', finalized ? new Date().toISOString() : null);
     }
 
-    const { data, error } = await supabase
-      .from('reports').update(update).eq('id', req.params.id).select().single();
-    if (error) throw error;
-    res.json({ report: data });
+    const report = await db.one(
+      `update reports set ${sets.join(', ')} where id = $1 returning *`, params);
+    res.json({ report });
   } catch (error) {
-    console.error('Update report error:', error);
+    console.error('Update report error:', error.message);
     res.status(500).json({ error: 'Failed to update report', details: error.message });
   }
 });
@@ -2168,26 +2002,20 @@ app.put('/api/reports/:id', async (req, res) => {
 // Record the grade the attending/QA actually assigned. Manual documentation only —
 // Flow Dictation never generates or suggests RPR grades.
 app.post('/api/reports/:id/grade', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
     const { manual_grade, grade_note } = req.body || {};
     const grade = String(manual_grade || '').toUpperCase().trim();
     if (!VALID_RPR.test(grade)) {
       return res.status(400).json({ error: 'manual_grade must be RPR1–RPR4' });
     }
-    const { data, error } = await supabase
-      .from('reports')
-      .update({
-        rpr_grade: grade,
-        rpr_note: typeof grade_note === 'string' && grade_note.trim() ? grade_note.trim() : null
-      })
-      .eq('id', req.params.id)
-      .select()
-      .single();
-    if (error) throw error;
-    res.json({ report: data });
+    const report = await db.one(
+      `update reports set rpr_grade = $2, rpr_note = $3 where id = $1 returning *`,
+      [req.params.id, grade, typeof grade_note === 'string' && grade_note.trim() ? grade_note.trim() : null]);
+    if (!report) return res.status(404).json({ error: 'Report not found' });
+    res.json({ report });
   } catch (error) {
-    console.error('Grade error:', error);
+    console.error('Grade error:', error.message);
     res.status(500).json({ error: 'Failed to save grade', details: error.message });
   }
 });
@@ -2195,7 +2023,7 @@ app.post('/api/reports/:id/grade', async (req, res) => {
 // ============ Library CRUD (exemplars, style guide, language) ============
 
 app.get('/api/library/exemplars/counts', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
     const rows = await fetchAllRows('exemplar_reports', 'study_type, source, created_at');
     const counts = {};
@@ -2207,47 +2035,43 @@ app.get('/api/library/exemplars/counts', async (req, res) => {
     }
     res.json({ counts, total: rows.length });
   } catch (error) {
-    console.error('Exemplar counts error:', error);
+    console.error('Exemplar counts error:', error.message);
     res.status(500).json({ error: 'Failed to load counts', details: error.message });
   }
 });
 
 app.get('/api/library/exemplars', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
     const { query, limit } = req.query;
-    let q = supabase
-      .from('exemplar_reports')
-      .select('id, study_type, title, notes, source, created_at')
-      .order('created_at', { ascending: false })
-      .limit(Math.min(parseInt(limit, 10) || 50, 200));
-    if (query && query.trim()) {
-      const like = '%' + query.trim() + '%';
-      q = q.or(`study_type.ilike.${like},title.ilike.${like}`);
-    }
-    const { data, error } = await q;
-    if (error) throw error;
-    res.json({ exemplars: data });
+    const max = Math.min(parseInt(limit, 10) || 50, 200);
+    const cols = 'id, study_type, title, notes, source, created_at';
+    const rows = query && query.trim()
+      ? await db.many(
+          `select ${cols} from exemplar_reports where study_type ilike $1 or title ilike $1
+           order by created_at desc limit $2`,
+          ['%' + query.trim() + '%', max])
+      : await db.many(`select ${cols} from exemplar_reports order by created_at desc limit $1`, [max]);
+    res.json({ exemplars: rows });
   } catch (error) {
-    console.error('Exemplars list error:', error);
+    console.error('Exemplars list error:', error.message);
     res.status(500).json({ error: 'Failed to load exemplars', details: error.message });
   }
 });
 
 app.get('/api/library/exemplars/:id', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
-    const { data, error } = await supabase
-      .from('exemplar_reports').select('*').eq('id', req.params.id).single();
-    if (error) throw error;
-    res.json({ exemplar: data });
+    const exemplar = await db.one(`select * from exemplar_reports where id = $1`, [req.params.id]);
+    if (!exemplar) return res.status(404).json({ error: 'Exemplar not found' });
+    res.json({ exemplar });
   } catch (error) {
     res.status(500).json({ error: 'Failed to load exemplar', details: error.message });
   }
 });
 
 app.post('/api/library/exemplars', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
     const { study_type, title, body, notes } = req.body;
     if (!body || !body.trim()) return res.status(400).json({ error: 'Report body is required' });
@@ -2256,54 +2080,44 @@ app.post('/api/library/exemplars', async (req, res) => {
     if (!finalStudyType) {
       try { finalStudyType = await detectStudyType(body); } catch (e) { finalStudyType = null; }
     }
-    const { data, error } = await supabase
-      .from('exemplar_reports')
-      .insert({
-        study_type: finalStudyType,
-        title: (title || '').trim() || (finalStudyType ? finalStudyType + ' exemplar' : 'Exemplar'),
+    const exemplar = await db.one(
+      `insert into exemplar_reports (study_type, title, body, notes, source)
+       values ($1, $2, $3, $4, 'user') returning *`,
+      [
+        finalStudyType,
+        (title || '').trim() || (finalStudyType ? finalStudyType + ' exemplar' : 'Exemplar'),
         body,
-        notes: (notes || '').trim() || null,
-        source: 'user'
-      })
-      .select()
-      .single();
-    if (error) throw error;
+        (notes || '').trim() || null
+      ]);
     invalidateExemplars();
-    res.json({ exemplar: data });
+    res.json({ exemplar });
   } catch (error) {
-    console.error('Exemplar create error:', error);
+    console.error('Exemplar create error:', error.message);
     res.status(500).json({ error: 'Failed to save exemplar', details: error.message });
   }
 });
 
 app.put('/api/library/exemplars/:id', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
     const { study_type, title, body, notes } = req.body;
-    const { data, error } = await supabase
-      .from('exemplar_reports')
-      .update({
-        study_type: (study_type || '').trim() || null,
-        title: (title || '').trim() || null,
-        body,
-        notes: (notes || '').trim() || null
-      })
-      .eq('id', req.params.id)
-      .select()
-      .single();
-    if (error) throw error;
+    const exemplar = await db.one(
+      `update exemplar_reports set study_type = $2, title = $3, body = $4, notes = $5
+       where id = $1 returning *`,
+      [req.params.id, (study_type || '').trim() || null, (title || '').trim() || null, body,
+       (notes || '').trim() || null]);
+    if (!exemplar) return res.status(404).json({ error: 'Exemplar not found' });
     invalidateExemplars();
-    res.json({ exemplar: data });
+    res.json({ exemplar });
   } catch (error) {
     res.status(500).json({ error: 'Failed to update exemplar', details: error.message });
   }
 });
 
 app.delete('/api/library/exemplars/:id', async (req, res) => {
-  if (!requireSupabase(res)) return;
+  if (!requireDb(res)) return;
   try {
-    const { error } = await supabase.from('exemplar_reports').delete().eq('id', req.params.id);
-    if (error) throw error;
+    await db.query(`delete from exemplar_reports where id = $1`, [req.params.id]);
     invalidateExemplars();
     res.json({ success: true });
   } catch (error) {
@@ -2311,10 +2125,23 @@ app.delete('/api/library/exemplars/:id', async (req, res) => {
   }
 });
 
-// Generic CRUD for the two simple knowledge tables (both feed the cached prompt block)
+// Generic CRUD for the two simple knowledge tables (both feed the cached prompt
+// block). `table` and `fields` are code constants, so they are interpolated
+// into the SQL; every request value is a parameter.
 function knowledgeCrud(route, table, fields) {
+  // Required text fields from the body, or the 400 that was sent
+  const readFields = (req, res) => {
+    const values = [];
+    for (const f of fields) {
+      const v = (req.body[f] || '').trim();
+      if (!v) { res.status(400).json({ error: `${f} is required` }); return null; }
+      values.push(v);
+    }
+    return values;
+  };
+
   app.get(`/api/library/${route}`, async (req, res) => {
-    if (!requireSupabase(res)) return;
+    if (!requireDb(res)) return;
     try {
       const rows = await fetchAllRows(table, 'id, ' + fields.join(', ') + ', created_at');
       res.json({ entries: rows });
@@ -2324,46 +2151,40 @@ function knowledgeCrud(route, table, fields) {
   });
 
   app.post(`/api/library/${route}`, async (req, res) => {
-    if (!requireSupabase(res)) return;
+    if (!requireDb(res)) return;
     try {
-      const record = {};
-      for (const f of fields) {
-        const v = (req.body[f] || '').trim();
-        if (!v) return res.status(400).json({ error: `${f} is required` });
-        record[f] = v;
-      }
-      const { data, error } = await supabase.from(table).insert(record).select().single();
-      if (error) throw error;
+      const values = readFields(req, res);
+      if (!values) return;
+      const entry = await db.one(
+        `insert into ${table} (${fields.join(', ')}) values (${fields.map((_, i) => '$' + (i + 1)).join(', ')}) returning *`,
+        values);
       invalidateKnowledge();
-      res.json({ entry: data });
+      res.json({ entry });
     } catch (error) {
       res.status(500).json({ error: `Failed to save`, details: error.message });
     }
   });
 
   app.put(`/api/library/${route}/:id`, async (req, res) => {
-    if (!requireSupabase(res)) return;
+    if (!requireDb(res)) return;
     try {
-      const record = {};
-      for (const f of fields) {
-        const v = (req.body[f] || '').trim();
-        if (!v) return res.status(400).json({ error: `${f} is required` });
-        record[f] = v;
-      }
-      const { data, error } = await supabase.from(table).update(record).eq('id', req.params.id).select().single();
-      if (error) throw error;
+      const values = readFields(req, res);
+      if (!values) return;
+      const entry = await db.one(
+        `update ${table} set ${fields.map((f, i) => `${f} = $${i + 2}`).join(', ')} where id = $1 returning *`,
+        [req.params.id, ...values]);
+      if (!entry) return res.status(404).json({ error: 'Entry not found' });
       invalidateKnowledge();
-      res.json({ entry: data });
+      res.json({ entry });
     } catch (error) {
       res.status(500).json({ error: `Failed to update`, details: error.message });
     }
   });
 
   app.delete(`/api/library/${route}/:id`, async (req, res) => {
-    if (!requireSupabase(res)) return;
+    if (!requireDb(res)) return;
     try {
-      const { error } = await supabase.from(table).delete().eq('id', req.params.id);
-      if (error) throw error;
+      await db.query(`delete from ${table} where id = $1`, [req.params.id]);
       invalidateKnowledge();
       res.json({ success: true });
     } catch (error) {
@@ -2416,7 +2237,7 @@ app.get('/auth/google/callback', async (req, res) => {
     console.log('✅ Gmail OAuth successful');
     res.redirect('/?gmail=connected');
   } catch (error) {
-    console.error('OAuth error:', error);
+    console.error('OAuth error:', error.message);
     res.redirect(state === 'login' ? '/login?error=oauth_failed' : '/?gmail=error');
   }
 });
@@ -2464,7 +2285,7 @@ app.post('/api/gmail/send', async (req, res) => {
     console.log(`✅ Email sent to ${to}`);
     res.json({ success: true, message: `Email sent to ${to}` });
   } catch (error) {
-    console.error('Email send error:', error);
+    console.error('Email send error:', error.message);
     if (error.code === 401) {
       userTokens = null;
       return res.status(401).json({ error: 'Gmail session expired. Please reconnect.' });
@@ -2478,13 +2299,13 @@ app.get('/api/health', (req, res) => {
     status: 'ok',
     service: 'Flow Dictation API',
     llm: {
+      provider: 'vertex-ai', project: gemini.PROJECT, location: gemini.LOCATION,
       detect: MODEL_DETECT, report: MODEL_REPORT, review: MODEL_REVIEW,
       impression: MODEL_IMPRESSION, radqa: MODEL_RADQA, synthesize: MODEL_SYNTHESIZE,
-      chat: MODEL_CHAT,
-      fallback: MODEL_FALLBACK
+      chat: MODEL_CHAT
     },
     auth: { google: googleLoginConfigured, password: !!APP_PASSWORD, allowed_emails: ALLOWED_EMAILS.length },
-    supabase: supabase ? 'configured' : 'not configured'
+    database: db.configured ? 'configured' : 'not configured'
   });
 });
 
@@ -2512,13 +2333,15 @@ app.get('/api/usage/summary', (req, res) => {
 
   res.json({
     since: usageSince,
-    pricing_note: `per-MTok list price; cache writes x${CACHE_WRITE_MULTIPLIER} (1h TTL), cache reads x${CACHE_READ_MULTIPLIER}`,
+    pricing_note: `Vertex AI per-MTok list price; implicit cache reads x${CACHE_READ_MULTIPLIER}; thinking billed as output; Google Search grounding +$${GROUNDING_COST_PER_CALL}/call`,
     totals: {
       calls: sum('calls'),
+      grounded_calls: sum('grounded_calls'),
       input_tokens: sum('input_tokens'),
       output_tokens: sum('output_tokens'),
-      cache_write_tokens: sum('cache_write_tokens'),
+      thought_tokens: sum('thought_tokens'),
       cache_read_tokens: sum('cache_read_tokens'),
+      tool_prompt_tokens: sum('tool_prompt_tokens'),
       injected_tokens: sum('injected_tokens'),
       est_cost: Number(sum('est_cost').toFixed(6))
     },
@@ -2532,28 +2355,23 @@ app.get('/api/usage/summary', (req, res) => {
 // the is_active migration), activate the most recently started one. The SQL
 // migration also does this; this covers the case where the code deploys first.
 async function backfillActiveShift() {
-  if (!supabase) return;
+  if (!db.configured) return;
   try {
-    const { data: active, error: activeErr } = await supabase
-      .from('shifts').select('id').eq('is_active', true).limit(1);
-    if (activeErr) throw activeErr;
-    if (active && active.length) return;
-    const { data: latest, error: latestErr } = await supabase
-      .from('shifts').select('id, name').order('started_at', { ascending: false }).limit(1);
-    if (latestErr) throw latestErr;
-    if (latest && latest.length) {
-      await activateShift(latest[0].id);
-      console.log(`✅ Backfilled active shift: ${latest[0].name}`);
+    const active = await db.one(`select id from shifts where is_active limit 1`);
+    if (active) return;
+    const latest = await db.one(`select id from shifts order by started_at desc limit 1`);
+    if (latest) {
+      await activateShift(latest.id);
+      console.log(`✅ Backfilled active shift: ${latest.id}`);
     }
   } catch (e) {
-    // Expected until the is_active migration has been run in Supabase
     console.error('Active shift backfill skipped:', e.message);
   }
 }
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🏥 Flow Dictation running on port ${PORT}`);
-  console.log(`✨ Claude: ${MODEL_REPORT} (reports), fallback ${MODEL_FALLBACK}`);
-  console.log(`🗄️  Supabase: ${supabase ? 'connected' : 'NOT CONFIGURED'}`);
+  console.log(`✨ Gemini on Vertex AI: ${MODEL_REPORT} (reports), ${MODEL_REVIEW} (review)`);
+  console.log(`🗄️  Database: ${db.configured ? db.describe() : 'NOT CONFIGURED'}`);
   backfillActiveShift();
 });

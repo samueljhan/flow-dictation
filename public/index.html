@@ -876,7 +876,7 @@
                             <button class="ghost" id="saveBtn">Save Draft</button>
                             <button class="ghost" id="draftSaveFinalBtn" title="Mark this study done — moves it to the bottom of the list">Save Final</button>
                         </div>
-                        <button class="ghost" id="reviewBtn" title="Run a Claude review pass and show suggested edits. Runs in the background — you can open another study while it works.">Review</button>
+                        <button class="ghost" id="reviewBtn" title="Run a Gemini review pass and show suggested edits. Runs in the background — you can open another study while it works.">Review</button>
                         <button class="ghost" id="showReviewBtn" style="display:none">Show suggested edits</button>
                         <div class="status" id="draftStatus"></div>
                     </div>
@@ -1225,7 +1225,7 @@
         };
 
         // Quick options are always available above the composer. Using one is
-        // optional — typing without arming anything lets Claude work out the
+        // optional — typing without arming anything lets Gemini work out the
         // task itself (question, rewording, impression, follow-up…).
         const quickBar = document.getElementById('quickBar');
         for (const [action, label] of Object.entries(ACTION_LABELS)) {
@@ -2259,7 +2259,7 @@
         integrateBtn.addEventListener('click', async () => {
             if (!loadedReport || !readoutNotesEl.value.trim()) return;
             integrateBtn.disabled = true;
-            notesStatus.textContent = 'Integrating with Claude…';
+            notesStatus.textContent = 'Integrating with Gemini…';
             notesStatus.className = 'status';
             try {
                 await saveNotes();
@@ -2330,7 +2330,7 @@
             return currentShift;
         }
 
-        // Save: never calls Claude. The default, fast action for new drafts and re-saves.
+        // Save: never calls Gemini. The default, fast action for new drafts and re-saves.
         document.getElementById('saveBtn').addEventListener('click', async () => {
             if (!draftText.value.trim()) { setDraftStatus('Paste a report first.', 'error'); return; }
             reviewedRaw = draftText.value;
@@ -2348,7 +2348,7 @@
             await persistReport({ finalize: true });
         });
 
-        // Review: the only path to the Claude review pass. The draft is always
+        // Review: the only path to the Gemini review pass. The draft is always
         // saved first, so the review runs against a version that exists on the
         // server — leaving the study without saving can't lose it.
         document.getElementById('reviewBtn').addEventListener('click', async () => {
@@ -2442,7 +2442,7 @@
             showBtn.style.display = (job && job.status === 'ready' && !inReview) ? '' : 'none';
             if (!job || inReview) return;
             if (running) {
-                setDraftStatus('Reviewing with Claude… you can open another study and come back.', '');
+                setDraftStatus('Reviewing with Gemini… you can open another study and come back.', '');
             } else if (job.status === 'ready') {
                 setDraftStatus(job.edits.length + ' suggested edit' + (job.edits.length === 1 ? '' : 's') +
                     ' ready' + (draftText.value === job.baseText ? '.' : ' for the version you sent to review.'), '');

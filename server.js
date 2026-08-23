@@ -1,5 +1,5 @@
 const express = require('express');
-const { google } = require('googleapis');
+const { OAuth2Client } = require('google-auth-library');
 const cors = require('cors');
 const crypto = require('crypto');
 const path = require('path');
@@ -43,17 +43,14 @@ function requireDb(res) {
   return true;
 }
 
-// Gmail OAuth configuration
-const oauth2Client = new google.auth.OAuth2(
+// Google sign-in OAuth client (identity only — no other Google scopes)
+const oauth2Client = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
   process.env.NODE_ENV === 'production'
     ? 'https://flowdictation.com/auth/google/callback'
     : 'http://localhost:8080/auth/google/callback'
 );
-
-// Simple in-memory token storage (for single user)
-let userTokens = null;
 
 // ============ Authentication (single-user) ============
 // Two ways in: Google sign-in restricted to an email allowlist, or a shared
@@ -2329,101 +2326,35 @@ function knowledgeCrud(route, table, fields) {
 knowledgeCrud('style-guide', 'style_guide', ['section', 'rule']);
 knowledgeCrud('language', 'rad_language', ['category', 'content']);
 
-// ============ Gmail OAuth Routes ============
-
-app.get('/auth/google', (req, res) => {
-  const scopes = ['https://www.googleapis.com/auth/gmail.send'];
-  const url = oauth2Client.generateAuthUrl({
-    access_type: 'offline',
-    scope: scopes,
-    prompt: 'consent'
-  });
-  res.redirect(url);
-});
+// ============ Google sign-in callback ============
+// The Gmail send/connect routes that used to live here were removed
+// deliberately: an endpoint that emails report text out of the system has no
+// place in a de-identified design. If email export is ever wanted, rebuild it
+// with the scrub applied.
 
 app.get('/auth/google/callback', async (req, res) => {
   const { code, state } = req.query;
   try {
+    if (state !== 'login') return res.redirect('/login');
     const { tokens } = await oauth2Client.getToken(code);
-
-    // Sign-in flow: verify the Google identity and check it against the allowlist
-    if (state === 'login') {
-      if (!tokens.id_token) return res.redirect('/login?error=no_identity');
-      const ticket = await oauth2Client.verifyIdToken({
-        idToken: tokens.id_token,
-        audience: process.env.GOOGLE_CLIENT_ID
-      });
-      const payload = ticket.getPayload() || {};
-      const email = String(payload.email || '').toLowerCase();
-      if (!payload.email_verified || !ALLOWED_EMAILS.includes(email)) {
-        console.warn(`Denied sign-in for ${email || '(unknown)'}`);
-        return res.redirect('/login?error=not_allowed');
-      }
-      setSessionCookie(res, email);
-      console.log(`✅ Signed in: ${email}`);
-      return res.redirect('/');
+    // Verify the Google identity and check it against the allowlist
+    if (!tokens.id_token) return res.redirect('/login?error=no_identity');
+    const ticket = await oauth2Client.verifyIdToken({
+      idToken: tokens.id_token,
+      audience: process.env.GOOGLE_CLIENT_ID
+    });
+    const payload = ticket.getPayload() || {};
+    const email = String(payload.email || '').toLowerCase();
+    if (!payload.email_verified || !ALLOWED_EMAILS.includes(email)) {
+      console.warn(`Denied sign-in for ${email || '(unknown)'}`);
+      return res.redirect('/login?error=not_allowed');
     }
-
-    // Gmail connect flow (separate from sign-in)
-    oauth2Client.setCredentials(tokens);
-    userTokens = tokens;
-    console.log('✅ Gmail OAuth successful');
-    res.redirect('/?gmail=connected');
+    setSessionCookie(res, email);
+    console.log(`✅ Signed in: ${email}`);
+    return res.redirect('/');
   } catch (error) {
     console.error('OAuth error:', error.message);
-    res.redirect(state === 'login' ? '/login?error=oauth_failed' : '/?gmail=error');
-  }
-});
-
-app.get('/api/gmail/status', (req, res) => {
-  res.json({
-    connected: !!userTokens,
-    email: userTokens ? 'Connected' : null
-  });
-});
-
-app.get('/api/gmail/disconnect', (req, res) => {
-  userTokens = null;
-  oauth2Client.revokeCredentials();
-  res.json({ success: true });
-});
-
-app.post('/api/gmail/send', async (req, res) => {
-  if (!userTokens) {
-    return res.status(401).json({ error: 'Gmail not connected. Please connect first.' });
-  }
-  try {
-    const { to, subject, report } = req.body;
-    if (!to || !subject || !report) {
-      return res.status(400).json({ error: 'Missing required fields: to, subject, report' });
-    }
-    oauth2Client.setCredentials(userTokens);
-    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-    const emailContent = [
-      `To: ${to}`,
-      `Subject: ${subject}`,
-      'Content-Type: text/plain; charset=utf-8',
-      '',
-      report
-    ].join('\n');
-    const encodedEmail = Buffer.from(emailContent)
-      .toString('base64')
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '');
-    await gmail.users.messages.send({
-      userId: 'me',
-      requestBody: { raw: encodedEmail }
-    });
-    console.log(`✅ Email sent to ${to}`);
-    res.json({ success: true, message: `Email sent to ${to}` });
-  } catch (error) {
-    console.error('Email send error:', error.message);
-    if (error.code === 401) {
-      userTokens = null;
-      return res.status(401).json({ error: 'Gmail session expired. Please reconnect.' });
-    }
-    res.status(500).json({ error: 'Failed to send email', details: error.message });
+    res.redirect('/login?error=oauth_failed');
   }
 });
 

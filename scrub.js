@@ -31,9 +31,11 @@ const PATTERNS = [
   { type: 'DATE', re: /\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}\b/gi },
   { type: 'DATE', re: /\b\d{1,2}(?:st|nd|rd|th)?\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?,?\s+\d{4}\b/gi },
   // MRN-like: a standalone run of 6-10 digits. Runs last so dates/phones/SSNs
-  // have already been replaced. Guards: not adjacent to a decimal point or a
-  // unit (a "6.5 x 4.2 cm" mass never has 6+ contiguous digits anyway).
-  { type: 'MRN', re: /(?<![\d.\-])\d{6,10}(?![\d.]|\s?(?:mm|cm|mL|cc|HU)\b)/g }
+  // have already been replaced. Guards: not part of a longer number or a
+  // decimal (a sentence-ending period after the digits is still a match —
+  // only ".<digit>" marks a decimal), and not followed by a unit
+  // (a "6.5 x 4.2 cm" mass never has 6+ contiguous digits anyway).
+  { type: 'MRN', re: /(?<![\d.\-])\d{6,10}(?!\d|\.\d|\s?(?:mm|cm|mL|cc|HU)\b)/g }
 ];
 
 // One text -> { text, counts } where counts is {TYPE: n} for types that hit

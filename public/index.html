@@ -1131,10 +1131,6 @@
         function fmtDate(d) {
             return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
         }
-        function makeReportId(d = new Date()) {
-            return '' + d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + pad2(d.getHours()) + pad2(d.getMinutes());
-        }
-
         // Auto shift name: date + Day/Night. 06:00–17:59 = Day; otherwise Night.
         // Night shifts starting after midnight (00:00–05:59) use the previous calendar date.
         function autoShiftName(d = new Date()) {
@@ -2716,7 +2712,7 @@
                 if (!shift) { statusEl.textContent = 'Save cancelled.'; return; }
 
                 const body = {
-                    proposed_id: makeReportId(),
+                    // The server assigns a random non-identifying id (R-XXXXXX)
                     shift_id: shift.id,
                     study_type: studyTypeInput.value.trim(),
                     study_id_label: studyIdInput.value.trim(),

@@ -6,6 +6,7 @@ const path = require('path');
 require('dotenv').config();
 const db = require('./db');
 const gemini = require('./gemini');
+const scrub = require('./scrub');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -30,6 +31,7 @@ const MODEL_IMPRESSION = process.env.MODEL_IMPRESSION || 'gemini-2.5-pro';  // G
 const MODEL_RADQA = process.env.MODEL_RADQA || 'gemini-2.5-pro';            // Quick Rad Question (references on)
 const MODEL_CHAT = process.env.MODEL_CHAT || MODEL_RADQA;                   // plain free text (no references)
 const MODEL_SYNTHESIZE = process.env.MODEL_SYNTHESIZE || 'gemini-2.5-pro';  // prior report + new info → merged report
+const MODEL_SCRUB = process.env.MODEL_SCRUB || 'gemini-2.5-flash-lite';     // PHI scrub model pass (at finalization)
 
 // Postgres (Cloud SQL). db.configured is false only when no connection
 // variables are set at all; a wrong password surfaces on the first query.
@@ -534,6 +536,83 @@ function sourceRank(url) {
 }
 
 const VALID_RPR = /^RPR[1-4]$/;
+
+// ---- Report ids ----
+// Random, non-identifying: "R-" + 6 chars of A-Z2-9 (no 0/O/1/I). Nothing
+// about when a study was read can be recovered from its id; created_at stays
+// the ordering/shift-grouping mechanism.
+const REPORT_ID_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';   // 32 chars
+const REPORT_ID_RE = /^R-[A-Z2-9]{6}$/;
+function randomReportId() {
+  // 256 % 32 === 0, so a byte modulo 32 is unbiased
+  return 'R-' + [...crypto.randomBytes(6)].map(b => REPORT_ID_ALPHABET[b % 32]).join('');
+}
+
+// ---- PHI scrub (see scrub.js) ----
+// Pattern pass + one model pass over all of a report's texts together, so the
+// same name found anywhere is replaced everywhere. Model failures degrade to
+// the pattern pass alone — the caller decides what that means for scrubbed_at.
+async function modelFindPhi(text) {
+  const out = await geminiText({
+    model: MODEL_SCRUB,
+    label: 'scrub',
+    system: scrub.SCRUB_SYSTEM,
+    message: text,
+    // A date-heavy multi-document input can produce a long replacement list;
+    // too low a ceiling truncates the JSON mid-string
+    maxTokens: 8000,
+    effort: 'low',
+    schema: scrub.SCRUB_SCHEMA
+  });
+  const parsed = parseModelJson(out);
+  return Array.isArray(parsed.replacements) ? parsed.replacements : [];
+}
+
+// texts: {key: string|null|undefined}. Returns {texts, replacements, counts,
+// modelOk, modelApplied} — counts by TYPE only; matched text is never logged.
+async function scrubTexts(texts) {
+  const counts = {};
+  const out = {};
+  for (const [k, v] of Object.entries(texts)) {
+    if (typeof v !== 'string' || !v) { out[k] = v; continue; }
+    const r = scrub.patternScrub(v);
+    out[k] = r.text;
+    for (const [t, n] of Object.entries(r.counts)) counts[t] = (counts[t] || 0) + n;
+  }
+  let modelOk = true;
+  let modelApplied = 0;
+  let replacements = [];
+  const joined = Object.values(out).filter(t => typeof t === 'string' && t.trim()).join('\n\n----- NEXT DOCUMENT -----\n\n');
+  if (joined.trim()) {
+    try {
+      replacements = await modelFindPhi(joined);
+      for (const k of Object.keys(out)) {
+        if (typeof out[k] !== 'string' || !out[k]) continue;
+        const r = scrub.applyReplacements(out[k], replacements);
+        out[k] = r.text;
+        modelApplied += r.applied;
+      }
+    } catch (e) {
+      modelOk = false;
+      console.warn(`[scrub] model pass failed — pattern pass only: ${e.message}`);
+    }
+  }
+  return { texts: out, replacements, counts, modelOk, modelApplied };
+}
+
+// The audit trail quotes report text, so it is scrubbed with the same passes
+function scrubEditsJson(edits, replacements) {
+  return (Array.isArray(edits) ? edits : []).map(e => {
+    if (!e || typeof e !== 'object') return e;
+    const clean = { ...e };
+    for (const f of ['original_text', 'suggested_text', 'user_text', 'reason']) {
+      if (typeof clean[f] === 'string' && clean[f]) {
+        clean[f] = scrub.applyReplacements(scrub.patternScrub(clean[f]).text, replacements).text;
+      }
+    }
+    return clean;
+  });
+}
 
 // ---- Sections (subspecialties) ----
 // Manual only, set once per shift: the shift carries the current section
@@ -1501,10 +1580,7 @@ app.put('/api/shifts/:id/activate', async (req, res) => {
 app.post('/api/reports', async (req, res) => {
   if (!requireDb(res)) return;
   try {
-    const { proposed_id, shift_id, study_type, study_id_label, report_type, raw_text, draft_text, edits_json, finalized } = req.body;
-    if (!proposed_id || !/^\d{12}$/.test(proposed_id)) {
-      return res.status(400).json({ error: 'proposed_id must be a yyyymmddhhmm timestamp' });
-    }
+    const { shift_id, study_type, study_id_label, report_type, raw_text, draft_text, edits_json, finalized } = req.body;
     if (!shift_id) return res.status(400).json({ error: 'shift_id is required' });
     if (!raw_text || !raw_text.trim()) return res.status(400).json({ error: 'raw_text is required' });
 
@@ -1522,13 +1598,9 @@ app.post('/api/reports', async (req, res) => {
       try { await touchStudyType(finalStudyType); } catch (e) { console.error('touchStudyType failed:', e.message); }
     }
 
-    // Collision handling: yyyymmddhhmm, then -2, -3, ...
-    const existing = await db.many(`select id from reports where id like $1`, [`${proposed_id}%`]);
-    const taken = new Set(existing.map(r => r.id));
-    let id = proposed_id;
-    for (let n = 2; taken.has(id); n++) {
-      id = `${proposed_id}-${n}`;
-    }
+    // Random id; regenerate on the (1-in-a-billion) collision
+    let id;
+    do { id = randomReportId(); } while (await db.one(`select 1 from reports where id = $1`, [id]));
 
     const now = new Date().toISOString();
     const report = await db.one(
@@ -1670,12 +1742,51 @@ app.put('/api/reports/:id/final', async (req, res) => {
     if (!final_text || !final_text.trim()) {
       return res.status(400).json({ error: 'final_text is required' });
     }
-    const report = await db.one(
-      `update reports set final_text = $2, final_saved_at = $3 where id = $1 returning *`,
-      [req.params.id, final_text, new Date().toISOString()]);
-    if (!report) return res.status(404).json({ error: 'Report not found' });
+    const existing = await db.one(`select * from reports where id = $1`, [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Report not found' });
 
-    // Harvest the findings/impression pair for training. Never block the save.
+    // Finalization is THE de-identification trigger: scrub every stored text
+    // for this report and drop its study id, in one transaction with the
+    // final. A report already scrubbed only needs the incoming final scrubbed.
+    // The scrub can degrade (model pass fails -> pattern pass only,
+    // scrubbed_at stays null so a later save retries) but never blocks.
+    const revisions = existing.scrubbed_at
+      ? []
+      : await db.many(`select id, draft_text from report_revisions where report_id = $1`, [req.params.id]);
+    const input = existing.scrubbed_at
+      ? { final_text }
+      : {
+          final_text,
+          raw_text: existing.raw_text,
+          draft_text: existing.draft_text,
+          readout_notes: existing.readout_notes,
+          ...Object.fromEntries(revisions.map(r => ['rev_' + r.id, r.draft_text]))
+        };
+    const s = await scrubTexts(input);
+    const now = new Date().toISOString();
+
+    const report = await db.tx(async client => {
+      const sets = [`final_text = $2`, `final_saved_at = $3`, `study_id_label = null`,
+                    `scrubbed_at = ${s.modelOk ? '$3' : (existing.scrubbed_at ? 'scrubbed_at' : 'null')}`];
+      const params = [req.params.id, s.texts.final_text, now];
+      if (!existing.scrubbed_at) {
+        params.push(s.texts.raw_text, s.texts.draft_text, s.texts.readout_notes,
+                    JSON.stringify(scrubEditsJson(existing.edits_json, s.replacements)));
+        sets.push(`raw_text = $4`, `draft_text = $5`, `readout_notes = $6`, `edits_json = $7::jsonb`);
+      }
+      const { rows } = await client.query(
+        `update reports set ${sets.join(', ')} where id = $1 returning *`, params);
+      for (const rev of revisions) {
+        await client.query(`update report_revisions set draft_text = $2 where id = $1`,
+          [rev.id, s.texts['rev_' + rev.id]]);
+      }
+      return rows[0];
+    });
+    // Counts by type only — never the matched text
+    console.log(`[scrub] report=${report.id} pattern=${JSON.stringify(s.counts)} model_applied=${s.modelApplied} model_ok=${s.modelOk}`);
+
+    // Harvest the findings/impression pair for training (from the scrubbed
+    // final, so the mirror is clean by construction). Never block the save.
     let sections = { stored: false, reason: 'not attempted' };
     try {
       sections = await saveReportSections(report, 'final');
@@ -1774,15 +1885,37 @@ app.get('/api/training/impression-pairs', async (req, res) => {
     }
     params.push(Math.min(parseInt(req.query.limit, 10) || 1000, 5000));
     const rows = await db.many(
-      `select report_id, source, study_type, full_text, findings, impression, created_at
-       from report_sections${where.length ? ' where ' + where.join(' and ') : ''}
-       order by created_at desc limit $${params.length}`,
+      `select s.report_id, s.source, s.study_type, s.full_text, s.findings, s.impression, s.created_at,
+              r.scrubbed_at
+       from report_sections s left join reports r on r.id = s.report_id
+       ${where.length ? ' where ' + where.map(w => 's.' + w).join(' and ') : ''}
+       order by s.created_at desc limit $${params.length}`,
       params);
+
+    // Export safety net: anything not yet scrubbed in storage is scrubbed
+    // IN THE OUTPUT (the stored row is not touched — it may still be worked
+    // on); and no export carries a precise service date, only the year.
+    const out = [];
+    for (const row of rows) {
+      let { full_text, findings, impression } = row;
+      if (!row.scrubbed_at) {
+        const s = await scrubTexts({ full_text, findings, impression });
+        ({ full_text, findings, impression } = s.texts);
+        console.log(`[scrub] export-time scrub report=${row.report_id} pattern=${JSON.stringify(s.counts)} model_applied=${s.modelApplied} model_ok=${s.modelOk}`);
+      }
+      out.push({
+        report_id: row.report_id,
+        source: row.source,
+        study_type: row.study_type,
+        full_text, findings, impression,
+        year: new Date(row.created_at).getUTCFullYear()
+      });
+    }
     if (format === 'jsonl') {
       res.type('application/x-ndjson');
-      return res.send(rows.map(r => JSON.stringify(r)).join('\n'));
+      return res.send(out.map(r => JSON.stringify(r)).join('\n'));
     }
-    res.json({ count: rows.length, pairs: rows });
+    res.json({ count: out.length, pairs: out });
   } catch (error) {
     console.error('Training pairs error:', error.message);
     res.status(500).json({ error: 'Failed to load pairs', details: error.message });

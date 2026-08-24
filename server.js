@@ -382,7 +382,7 @@ const ACTION_EFFORT = {
   fullreport: 'high',
   synthesize: 'high'
 };
-const DRAFT_REVIEW_EFFORT = 'medium';  // typo/essential-edit review
+const DRAFT_REVIEW_EFFORT = 'high';  // typo/essential-edit review; high curbs false "inconsistency" flags
 // Free text is the most-used path, so it is also the most latency-sensitive.
 // Env-overridable to retune without a code change.
 const FREEFORM_EFFORT = process.env.FREEFORM_EFFORT || 'medium';
@@ -403,6 +403,7 @@ Rules:
 - "original_text" must be an EXACT character-for-character substring of the report so it can be located, and must be unique enough to find (include a few surrounding words if needed).
 - Keep each edit small and local: a word, phrase, or at most one sentence. Do not rewrite the whole report.
 - Never change medical meaning, laterality, measurements, or findings.
+- Do NOT flag the IMPRESSION as inconsistent with the FINDINGS. The impression is intentionally selective — omitting, summarizing, or re-prioritizing findings is normal, not an error. Only flag a direct contradiction: laterality flipped, a measurement that differs between sections, or a finding stated present in one section and absent in the other. When you do, quote the exact contradicting sentence from the other section in the reason; if you cannot quote one, there is no contradiction — omit the edit.
 - "reason" is one short sentence.
 - If nothing needs changing, return {"edits": []}.`;
 

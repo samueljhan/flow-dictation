@@ -2684,7 +2684,9 @@
                         draft_text: applyAcceptedEdits(),
                         append_edits: editsRecord,
                         notes_integrated: integrating,
-                        ...(finalize ? { finalized: true } : {}),
+                        // Save Final marks it done; Save Draft reopens a finalized
+                        // report (server clears finalized_at, green dot goes away)
+                        finalized: finalize,
                         study_type: studyTypeInput.value.trim(),
                         study_id_label: studyIdInput.value.trim(),
                         report_type: reportType

@@ -460,6 +460,10 @@
             padding: 1px 7px; border-radius: 8px; letter-spacing: 0.5px; width: fit-content;
             background: #404040; color: #b0b0b0;
         }
+        .edit-cat.addition { background: rgba(40, 167, 69, 0.18); color: #28a745; }
+        .edit-cat.section { background: rgba(111, 159, 216, 0.18); color: #6f9fd8; }
+        .edit-cat-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .edit-target { font-size: 11px; color: #909090; }
         .edit-context { line-height: 1.5; word-break: break-word; color: #d0d0d0; }
         .edit-context .ctx { color: #808080; }
         .edit-orig { text-decoration: line-through; color: #c98a8a; }
@@ -2482,15 +2486,22 @@
         function locateEdits(text, edits, searchFrom = 0) {
             const located = [];
             const used = [];
-            for (const e of edits) {
-                let from = searchFrom, pos = -1;
+            const findFrom = (needle, start) => {
+                let from = start, pos = -1;
                 while (true) {
-                    pos = text.indexOf(e.original_text, from);
+                    pos = text.indexOf(needle, from);
                     if (pos === -1) break;
-                    const end = pos + e.original_text.length;
+                    const end = pos + needle.length;
                     if (!used.some(([s, en]) => pos < en && end > s)) break;
                     from = pos + 1;
                 }
+                return pos;
+            };
+            for (const e of edits) {
+                let pos = findFrom(e.original_text, searchFrom);
+                // Not in the body: a server-approved header edit (the COMPARISON
+                // line is the only kind that gets through) anchors above it
+                if (pos === -1 && searchFrom > 0) pos = findFrom(e.original_text, 0);
                 if (pos === -1) continue;
                 used.push([pos, pos + e.original_text.length]);
                 located.push({ ...e, pos, status: 'pending' });
@@ -2576,7 +2587,10 @@
                     ? '<span class="edit-user" data-user-idx="' + i + '">' + escapeHtml(e.user_text) + '</span>'
                     : '<span class="edit-sugg">' + escapeHtml(e.suggested_text) + '</span>';
                 card.innerHTML =
-                    '<span class="edit-cat">' + e.category + '</span>' +
+                    '<div class="edit-cat-row"><span class="edit-cat ' + escapeHtml(e.category) + '">' +
+                    escapeHtml(e.category) + '</span>' +
+                    (e.target_section ? '<span class="edit-target">→ ' + escapeHtml(e.target_section) + '</span>' : '') +
+                    '</div>' +
                     '<div class="edit-context"><span class="ctx">…' + escapeHtml(ctxBefore) + '</span>' +
                     '<span class="edit-orig">' + escapeHtml(e.original_text) + '</span> → ' +
                     replacement +
@@ -2674,6 +2688,8 @@
                     category: e.category,
                     status: e.status === 'accepted' ? 'accepted'
                           : e.status === 'edited' ? 'edited' : 'rejected',
+                    ...(e.target_section ? { target_section: e.target_section } : {}),
+                    ...(e.evidence ? { evidence: e.evidence } : {}),
                     ...(e.status === 'edited' ? { user_text: e.user_text || '' } : {})
                 }));
 

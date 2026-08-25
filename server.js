@@ -314,6 +314,45 @@ function parseModelJson(text) {
   }
 }
 
+// Models collapse the template's double spaces when quoting the report, which
+// breaks the exact-substring anchor an edit needs. This maps a whitespace-
+// normalized quote back onto the exact source substring — but only when the
+// match is unique; an ambiguous or absent quote is left as-is (and dropped by
+// the includes() filter downstream).
+function originalRelocator(text) {
+  let canon = '';
+  const map = [];              // canon char index -> raw char index
+  let lastWasSpace = true;     // swallows leading whitespace
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (/\s/.test(ch)) { lastWasSpace = true; continue; }
+    if (lastWasSpace && canon) { canon += ' '; map.push(i - 1); }
+    canon += ch;
+    map.push(i);
+    lastWasSpace = false;
+  }
+  return orig => {
+    if (text.includes(orig)) return orig;
+    const c = String(orig).replace(/\s+/g, ' ').trim();
+    if (!c) return orig;
+    const at = canon.indexOf(c);
+    if (at === -1 || canon.indexOf(c, at + 1) !== -1) return orig;
+    // First and last matched chars are non-space, so their map entries are exact
+    return text.slice(map[at], map[at + c.length - 1] + 1);
+  };
+}
+
+// Last-resort parse for a truncated edits payload (e.g. a decode loop ran the
+// output into the token ceiling): cut back to the last complete edit object
+// and close the array, recovering every edit before the runaway.
+function salvageEditsJson(text) {
+  const cleaned = text.replace(/^\s*```(?:json)?\s*/i, '').trim();
+  for (let i = cleaned.lastIndexOf('}'); i > 0; i = cleaned.lastIndexOf('}', i - 1)) {
+    try { return JSON.parse(cleaned.slice(0, i + 1) + ']}'); } catch { /* keep cutting */ }
+  }
+  return null;
+}
+
 const ASSIST_SYSTEM = `You are an expert radiologist's writing assistant inside Flow Dictation, a radiology reporting tool.
 
 Rules:
@@ -390,20 +429,34 @@ const FREEFORM_EFFORT = process.env.FREEFORM_EFFORT || 'medium';
 // Per-action model routing; anything unlisted uses MODEL_REPORT.
 const ACTION_MODEL = { impression: MODEL_IMPRESSION, synthesize: MODEL_SYNTHESIZE };
 
-const DRAFT_REVIEW_SYSTEM = `You review radiology report drafts for a radiologist. Flag ONLY essential corrections: obvious typos (spelling, grammar, punctuation) and clear speech-recognition/dictation errors, plus wording that is factually wrong or genuinely confusing.
+const DRAFT_REVIEW_SYSTEM = `You review radiology report drafts for a radiologist. Flag ONLY essential corrections: obvious typos (spelling, grammar, punctuation), clear speech-recognition/dictation errors, wording that is factually wrong or genuinely confusing, duplicated sentences, and the specific content edits defined below.
 
 Return JSON only — no markdown fences, no commentary — in exactly this shape:
-{"edits": [{"original_text": "...", "suggested_text": "...", "reason": "...", "category": "typo"}]}
+{"edits": [{"original_text": "...", "suggested_text": "...", "reason": "...", "category": "typo", "target_section": "...", "evidence": {"impression_quote": "...", "findings_quote": "..."}}]}
+"evidence" is required on EVERY edit: fill both quotes for the inconsistency/content edits defined below; for a plain typo or style edit set both quotes to "". "target_section" is required for "addition" and "section" edits; omit it otherwise.
+
+CORE PRINCIPLE — the IMPRESSION is the source of truth. The radiologist puts the most attention into the impression; findings templates are filled in faster and may lag behind it. When the impression and the findings body disagree, or the impression contains content the findings lack, resolve it by bringing the FINDINGS into agreement with the impression: add to or amend the findings body. NEVER generate an edit that rewrites impression content to match the findings. The one exception: defects internal to the impression itself — a duplicated sentence, a typo, a self-contradiction within the impression — are fixed in place in the impression.
+
+SECTION STRUCTURE — before proposing any edit, parse the report's structure: top-level study blocks (e.g. a combined exam with separate MRI BRAIN and MRI SPINE blocks, each with its own FINDINGS) and the labeled sections within each ("Ventricles:", "Osseous Structures:", "Soft Tissues:", ...). A labeled section scopes ONLY to its own study block: "Osseous Structures:" under MRI SPINE says nothing about the calvarium. A template-normal line ("Soft Tissues: Normal", "Marrow Signal: Expected") asserts normality only for its section's anatomy within its own block — never flag it as inconsistent with findings elsewhere unless it covers the same anatomy in the same study block. If the report has no labeled sections (freeform prose), skip all section logic and review it as prose.
+
+Categories — "category" must be exactly one of "typo", "style", "addition", "section":
+- "typo": spelling/grammar/punctuation/dictation errors. Also use "typo" to remove a repeated or near-duplicate sentence within the impression or within a single findings section (original_text = the full passage spanning BOTH copies, suggested_text = that passage with the duplicate removed; this is the in-place impression exception). Spacing artifacts (double spaces, spacing around punctuation) are not errors — never propose a whitespace-only change.
+- "style": wording that is clearly wrong or genuinely confusing — never preferences.
+- "addition": the impression describes a substantive finding that the findings body does not describe. Add it to the most appropriate findings section: set "target_section" to that section's label (include the study block when there are several, e.g. "Osseous Structures (MRI BRAIN)"), original_text = the current content of that section line (an exact substring, so it can be located), suggested_text = that line plus the added sentence(s). reason: "Impression describes X but findings do not — add to [section]." Substantive means POSITIVE findings an attending expects documented in the body: masses, collections, edema, hemorrhage, fractures, osseous destruction/remodeling, device positions, obstruction/entrapment. NOT hedges, negatives, or summary judgments: never generate an addition for a negative statement ("no X", "without Y") — a negative in the impression needs no findings documentation — and "significant mass effect" summarizing findings already described needs no addition.
+- "section": content that clearly sits under the wrong section label (a ventricular finding under Parenchyma, enhancement under Perfusion). Propose paired remove/add edits or one replacement per section, with "target_section" naming the correct section and reason naming both sections. Only flag clear misplacements — a defensible judgment call is not an error.
+
+EVIDENCE — any edit justified by an inconsistency or by content elsewhere in the report (every "addition" and "section" edit, and any "style" edit claiming the report contradicts itself) MUST include "evidence": {"impression_quote": "...", "findings_quote": "..."} — exact verbatim substrings of the report constituting the conflict: impression_quote = the claim being relied on (usually from the impression; for temporal conflicts, the sentence containing the temporal language), findings_quote = the conflicting or amended line (the findings section line, or the COMPARISON line). You may only claim the report says something if you can quote it exactly. If you cannot produce both quotes, do not generate the edit. The reason must be derivable from the quotes alone.
+
+TEMPORAL/COMPARISON — "previously X", "compared to", "interval", "new from prior" imply a prior exam. If the COMPARISON line says None (or no comparison), flag THAT conflict: propose updating the COMPARISON line or removing the temporal language — a findings-side fix, with evidence quoting both the temporal sentence and the COMPARISON line. But "(remeasured)" / "re-measured" means a measurement revision of the same exam, not interval change: a differing prior value with this qualifier never contradicts "stable" or "unchanged" — do not flag it. Likewise, HOW a change is characterized is the radiologist's judgment: a small measurement difference the impression calls "stable", "unchanged", or "grossly similar" is not a contradiction — do not flag it and do not harmonize the wording between sections.
 
 Rules:
-- SCOPE: review only the body of the report — the FINDINGS section and everything after it (including the IMPRESSION). Everything above FINDINGS is off limits: exam/study type, clinical history or indication, technique, comparison, protocol, patient or accession headers. Never propose an edit there, even for an obvious typo. If a report has no FINDINGS heading, review the whole thing.
+- SCOPE: review only the body of the report — the FINDINGS section and everything after it (including the IMPRESSION). Everything above FINDINGS is off limits: exam/study type, clinical history or indication, technique, protocol, patient or accession headers. Never propose an edit there, even for an obvious typo. The single exception is the COMPARISON line, which may be edited only to resolve a temporal-language conflict as described above. If a report has no FINDINGS heading, review the whole thing.
 - Essential changes only. Do NOT suggest optional stylistic polish, preference rewording, tightening, or restructuring. If a sentence is acceptable as written, leave it alone — even if you would phrase it differently.
-- Fewer, high-confidence edits beat many marginal ones. When unsure whether an edit is essential, omit it.
-- "category" must be exactly "typo" or "style". Use "typo" for spelling/grammar/punctuation/dictation errors; reserve "style" for wording that is clearly wrong or confusing, not preferences.
+- Fewer, high-confidence edits beat many marginal ones. When unsure whether an edit is essential — or whether a finding is substantive enough for an "addition" — omit it. High precision over recall.
 - "original_text" must be an EXACT character-for-character substring of the report so it can be located, and must be unique enough to find (include a few surrounding words if needed).
-- Keep each edit small and local: a word, phrase, or at most one sentence. Do not rewrite the whole report.
-- Never change medical meaning, laterality, measurements, or findings.
-- Do NOT flag the IMPRESSION as inconsistent with the FINDINGS. The impression is intentionally selective — omitting, summarizing, or re-prioritizing findings is normal, not an error. Only flag a direct contradiction: laterality flipped, a measurement that differs between sections, or a finding stated present in one section and absent in the other. When you do, quote the exact contradicting sentence from the other section in the reason; if you cannot quote one, there is no contradiction — omit the edit.
+- Keep each edit small and local: a word, phrase, a section line, or at most one sentence. Do not rewrite the whole report.
+- Never change medical meaning, laterality, or measurements, and never invent findings the report does not state.
+- Do NOT flag the impression for omitting, summarizing, or re-prioritizing findings — the impression is intentionally selective, and that is never an error.
 - "reason" is one short sentence.
 - If nothing needs changing, return {"edits": []}.`;
 
@@ -414,6 +467,8 @@ Return JSON only — no markdown fences, no commentary — in exactly this shape
 
 Rules:
 - Make only the changes the feedback requires, plus anything strictly needed to keep the report internally consistent with those changes (e.g. a matching impression item). Leave everything else exactly as written — no polish, no restructuring.
+- When a change creates disagreement between the impression and the findings body, prefer amending the FINDINGS to agree with the impression rather than rewriting the impression to match the findings, unless the feedback explicitly directs otherwise.
+- Respect the report's structure: place added content under the correct labeled section of the correct study block (identically named sections in different blocks — e.g. brain vs spine — are unrelated). You may set "target_section" to the section label an edit belongs to.
 - "category" is always exactly "readout".
 - "original_text" must be an EXACT character-for-character substring of the draft so it can be located, and must be unique enough to find (include a few surrounding words if needed).
 - Keep each edit small and local: a word, phrase, or sentence. To ADD a new sentence, use an adjacent existing sentence as the anchor: original_text = that sentence, suggested_text = that sentence plus the addition.
@@ -437,7 +492,10 @@ const DESCRIBE_SCHEMA = {
   properties: { findings: { type: 'STRING' }, impression: { type: 'STRING' } },
   required: ['findings', 'impression']
 };
-const editsSchema = categories => ({
+// withEvidence adds the optional fields the review pass uses: target_section
+// (where an "addition"/"section" edit lands) and evidence (the verbatim quotes
+// that justify an inconsistency claim — validated server-side as substrings).
+const editsSchema = (categories, withEvidence = false) => ({
   type: 'OBJECT',
   properties: {
     edits: {
@@ -448,15 +506,30 @@ const editsSchema = categories => ({
           original_text: { type: 'STRING' },
           suggested_text: { type: 'STRING' },
           reason: { type: 'STRING' },
-          category: { type: 'STRING', enum: categories }
+          category: { type: 'STRING', enum: categories },
+          ...(withEvidence ? {
+            target_section: { type: 'STRING' },
+            evidence: {
+              type: 'OBJECT',
+              properties: {
+                impression_quote: { type: 'STRING' },
+                findings_quote: { type: 'STRING' }
+              },
+              required: ['impression_quote', 'findings_quote']
+            }
+          } : { target_section: { type: 'STRING' } })
         },
-        required: ['original_text', 'suggested_text', 'reason', 'category']
+        // evidence is required on every review edit (empty quotes for plain
+        // typo/style) — optional schema fields get skipped too often
+        required: withEvidence
+          ? ['original_text', 'suggested_text', 'reason', 'category', 'evidence']
+          : ['original_text', 'suggested_text', 'reason', 'category']
       }
     }
   },
   required: ['edits']
 });
-const REVIEW_EDITS_SCHEMA = editsSchema(['typo', 'style']);
+const REVIEW_EDITS_SCHEMA = editsSchema(['typo', 'style', 'addition', 'section'], true);
 const READOUT_EDITS_SCHEMA = editsSchema(['readout']);
 
 // Free text is the main way in — there are no modes to pick, so this prompt has
@@ -1283,41 +1356,98 @@ app.post('/api/draft/review', async (req, res) => {
     }
     const { system, injected } = await buildKnowledgeSystem(DRAFT_REVIEW_SYSTEM, studyType, 'review');
 
-    const text = await geminiText({
-      model: MODEL_REVIEW,
-      label: 'review',
-      system,
-      injected,
-      message: `Review this radiology report draft:\n\n${report}`,
-      maxTokens: 8000,
-      effort: DRAFT_REVIEW_EFFORT,
-      schema: REVIEW_EDITS_SCHEMA
-    });
-
-    let parsed;
-    try {
-      parsed = parseModelJson(text);
-    } catch (e) {
-      // Never log the payload — it quotes the report
-      console.error(`Review JSON parse failed (${text.length} chars): ${e.message}`);
-      return res.json({ edits: [] });
+    // Gemini occasionally falls into a decode loop that truncates the JSON.
+    // Salvage what parses; if nothing does, retry once before giving up.
+    let rawEdits = null;
+    for (let attempt = 1; attempt <= 2 && !rawEdits; attempt++) {
+      const text = await geminiText({
+        model: MODEL_REVIEW,
+        label: 'review',
+        system,
+        injected,
+        message: `Review this radiology report draft:\n\n${report}`,
+        maxTokens: 8000,
+        effort: DRAFT_REVIEW_EFFORT,
+        schema: REVIEW_EDITS_SCHEMA
+      });
+      try {
+        const parsed = parseModelJson(text);
+        rawEdits = Array.isArray(parsed) ? parsed : (parsed.edits || []);
+      } catch (e) {
+        // Never log the payload — it quotes the report
+        const salvaged = salvageEditsJson(text);
+        if (salvaged && Array.isArray(salvaged.edits)) {
+          console.error(`Review JSON salvaged after truncation (${text.length} chars)`);
+          rawEdits = salvaged.edits;
+        } else {
+          console.error(`Review JSON parse failed, attempt ${attempt} (${text.length} chars): ${e.message}`);
+        }
+      }
     }
+    if (!rawEdits) return res.json({ edits: [] });
 
     const bodyStart = reviewableFrom(report);
-    const rawEdits = Array.isArray(parsed) ? parsed : (parsed.edits || []);
+    // The COMPARISON line(s) are the one header exception: editable, but only
+    // there — so a temporal-language conflict ("previously 8 mm" vs "COMPARISON:
+    // None") can fix the comparison side.
+    const comparisonRanges = [...report.matchAll(/^[ \t]*(?:\*\*)?\s*COMPARISON\b[^\n]*$/gim)]
+      .map(m => [m.index, m.index + m[0].length]);
+    const onComparisonLine = orig => {
+      let from = 0, pos;
+      while ((pos = report.indexOf(orig, from)) !== -1) {
+        const end = pos + orig.length;
+        if (comparisonRanges.some(([s, en]) => pos < en && end > s)) return true;
+        from = pos + 1;
+      }
+      return false;
+    };
+    const REVIEW_CATEGORIES = new Set(['typo', 'style', 'addition', 'section']);
+    // An inconsistency/content claim is only as good as its quotes: every quote
+    // supplied must appear verbatim in the report (whitespace runs collapsed —
+    // models normalize the template's double spaces, and spacing is not
+    // content), and addition/section edits must supply both. A fabricated
+    // justification is dropped here and never reaches the UI.
+    const canon = s => s.replace(/\s+/g, ' ').trim();
+    const canonReport = canon(report);
+    let droppedEvidence = 0;
+    const evidenceOk = e => {
+      const ev = e.evidence;
+      const quotes = ev && typeof ev === 'object'
+        ? [ev.impression_quote, ev.findings_quote].filter(q => typeof q === 'string' && q.trim())
+        : [];
+      const needsBoth = e.category === 'addition' || e.category === 'section';
+      const ok = quotes.every(q => canonReport.includes(canon(q))) && (!needsBoth || quotes.length === 2);
+      if (!ok) droppedEvidence++;
+      return ok;
+    };
+    const relocate = originalRelocator(report);
     const edits = rawEdits
       .filter(e => e && typeof e.original_text === 'string' && typeof e.suggested_text === 'string')
+      // A runaway suggestion is never a legitimate edit (edits are small and
+      // local by contract); original_text is bounded by the report itself
+      .filter(e => e.suggested_text.length <= 2000)
       .map(e => ({
-        original_text: e.original_text,
+        original_text: relocate(e.original_text),
         suggested_text: e.suggested_text,
-        reason: String(e.reason || ''),
-        category: e.category === 'typo' ? 'typo' : 'style'
+        reason: String(e.reason || '').slice(0, 300),
+        category: REVIEW_CATEGORIES.has(e.category) ? e.category : 'style',
+        ...(typeof e.target_section === 'string' && e.target_section.trim()
+          ? { target_section: e.target_section.trim().slice(0, 120) } : {}),
+        ...(e.evidence && typeof e.evidence === 'object'
+          ? { evidence: {
+              impression_quote: String(e.evidence.impression_quote || ''),
+              findings_quote: String(e.evidence.findings_quote || '')
+            } } : {})
       }))
-      // Drop edits whose original_text can't be located in the report
-      .filter(e => report.includes(e.original_text) && e.original_text !== e.suggested_text)
+      // Drop edits whose original_text can't be located in the report, and
+      // whitespace-only changes (spacing is presentation, not an error)
+      .filter(e => report.includes(e.original_text) && canon(e.original_text) !== canon(e.suggested_text))
       // Enforce the scope rule: an edit that only ever lands in the header
-      // block is dropped, whatever the model proposed
-      .filter(e => report.lastIndexOf(e.original_text) >= bodyStart);
+      // block is dropped, whatever the model proposed — except on COMPARISON
+      .filter(e => report.lastIndexOf(e.original_text) >= bodyStart || onComparisonLine(e.original_text))
+      .filter(evidenceOk);
+    // Count only — how often the model attempts unsupported claims (no PHI)
+    if (droppedEvidence) console.log(`review: dropped ${droppedEvidence} edit(s) failing evidence validation`);
 
     // body_start lets the client anchor each edit inside the body too, so a
     // phrase that also appears in the header can't be highlighted up there
@@ -2041,13 +2171,16 @@ app.post('/api/reports/:id/integrate-notes', async (req, res) => {
       return res.json({ edits: [] });
     }
     const rawEdits = Array.isArray(parsed) ? parsed : (parsed.edits || []);
+    const relocate = originalRelocator(draft);
     const edits = rawEdits
       .filter(e => e && typeof e.original_text === 'string' && typeof e.suggested_text === 'string')
       .map(e => ({
-        original_text: e.original_text,
+        original_text: relocate(e.original_text),
         suggested_text: e.suggested_text,
         reason: String(e.reason || ''),
-        category: 'readout'
+        category: 'readout',
+        ...(typeof e.target_section === 'string' && e.target_section.trim()
+          ? { target_section: e.target_section.trim() } : {})
       }))
       .filter(e => draft.includes(e.original_text) && e.original_text !== e.suggested_text);
 
@@ -2093,6 +2226,13 @@ app.put('/api/reports/:id', async (req, res) => {
           reason: String(e.reason || ''),
           category: String(e.category || 'style'),
           status,
+          ...(typeof e.target_section === 'string' && e.target_section.trim()
+            ? { target_section: e.target_section.trim() } : {}),
+          ...(e.evidence && typeof e.evidence === 'object'
+            ? { evidence: {
+                impression_quote: String(e.evidence.impression_quote || ''),
+                findings_quote: String(e.evidence.findings_quote || '')
+              } } : {}),
           ...(status === 'edited' ? { user_text: String(e.user_text || '') } : {})
         };
       });

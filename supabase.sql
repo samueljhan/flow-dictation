@@ -247,3 +247,45 @@ alter table review_events enable row level security;
 -- Assist feedback gains the same model/latency telemetry
 alter table assist_feedback add column if not exists model text;
 alter table assist_feedback add column if not exists latency_ms int;
+
+-- ============================================================
+-- Per-call cost ledger (added 2026-08 — run this section on its
+-- own if the tables above already exist). The server also ensures
+-- this schema at startup, so running it manually is a no-op there.
+-- ============================================================
+
+-- One row per model call — EVERY call, including passes with no user-facing
+-- output (detect, scrub). call_type is the usage logger's label: 'review',
+-- 'readout_integrate', 'detect', 'scrub', 'assist_proofread', 'assist_reword',
+-- 'assist_describe', 'assist_impression', 'assist_fullreport',
+-- 'assist_fullreport_impression', 'assist_radqa', 'assist_freetext',
+-- 'synthesize' — deliberately unconstrained so new labels need no migration.
+-- Rows carry tokens/cost/type only, never report text — exempt from the
+-- finalization scrub, retained indefinitely. This table is the source of
+-- truth for spend: /api/usage/summary and the admin dashboard both read it,
+-- so their totals survive restarts and always agree.
+-- input_tokens includes search-tool prompt tokens; output_tokens includes
+-- thinking tokens — the billed quantities, matching est_cost.
+-- report_id has no FK on purpose: ledger rows outlive their reports.
+create table if not exists api_calls (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  call_type text not null,
+  model text not null,
+  report_id text,
+  input_tokens int,
+  output_tokens int,
+  cached_tokens int,
+  latency_ms int,
+  est_cost numeric not null
+);
+create index if not exists api_calls_created_idx on api_calls (created_at);
+create index if not exists api_calls_call_type_idx on api_calls (call_type);
+create index if not exists api_calls_model_idx on api_calls (model);
+alter table api_calls enable row level security;
+
+-- Suggestion rows and assist feedback link back to the ledger row of the call
+-- that produced them (review_events.model/batch_id stay convenience copies;
+-- api_calls is authoritative for cost/tokens/latency).
+alter table review_events add column if not exists api_call_id uuid references api_calls(id);
+alter table assist_feedback add column if not exists api_call_id uuid references api_calls(id);

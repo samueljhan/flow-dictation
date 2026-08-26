@@ -1357,8 +1357,9 @@
         }
 
         // Render an assistant response. plainText is EXACTLY what Copy places on the clipboard.
-        // model/latencyMs ride along so a feedback submission carries the telemetry.
-        function addAssistantResponse({ html, plainText, actionType, userText, model, latencyMs }) {
+        // model/latencyMs/apiCallId ride along so a feedback submission carries
+        // the telemetry and links to the call's api_calls ledger row.
+        function addAssistantResponse({ html, plainText, actionType, userText, model, latencyMs, apiCallId }) {
             const div = document.createElement('div');
             div.className = 'message assistant';
             const content = document.createElement('div');
@@ -1410,7 +1411,8 @@
                         rating,
                         comment,
                         model: model || null,
-                        latency_ms: (typeof latencyMs === 'number') ? latencyMs : null
+                        latency_ms: (typeof latencyMs === 'number') ? latencyMs : null,
+                        api_call_id: apiCallId || null
                     }});
                     finishFeedback('Feedback recorded — thanks.');
                 } catch (e) {
@@ -1489,13 +1491,13 @@
                         '<span class="section-label">FINDINGS</span>' + escapeHtml(data.findings) +
                         '\n\n<span class="section-label">IMPRESSION</span>' + escapeHtml(data.impression);
                     addAssistantResponse({ html, plainText, actionType, userText: message,
-                        model: data.model, latencyMs: data.latency_ms });
+                        model: data.model, latencyMs: data.latency_ms, apiCallId: data.api_call_id });
                 } else if (actionType === 'proofread') {
                     plainText = data.text;
                     addAssistantResponse({
                         html: proofreadHtml(message, data.text),
                         plainText, actionType, userText: message,
-                        model: data.model, latencyMs: data.latency_ms
+                        model: data.model, latencyMs: data.latency_ms, apiCallId: data.api_call_id
                     });
                 } else if (!actionType || actionType === 'radqa') {
                     // Free text and Quick Rad Question share the one prompt, so they
@@ -1525,11 +1527,11 @@
                         html += '\n\n<span style="color:#e0a832; font-size:12px">(Answer was cut off at the length limit — ask a follow-up to continue.)</span>';
                     }
                     addAssistantResponse({ html, plainText, actionType, userText: message,
-                        model: data.model, latencyMs: data.latency_ms });
+                        model: data.model, latencyMs: data.latency_ms, apiCallId: data.api_call_id });
                 } else {
                     plainText = data.text;
                     addAssistantResponse({ html: escapeHtml(data.text), plainText, actionType, userText: message,
-                        model: data.model, latencyMs: data.latency_ms });
+                        model: data.model, latencyMs: data.latency_ms, apiCallId: data.api_call_id });
                 }
 
                 chatHistory.push({ role: 'user', content: message });

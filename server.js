@@ -239,32 +239,38 @@ function costFor(model, u, grounded) {
   ) / 1e6 + (grounded ? GROUNDING_COST_PER_CALL : 0);
 }
 
-// In-process tally, keyed by model AND label so per-task cost is visible.
-// Resets on restart/redeploy — this is a live read-out, not a ledger.
-const usageTally = new Map();   // "<model>|<label>" -> totals
-let usageSince = new Date().toISOString();
-
-// Returns the call's cost so the caller can log it.
-function recordUsage({ model, label, usage, injected, grounded }) {
+// Durable per-call ledger: one api_calls row per model call — EVERY call,
+// detect and scrub passes included. call_type is the usage label; the id is
+// generated here so callers know it without waiting on the insert result.
+// Rows carry tokens/cost/type only, never prompt or answer text, so they are
+// exempt from the scrub and retained indefinitely. /api/usage/summary and the
+// admin dashboard both read this table, so their totals agree by construction.
+// A failed insert costs the ledger row, never the model call.
+// input_tokens includes search-tool prompt tokens; output_tokens includes
+// thinking tokens — the billed quantities, matching est_cost.
+async function recordUsage({ model, label, usage, grounded, latency_ms, report_id }) {
   const u = usage || {};
   const cost = costFor(model, u, grounded);
-  const key = `${model || 'unknown'}|${label || 'unlabelled'}`;
-  const t = usageTally.get(key) || {
-    model: model || 'unknown', label: label || 'unlabelled',
-    calls: 0, grounded_calls: 0, input_tokens: 0, output_tokens: 0, thought_tokens: 0,
-    cache_read_tokens: 0, tool_prompt_tokens: 0, injected_tokens: 0, est_cost: 0
-  };
-  t.calls += 1;
-  if (grounded) t.grounded_calls += 1;
-  t.input_tokens += u.prompt_tokens || 0;
-  t.output_tokens += u.output_tokens || 0;
-  t.thought_tokens += u.thought_tokens || 0;
-  t.cache_read_tokens += u.cached_tokens || 0;
-  t.tool_prompt_tokens += u.tool_prompt_tokens || 0;
-  t.injected_tokens += injected || 0;
-  t.est_cost += cost;
-  usageTally.set(key, t);
-  return cost;
+  let apiCallId = null;
+  if (db.configured) {
+    apiCallId = crypto.randomUUID();
+    try {
+      await db.query(
+        `insert into api_calls
+           (id, call_type, model, report_id, input_tokens, output_tokens, cached_tokens, latency_ms, est_cost)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [apiCallId, label || 'unlabelled', model || 'unknown', report_id || null,
+         (u.prompt_tokens || 0) + (u.tool_prompt_tokens || 0),
+         (u.output_tokens || 0) + (u.thought_tokens || 0),
+         u.cached_tokens || 0,
+         Number.isFinite(latency_ms) ? Math.round(latency_ms) : null,
+         Number(cost.toFixed(8))]);
+    } catch (e) {
+      apiCallId = null;
+      console.error('[cost] ledger write failed:', e.message);
+    }
+  }
+  return { cost, api_call_id: apiCallId };
 }
 
 const usd = n => '$' + n.toFixed(4);
@@ -285,15 +291,24 @@ function toContents(messages) {
 // One text completion. `system` is a string; `messages` (or a single
 // `message`) become the contents. `schema` switches on JSON mode with that
 // response schema. A safety block throws an error with isRefusal=true.
-// `timing`, when passed, receives latency_ms (request sent -> full response) —
-// the one timing source telemetry reuses; the same number lands in the log.
-async function geminiText({ model, system, message, messages, maxTokens, effort, injected, label, schema, timing }) {
+// `reportId`, when known, is stamped on the ledger row. `timing`, when passed,
+// receives latency_ms (request sent -> full response) — the one timing source
+// telemetry reuses; the same number lands in the log and the ledger — plus
+// api_call_id (this call's api_calls row, null if the write failed) and the
+// served model, so telemetry rows can link and copy from the ledger.
+async function geminiText({ model, system, message, messages, maxTokens, effort, injected, label, schema, timing, reportId }) {
   const contents = toContents(messages || [{ role: 'user', content: message }]);
   const t0 = Date.now();
   const r = await gemini.generate({ model, system, contents, maxTokens, effort, responseSchema: schema });
   const ms = Date.now() - t0;
-  if (timing) timing.latency_ms = ms;
-  const cost = recordUsage({ model: r.served, label, usage: r.usage, injected });
+  const { cost, api_call_id } = await recordUsage({
+    model: r.served, label, usage: r.usage, latency_ms: ms, report_id: reportId
+  });
+  if (timing) {
+    timing.latency_ms = ms;
+    timing.api_call_id = api_call_id;
+    timing.model = r.served;
+  }
   logCall({ served: r.served, label, injected, u: r.usage, cost, finishReason: r.finishReason, ms });
   return r.text.trim();
 }
@@ -628,10 +643,11 @@ function randomReportId() {
 // Pattern pass + one model pass over all of a report's texts together, so the
 // same name found anywhere is replaced everywhere. Model failures degrade to
 // the pattern pass alone — the caller decides what that means for scrubbed_at.
-async function modelFindPhi(text) {
+async function modelFindPhi(text, reportId) {
   const out = await geminiText({
     model: MODEL_SCRUB,
     label: 'scrub',
+    reportId,
     system: scrub.SCRUB_SYSTEM,
     message: text,
     // A date-heavy multi-document input can produce a long replacement list;
@@ -646,7 +662,8 @@ async function modelFindPhi(text) {
 
 // texts: {key: string|null|undefined}. Returns {texts, replacements, counts,
 // modelOk, modelApplied} — counts by TYPE only; matched text is never logged.
-async function scrubTexts(texts) {
+// reportId, when the pass is for one report, is stamped on the ledger row.
+async function scrubTexts(texts, reportId) {
   const counts = {};
   const out = {};
   for (const [k, v] of Object.entries(texts)) {
@@ -661,7 +678,7 @@ async function scrubTexts(texts) {
   const joined = Object.values(out).filter(t => typeof t === 'string' && t.trim()).join('\n\n----- NEXT DOCUMENT -----\n\n');
   if (joined.trim()) {
     try {
-      replacements = await modelFindPhi(joined);
+      replacements = await modelFindPhi(joined, reportId);
       for (const k of Object.keys(out)) {
         if (typeof out[k] !== 'string' || !out[k]) continue;
         const r = scrub.applyReplacements(out[k], replacements);
@@ -1039,7 +1056,7 @@ async function upgradeImpression(reportText, studyType) {
   const { system, injected } = await buildKnowledgeSystem(ASSIST_SYSTEM, studyType, 'impression');
   const impression = (await geminiText({
     model: MODEL_IMPRESSION,
-    label: 'fullreport:impression',
+    label: 'assist_fullreport_impression',
     system,
     injected,
     message: `${ASSIST_ACTIONS.impression}\n\n${body}`,
@@ -1214,8 +1231,10 @@ async function runFreeform({ messages, systemFor, injected, label, useRefs }) {
   }
 
   const latencyMs = Date.now() - t0;
-  const freeformLabel = label || (searchEnabled ? 'radqa' : 'freeform');
-  const cost = recordUsage({ model: r.served, label: freeformLabel, usage: r.usage, injected, grounded: searchEnabled });
+  const freeformLabel = label || (searchEnabled ? 'assist_radqa' : 'assist_freetext');
+  const { cost, api_call_id } = await recordUsage({
+    model: r.served, label: freeformLabel, usage: r.usage, grounded: searchEnabled, latency_ms: latencyMs
+  });
   logCall({ served: r.served, label: freeformLabel, injected, u: r.usage, cost, grounded: searchEnabled, finishReason: r.finishReason, ms: latencyMs });
 
   // The model never sees the URLs of what it retrieved, so the References
@@ -1240,7 +1259,8 @@ async function runFreeform({ messages, systemFor, injected, label, useRefs }) {
     refs_dropped: refsDropped,
     truncated: r.finishReason === 'MAX_TOKENS',
     model: r.served,
-    latency_ms: latencyMs
+    latency_ms: latencyMs,
+    api_call_id
   };
 }
 
@@ -1257,7 +1277,7 @@ app.post('/api/assist', async (req, res) => {
       const { systemFor, injected } = await freeformSystemFactory(message);
       const useRefs = wantsReferences(req.body);
       const out = await runFreeform({
-        messages, systemFor, injected, useRefs, label: useRefs ? 'radqa' : 'freeform'
+        messages, systemFor, injected, useRefs, label: useRefs ? 'assist_radqa' : 'assist_freetext'
       });
       return res.json({ type: 'text', ...out });
     }
@@ -1267,15 +1287,20 @@ app.post('/api/assist', async (req, res) => {
     // Model wall time for the whole action (fullreport's impression pass
     // included) — this is the latency_ms the feedback row will carry
     const modelStart = Date.now();
+    // timing.api_call_id links a later feedback row to this call's ledger row
+    // (for fullreport, the main structure call — the impression pass has its own)
+    const timing = {};
     let text = await geminiText({
       model: actionModel,
-      label: action,
+      // Ledger call_type: 'assist_<action>', except synthesize which is its own
+      label: action === 'synthesize' ? 'synthesize' : 'assist_' + action,
       system,
       injected,
       messages,
       maxTokens: action === 'synthesize' ? 8000 : 4000,
       effort: ACTION_EFFORT[action],
-      schema: action === 'describe' ? DESCRIBE_SCHEMA : undefined
+      schema: action === 'describe' ? DESCRIBE_SCHEMA : undefined,
+      timing
     });
 
     // Second pass: rewrite the full report's IMPRESSION on MODEL_IMPRESSION
@@ -1296,15 +1321,16 @@ app.post('/api/assist', async (req, res) => {
           findings: String(parsed.findings || '').trim(),
           impression: String(parsed.impression || '').trim(),
           model: actionModel,
-          latency_ms
+          latency_ms,
+          api_call_id: timing.api_call_id || null
         });
       } catch (e) {
         // If JSON parsing fails, fall back to plain text so the user still gets an answer
-        return res.json({ type: 'text', text, model: actionModel, latency_ms });
+        return res.json({ type: 'text', text, model: actionModel, latency_ms, api_call_id: timing.api_call_id || null });
       }
     }
 
-    res.json({ type: 'text', text, model: actionModel, latency_ms });
+    res.json({ type: 'text', text, model: actionModel, latency_ms, api_call_id: timing.api_call_id || null });
   } catch (error) {
     console.error('Assist error:', error.message);
     res.status(500).json({ error: 'Assist request failed', details: error.message });
@@ -1314,16 +1340,21 @@ app.post('/api/assist', async (req, res) => {
 app.post('/api/assist/feedback', async (req, res) => {
   if (!requireDb(res)) return;
   try {
-    const { action_type, user_input, model_response, rating, comment, model, latency_ms } = req.body;
+    const { action_type, user_input, model_response, rating, comment, model, latency_ms, api_call_id } = req.body;
     if (rating !== 'up' && rating !== 'down') {
       return res.status(400).json({ error: 'rating must be "up" or "down"' });
     }
+    // Link to the ledger row the response came from; a bad/unknown id is
+    // dropped rather than failing the feedback (the FK would reject it)
+    const apiCallId = typeof api_call_id === 'string' && /^[0-9a-f-]{36}$/i.test(api_call_id)
+      ? api_call_id : null;
     await db.query(
-      `insert into assist_feedback (action_type, user_input, model_response, rating, comment, model, latency_ms)
-       values ($1, $2, $3, $4, $5, $6, $7)`,
+      `insert into assist_feedback (action_type, user_input, model_response, rating, comment, model, latency_ms, api_call_id)
+       values ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [action_type || 'freeform', user_input || '', model_response || '', rating, comment || null,
        typeof model === 'string' && model ? model.slice(0, 120) : null,
-       Number.isFinite(latency_ms) ? Math.round(latency_ms) : null]);
+       Number.isFinite(latency_ms) ? Math.round(latency_ms) : null,
+       apiCallId]);
     res.json({ success: true });
   } catch (error) {
     console.error('Feedback error:', error.message);
@@ -1380,18 +1411,18 @@ app.post('/api/assist/messages', async (req, res) => {
 // per-suggestion feedback; validation-dropped suggestions are recorded as
 // 'dropped_validation' — the fabrication-rate metric. edits_json stays the
 // app's working copy; this table is the analytics layer.
-async function recordReviewEvents(reportId, { source, model, latency_ms }, survivors, dropped) {
+async function recordReviewEvents(reportId, { source, model, latency_ms, api_call_id }, survivors, dropped) {
   if (!db.configured) return;
   const batchId = crypto.randomUUID();
   const ms = Number.isFinite(latency_ms) ? Math.round(latency_ms) : null;
   const insert = (e, disposition) => db.one(
     `insert into review_events
-       (report_id, source, model, batch_id, latency_ms, category, target_section,
+       (report_id, source, model, batch_id, api_call_id, latency_ms, category, target_section,
         original_text, suggested_text, reason, evidence_impression, evidence_findings,
         disposition, decided_at)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
      returning id`,
-    [reportId, source, model, batchId, ms,
+    [reportId, source, model, batchId, api_call_id || null, ms,
      e.category || null, e.target_section || null,
      e.original_text || null, e.suggested_text || null, e.reason || null,
      e.evidence ? (e.evidence.impression_quote || null) : null,
@@ -1440,10 +1471,14 @@ app.post('/api/draft/review', async (req, res) => {
     }
     const { system, injected } = await buildKnowledgeSystem(DRAFT_REVIEW_SYSTEM, studyType, 'review');
 
+    const reportId = typeof req.body.report_id === 'string' ? req.body.report_id.trim() : '';
+
     // Gemini occasionally falls into a decode loop that truncates the JSON.
     // Salvage what parses; if nothing does, retry once before giving up.
     let rawEdits = null;
-    const timing = {};   // latency of the attempt that produced the edits
+    // timing carries the latency, served model, and api_calls id of the
+    // attempt that produced the edits (each attempt is its own ledger row)
+    const timing = {};
     for (let attempt = 1; attempt <= 2 && !rawEdits; attempt++) {
       const text = await geminiText({
         model: MODEL_REVIEW,
@@ -1454,7 +1489,8 @@ app.post('/api/draft/review', async (req, res) => {
         maxTokens: 8000,
         effort: DRAFT_REVIEW_EFFORT,
         schema: REVIEW_EDITS_SCHEMA,
-        timing
+        timing,
+        reportId: reportId || undefined
       });
       try {
         const parsed = parseModelJson(text);
@@ -1541,12 +1577,13 @@ app.post('/api/draft/review', async (req, res) => {
     // Count only — how often the model attempts unsupported claims (no PHI)
     if (droppedEvidence) console.log(`review: dropped ${droppedEvidence} edit(s) failing evidence validation`);
 
-    // Telemetry — survivors gain event_id; never blocks the review itself
-    const reportId = typeof req.body.report_id === 'string' ? req.body.report_id.trim() : '';
+    // Telemetry — survivors gain event_id; never blocks the review itself.
+    // model/api_call_id are copies from the ledger row of the producing call.
     if (reportId) {
       try {
         await recordReviewEvents(reportId,
-          { source: 'review', model: MODEL_REVIEW, latency_ms: timing.latency_ms },
+          { source: 'review', model: timing.model || MODEL_REVIEW,
+            latency_ms: timing.latency_ms, api_call_id: timing.api_call_id },
           edits, droppedEdits);
       } catch (e) {
         console.error('review telemetry failed:', e.message);
@@ -2034,7 +2071,7 @@ app.put('/api/reports/:id/final', async (req, res) => {
           readout_notes: existing.readout_notes,
           ...Object.fromEntries(revisions.map(r => ['rev_' + r.id, r.draft_text]))
         };
-    const s = await scrubTexts(input);
+    const s = await scrubTexts(input, req.params.id);
     const now = new Date().toISOString();
 
     const report = await db.tx(async client => {
@@ -2185,7 +2222,7 @@ app.get('/api/training/impression-pairs', async (req, res) => {
     for (const row of rows) {
       let { full_text, findings, impression } = row;
       if (!row.scrubbed_at) {
-        const s = await scrubTexts({ full_text, findings, impression });
+        const s = await scrubTexts({ full_text, findings, impression }, row.report_id);
         ({ full_text, findings, impression } = s.texts);
         console.log(`[scrub] export-time scrub report=${row.report_id} pattern=${JSON.stringify(s.counts)} model_applied=${s.modelApplied} model_ok=${s.modelOk}`);
       }
@@ -2313,13 +2350,14 @@ app.post('/api/reports/:id/integrate-notes', async (req, res) => {
     const timing = {};
     const text = await geminiText({
       model: MODEL_REVIEW,
-      label: 'readout',
+      label: 'readout_integrate',
       system,
       injected,
       message: `Attending read-out feedback:\n${notes}\n\nResident's current draft:\n${draft}`,
       maxTokens: 8000,
       schema: READOUT_EDITS_SCHEMA,
-      timing
+      timing,
+      reportId: report.id
     });
 
     let parsed;
@@ -2352,7 +2390,8 @@ app.post('/api/reports/:id/integrate-notes', async (req, res) => {
     // Telemetry — same shape as the review pass, source 'readout'
     try {
       await recordReviewEvents(report.id,
-        { source: 'readout', model: MODEL_REVIEW, latency_ms: timing.latency_ms },
+        { source: 'readout', model: timing.model || MODEL_REVIEW,
+          latency_ms: timing.latency_ms, api_call_id: timing.api_call_id },
         edits, droppedEdits);
     } catch (e) {
       console.error('readout telemetry failed:', e.message);
@@ -2692,25 +2731,34 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Per-task cost read-out. Rows are grouped by model AND label, so the same task
-// running on two models (an A/B) shows up as two rows to compare.
-// In-process only: it starts empty on every restart and redeploy.
 // ============ Review-quality dashboard (admin) ============
-// Queryable aggregates over review_events + assist_feedback, JSON only.
+
+// Shared ?from/?to window parsing (default: the last 30 days). The dashboard
+// and /api/usage/summary both use this and both read api_calls, so the same
+// window always yields the same cost totals from either endpoint.
+function parseWindow(req) {
+  const parseDay = (v, endOfDay) =>
+    v ? new Date(v.includes('T') ? v : v + (endOfDay ? 'T23:59:59.999Z' : 'T00:00:00Z')) : null;
+  // Default upper bound runs a few minutes ahead of "now" — the DB clock can
+  // lead the app clock, and a just-written row must not fall out of range
+  const to = parseDay(String(req.query.to || ''), true) || new Date(Date.now() + 5 * 60 * 1000);
+  const from = parseDay(String(req.query.from || ''), false) || new Date(to.getTime() - 30 * 24 * 3600 * 1000);
+  if (isNaN(from) || isNaN(to)) return null;
+  return [from.toISOString(), to.toISOString()];
+}
+
+const round6 = n => (n === null || n === undefined ? null : Number(Number(n).toFixed(6)));
+
+// Queryable aggregates over review_events + assist_feedback (quality) and
+// api_calls (cost/latency — kept separate, no blended ratios), JSON only.
 // ?from=YYYY-MM-DD&to=YYYY-MM-DD (default: the last 30 days); ?report_id=R-XXXXXX
 // adds a per-report drill-down. Bulk text leaves through the export safety net:
 // rows not yet scrubbed in storage are scrubbed in the output.
 app.get('/api/admin/review-quality', async (req, res) => {
   if (!requireDb(res)) return;
   try {
-    const parseDay = (v, endOfDay) =>
-      v ? new Date(v.includes('T') ? v : v + (endOfDay ? 'T23:59:59.999Z' : 'T00:00:00Z')) : null;
-    // Default upper bound runs a few minutes ahead of "now" — the DB clock can
-    // lead the app clock, and a just-written row must not fall out of range
-    const to = parseDay(String(req.query.to || ''), true) || new Date(Date.now() + 5 * 60 * 1000);
-    const from = parseDay(String(req.query.from || ''), false) || new Date(to.getTime() - 30 * 24 * 3600 * 1000);
-    if (isNaN(from) || isNaN(to)) return res.status(400).json({ error: 'Bad from/to date' });
-    const range = [from.toISOString(), to.toISOString()];
+    const range = parseWindow(req);
+    if (!range) return res.status(400).json({ error: 'Bad from/to date' });
 
     // Dispositions and thumbs, rolled up per category and per model
     const agg = field => db.many(
@@ -2766,7 +2814,7 @@ app.get('/api/admin/review-quality', async (req, res) => {
     let drilldown = null;
     if (req.query.report_id) {
       drilldown = await db.many(
-        `select id, source, model, batch_id, latency_ms, category, target_section,
+        `select id, source, model, batch_id, api_call_id, latency_ms, category, target_section,
                 original_text, suggested_text, reason, evidence_impression, evidence_findings,
                 disposition, adopted_text, helpful, feedback_note, created_at, decided_at, scrubbed_at
            from review_events where report_id = $1 order by id`, [String(req.query.report_id)]);
@@ -2792,6 +2840,32 @@ app.get('/api/admin/review-quality', async (req, res) => {
       console.log(`[scrub] dashboard export-time scrub texts=${Object.keys(pendingTexts).length} model_ok=${sOut.modelOk}`);
     }
 
+    // COST and LATENCY, from the api_calls ledger — every model call in the
+    // window, including the invisible spend (detect, scrub) the suggestion
+    // tables can't see. Quality stays above; no blended quality-cost ratios.
+    const perCall = await db.many(
+      `select call_type, model, count(*)::int as calls,
+              sum(est_cost)::float8 as total_cost,
+              avg(est_cost)::float8 as avg_cost,
+              percentile_cont(0.95) within group (order by est_cost::float8) as p95_cost,
+              round(percentile_cont(0.5) within group (order by latency_ms))::int as p50_ms,
+              round(percentile_cont(0.95) within group (order by latency_ms))::int as p95_ms
+         from api_calls
+        where created_at between $1 and $2
+        group by call_type, model
+        order by total_cost desc`, range);
+    // The headline: total spend per call_type for the window
+    const spendByType = await db.many(
+      `select call_type, count(*)::int as calls,
+              sum(est_cost)::float8 as total_cost,
+              avg(est_cost)::float8 as avg_cost,
+              percentile_cont(0.95) within group (order by est_cost::float8) as p95_cost
+         from api_calls
+        where created_at between $1 and $2
+        group by call_type
+        order by total_cost desc`, range);
+    const totalSpend = spendByType.reduce((acc, r) => acc + r.total_cost, 0);
+
     // Assist: thumbs and latency by action (latency lives on feedback rows)
     const assist = await db.many(
       `select action_type, count(*)::int as feedback_rows,
@@ -2814,7 +2888,24 @@ app.get('/api/admin/review-quality', async (req, res) => {
         feedback_notes: noteRows
       },
       ...(drilldown ? { report_drilldown: { report_id: String(req.query.report_id), suggestions: drilldown } } : {}),
-      assist: { by_action_type: assist }
+      assist: { by_action_type: assist },
+      cost: {
+        total_est_cost: round6(totalSpend),
+        by_call_type: spendByType.map(r => ({
+          call_type: r.call_type, calls: r.calls,
+          total_cost: round6(r.total_cost), avg_cost: round6(r.avg_cost), p95_cost: round6(r.p95_cost)
+        })),
+        by_call_type_and_model: perCall.map(r => ({
+          call_type: r.call_type, model: r.model, calls: r.calls,
+          total_cost: round6(r.total_cost), avg_cost: round6(r.avg_cost), p95_cost: round6(r.p95_cost)
+        }))
+      },
+      latency: {
+        by_call_type_and_model: perCall.map(r => ({
+          call_type: r.call_type, model: r.model, calls: r.calls,
+          p50_ms: r.p50_ms, p95_ms: r.p95_ms
+        }))
+      }
     });
   } catch (error) {
     console.error('Review quality dashboard error:', error.message);
@@ -2822,43 +2913,59 @@ app.get('/api/admin/review-quality', async (req, res) => {
   }
 });
 
-app.get('/api/usage/summary', (req, res) => {
-  const rows = [...usageTally.values()].sort((a, b) => b.est_cost - a.est_cost);
-  const sum = field => rows.reduce((acc, r) => acc + r[field], 0);
-  const round = r => ({ ...r, est_cost: Number(r.est_cost.toFixed(6)) });
-
-  // Same rows rolled up each way, for "which model costs most" vs "which task"
-  const rollUp = (keyField) => {
-    const m = new Map();
-    for (const r of rows) {
-      const t = m.get(r[keyField]) || { [keyField]: r[keyField], calls: 0, est_cost: 0 };
-      t.calls += r.calls;
-      t.est_cost += r.est_cost;
-      m.set(r[keyField], t);
-    }
-    return [...m.values()]
-      .sort((a, b) => b.est_cost - a.est_cost)
-      .map(t => ({ ...t, est_cost: Number(t.est_cost.toFixed(6)) }));
-  };
-
-  res.json({
-    since: usageSince,
-    pricing_note: `Vertex AI per-MTok list price; implicit cache reads x${CACHE_READ_MULTIPLIER}; thinking billed as output; Google Search grounding +$${GROUNDING_COST_PER_CALL}/call`,
-    totals: {
-      calls: sum('calls'),
-      grounded_calls: sum('grounded_calls'),
-      input_tokens: sum('input_tokens'),
-      output_tokens: sum('output_tokens'),
-      thought_tokens: sum('thought_tokens'),
-      cache_read_tokens: sum('cache_read_tokens'),
-      tool_prompt_tokens: sum('tool_prompt_tokens'),
-      injected_tokens: sum('injected_tokens'),
-      est_cost: Number(sum('est_cost').toFixed(6))
-    },
-    by_model_and_label: rows.map(round),
-    by_model: rollUp('model'),
-    by_label: rollUp('label')
-  });
+// Per-task cost read-out from the api_calls ledger — durable, so totals
+// survive restarts and redeploys. ?from/?to take the same window as the admin
+// dashboard (default: the last 30 days); both endpoints read api_calls, so
+// their totals agree for the same window. Grouped by call_type AND model, so
+// the same task running on two models (an A/B) shows as two rows to compare.
+// input_tokens includes search-tool prompt tokens; output includes thinking.
+app.get('/api/usage/summary', async (req, res) => {
+  if (!requireDb(res)) return;
+  try {
+    const range = parseWindow(req);
+    if (!range) return res.status(400).json({ error: 'Bad from/to date' });
+    const roundCost = r => ({ ...r, est_cost: round6(r.est_cost) });
+    const group = cols => db.many(
+      `select ${cols}, count(*)::int as calls,
+              coalesce(sum(input_tokens), 0)::bigint as input_tokens,
+              coalesce(sum(output_tokens), 0)::bigint as output_tokens,
+              coalesce(sum(cached_tokens), 0)::bigint as cached_tokens,
+              sum(est_cost)::float8 as est_cost
+         from api_calls
+        where created_at between $1 and $2
+        group by ${cols}
+        order by est_cost desc`, range);
+    const [totals, byBoth, byModel, byType] = await Promise.all([
+      db.one(
+        `select count(*)::int as calls,
+                coalesce(sum(input_tokens), 0)::bigint as input_tokens,
+                coalesce(sum(output_tokens), 0)::bigint as output_tokens,
+                coalesce(sum(cached_tokens), 0)::bigint as cached_tokens,
+                coalesce(sum(est_cost), 0)::float8 as est_cost,
+                min(created_at) as since
+           from api_calls where created_at between $1 and $2`, range),
+      group('call_type, model'), group('model'), group('call_type')
+    ]);
+    res.json({
+      from: range[0],
+      to: range[1],
+      since: totals.since,   // oldest ledger row in the window
+      pricing_note: `Vertex AI per-MTok list price; implicit cache reads x${CACHE_READ_MULTIPLIER}; thinking billed as output; Google Search grounding +$${GROUNDING_COST_PER_CALL}/call`,
+      totals: roundCost({
+        calls: totals.calls,
+        input_tokens: totals.input_tokens,
+        output_tokens: totals.output_tokens,
+        cached_tokens: totals.cached_tokens,
+        est_cost: totals.est_cost
+      }),
+      by_call_type_and_model: byBoth.map(roundCost),
+      by_model: byModel.map(roundCost),
+      by_call_type: byType.map(roundCost)
+    });
+  } catch (error) {
+    console.error('Usage summary error:', error.message);
+    res.status(500).json({ error: 'Failed to load usage summary', details: error.message });
+  }
 });
 
 // Idempotent startup schema for the telemetry layer — mirrors the SQL at the
@@ -2868,6 +2975,25 @@ app.get('/api/usage/summary', (req, res) => {
 async function ensureTelemetrySchema() {
   if (!db.configured) return;
   try {
+    // Per-call cost ledger. No FK on report_id (rows outlive reports) and no
+    // text columns (tokens/cost/type only) — exempt from the scrub, retained
+    // indefinitely.
+    await db.query(`
+      create table if not exists api_calls (
+        id uuid primary key default gen_random_uuid(),
+        created_at timestamptz not null default now(),
+        call_type text not null,
+        model text not null,
+        report_id text,
+        input_tokens int,
+        output_tokens int,
+        cached_tokens int,
+        latency_ms int,
+        est_cost numeric not null
+      )`);
+    await db.query(`create index if not exists api_calls_created_idx on api_calls (created_at)`);
+    await db.query(`create index if not exists api_calls_call_type_idx on api_calls (call_type)`);
+    await db.query(`create index if not exists api_calls_model_idx on api_calls (model)`);
     await db.query(`
       create table if not exists review_events (
         id bigint generated always as identity primary key,
@@ -2896,9 +3022,11 @@ async function ensureTelemetrySchema() {
     await db.query(`create index if not exists review_events_disposition_idx on review_events (disposition)`);
     await db.query(`create index if not exists review_events_category_idx on review_events (category)`);
     await db.query(`create index if not exists review_events_created_idx on review_events (created_at)`);
+    await db.query(`alter table review_events add column if not exists api_call_id uuid references api_calls(id)`);
     await db.query(`alter table assist_feedback add column if not exists model text`);
     await db.query(`alter table assist_feedback add column if not exists latency_ms int`);
-    console.log('✅ Telemetry schema ensured (review_events + assist_feedback columns)');
+    await db.query(`alter table assist_feedback add column if not exists api_call_id uuid references api_calls(id)`);
+    console.log('✅ Telemetry schema ensured (api_calls + review_events + assist_feedback columns)');
   } catch (e) {
     console.error('Telemetry schema ensure failed:', e.message);
   }

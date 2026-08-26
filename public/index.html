@@ -476,6 +476,20 @@
             transition: all 0.2s;
         }
         .edit-actions button:hover { color: #e0e0e0; border-color: #606060; }
+        /* Per-suggestion feedback: compact icons in the card footer; the
+           comment box appears once a thumb is chosen. Never gates accept/reject. */
+        .edit-fb { display: flex; align-items: center; gap: 6px; }
+        .edit-fb .fb-label { font-size: 11px; color: #707070; }
+        .edit-fb .efb-up, .edit-fb .efb-down {
+            background: transparent; border: 1px solid transparent; border-radius: 6px;
+            padding: 1px 5px; font-size: 13px; cursor: pointer; opacity: 0.55;
+        }
+        .edit-fb .efb-up:hover, .edit-fb .efb-down:hover { opacity: 1; }
+        .edit-fb .efb-up.on, .edit-fb .efb-down.on { opacity: 1; border-color: #606060; background: #383838; }
+        .edit-fb-note {
+            flex: 1; min-width: 0; background: #1f1f1f; border: 1px solid #404040;
+            border-radius: 6px; color: #d0d0d0; font-size: 12px; padding: 3px 8px;
+        }
         .edit-actions .accept-btn.on { background: rgba(40, 167, 69, 0.15); border-color: #28a745; color: #28a745; }
         .edit-actions .reject-btn.on { background: rgba(220, 53, 69, 0.12); border-color: #dc3545; color: #dc7a7a; }
         .edit-actions .edit-btn.on { background: rgba(111, 159, 216, 0.15); border-color: #6f9fd8; color: #9ab8e0; }
@@ -1343,7 +1357,8 @@
         }
 
         // Render an assistant response. plainText is EXACTLY what Copy places on the clipboard.
-        function addAssistantResponse({ html, plainText, actionType, userText }) {
+        // model/latencyMs ride along so a feedback submission carries the telemetry.
+        function addAssistantResponse({ html, plainText, actionType, userText, model, latencyMs }) {
             const div = document.createElement('div');
             div.className = 'message assistant';
             const content = document.createElement('div');
@@ -1393,7 +1408,9 @@
                         user_input: userText,
                         model_response: plainText,
                         rating,
-                        comment
+                        comment,
+                        model: model || null,
+                        latency_ms: (typeof latencyMs === 'number') ? latencyMs : null
                     }});
                     finishFeedback('Feedback recorded — thanks.');
                 } catch (e) {
@@ -1471,12 +1488,14 @@
                     const html =
                         '<span class="section-label">FINDINGS</span>' + escapeHtml(data.findings) +
                         '\n\n<span class="section-label">IMPRESSION</span>' + escapeHtml(data.impression);
-                    addAssistantResponse({ html, plainText, actionType, userText: message });
+                    addAssistantResponse({ html, plainText, actionType, userText: message,
+                        model: data.model, latencyMs: data.latency_ms });
                 } else if (actionType === 'proofread') {
                     plainText = data.text;
                     addAssistantResponse({
                         html: proofreadHtml(message, data.text),
-                        plainText, actionType, userText: message
+                        plainText, actionType, userText: message,
+                        model: data.model, latencyMs: data.latency_ms
                     });
                 } else if (!actionType || actionType === 'radqa') {
                     // Free text and Quick Rad Question share the one prompt, so they
@@ -1505,10 +1524,12 @@
                     if (data.truncated) {
                         html += '\n\n<span style="color:#e0a832; font-size:12px">(Answer was cut off at the length limit — ask a follow-up to continue.)</span>';
                     }
-                    addAssistantResponse({ html, plainText, actionType, userText: message });
+                    addAssistantResponse({ html, plainText, actionType, userText: message,
+                        model: data.model, latencyMs: data.latency_ms });
                 } else {
                     plainText = data.text;
-                    addAssistantResponse({ html: escapeHtml(data.text), plainText, actionType, userText: message });
+                    addAssistantResponse({ html: escapeHtml(data.text), plainText, actionType, userText: message,
+                        model: data.model, latencyMs: data.latency_ms });
                 }
 
                 chatHistory.push({ role: 'user', content: message });
@@ -2381,7 +2402,7 @@
             updateReviewUi();
             try {
                 const data = await api('/api/draft/review', { method: 'POST', body: {
-                    report: baseText, study_type: studyType
+                    report: baseText, study_type: studyType, report_id: reportId
                 } });
                 // Review is scoped to the body, so anchor there: a phrase that
                 // also appears in the header must not highlight the header copy
@@ -2509,6 +2530,22 @@
             return located.sort((a, b) => a.pos - b.pos);
         }
 
+        // Save one suggestion's 👍/👎 + note. Fire-and-forget: feedback is
+        // optional and must never block the accept/reject flow. The server
+        // closes feedback once the report's finalization scrub has run.
+        async function saveSuggestionFeedback(e) {
+            if (!e.event_id) return;
+            e.feedback_dirty = false;
+            try {
+                await api('/api/review-events/' + e.event_id + '/feedback', { method: 'PUT', body: {
+                    helpful: (e.helpful === true || e.helpful === false) ? e.helpful : null,
+                    feedback_note: e.feedback_note || ''
+                }});
+            } catch (err) {
+                console.error('Suggestion feedback save failed:', err);
+            }
+        }
+
         function enterReviewMode() {
             draftText.style.display = 'none';
             draftPreview.style.display = '';
@@ -2603,7 +2640,19 @@
                     '<button class="accept-btn' + (e.status === 'accepted' ? ' on' : '') + '">✓ Accept</button>' +
                     '<button class="edit-btn' + (e.status === 'edited' ? ' on' : '') + '">✎ Edit</button>' +
                     '<button class="reject-btn' + (e.status === 'rejected' ? ' on' : '') + '">✗ Reject</button>' +
-                    '</div>';
+                    '</div>' +
+                    // Per-suggestion feedback: optional, never gates the flow.
+                    // The comment box appears once a thumb is chosen.
+                    (e.event_id
+                        ? '<div class="edit-fb"><span class="fb-label">Helpful?</span>' +
+                          '<button class="efb-up' + (e.helpful === true ? ' on' : '') + '" title="Helpful">👍</button>' +
+                          '<button class="efb-down' + (e.helpful === false ? ' on' : '') + '" title="Not helpful">👎</button>' +
+                          (e.helpful === true || e.helpful === false
+                              ? '<input class="edit-fb-note" placeholder="Optional comment…" value="' +
+                                escapeHtml(e.feedback_note || '') + '">'
+                              : '') +
+                          '</div>'
+                        : '');
                 card.querySelector('.accept-btn').addEventListener('click', () => {
                     e.status = e.status === 'accepted' ? 'pending' : 'accepted';
                     renderReview();
@@ -2624,6 +2673,27 @@
                     }
                     renderReview();
                 });
+                if (e.event_id) {
+                    card.querySelector('.efb-up').addEventListener('click', () => {
+                        e.helpful = e.helpful === true ? null : true;
+                        saveSuggestionFeedback(e);
+                        renderReview();
+                    });
+                    card.querySelector('.efb-down').addEventListener('click', () => {
+                        e.helpful = e.helpful === false ? null : false;
+                        saveSuggestionFeedback(e);
+                        renderReview();
+                    });
+                    const noteEl = card.querySelector('.edit-fb-note');
+                    if (noteEl) {
+                        noteEl.addEventListener('input', () => {
+                            e.feedback_note = noteEl.value;
+                            e.feedback_dirty = true;
+                        });
+                        noteEl.addEventListener('change', () => saveSuggestionFeedback(e));
+                        noteEl.addEventListener('keydown', ev => { if (ev.key === 'Enter') noteEl.blur(); });
+                    }
+                }
                 editsList.appendChild(card);
             });
 
@@ -2680,6 +2750,21 @@
                 statusEl.textContent = 'Saving…';
                 statusEl.className = 'status';
 
+                // Any comment typed but not yet blurred still reaches the server
+                currentEdits.filter(e => e.event_id && e.feedback_dirty).forEach(saveSuggestionFeedback);
+
+                // Telemetry dispositions: what happened to each suggestion.
+                // 'undecided' = card left pending — distinct from an explicit reject.
+                const reviewDecisions = currentEdits
+                    .filter(e => e.event_id)
+                    .map(e => ({
+                        event_id: e.event_id,
+                        disposition: e.status === 'accepted' ? 'accepted'
+                                   : e.status === 'edited' ? 'edited'
+                                   : e.status === 'rejected' ? 'rejected' : 'undecided',
+                        ...(e.status === 'edited' ? { adopted_text: e.user_text || '' } : {})
+                    }));
+
                 // 'edited' also records the wording actually used
                 const editsRecord = currentEdits.map(e => ({
                     original_text: e.original_text,
@@ -2699,6 +2784,7 @@
                     const body = {
                         draft_text: applyAcceptedEdits(),
                         append_edits: editsRecord,
+                        ...(reviewDecisions.length ? { review_decisions: reviewDecisions } : {}),
                         notes_integrated: integrating,
                         // Save Final marks it done; Save Draft reopens a finalized
                         // report (server clears finalized_at, green dot goes away)

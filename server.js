@@ -270,8 +270,8 @@ function recordUsage({ model, label, usage, injected, grounded }) {
 const usd = n => '$' + n.toFixed(4);
 
 // Only IDs and counts ever reach the logs — never prompt or answer text.
-function logCall({ served, label, injected, u, cost, grounded, finishReason }) {
-  console.log(`[gemini] ${served} label=${label || '-'}${grounded ? ' grounded' : ''} injected=${injected || 0} in=${u.prompt_tokens} cached=${u.cached_tokens} tool=${u.tool_prompt_tokens} out=${u.output_tokens} thoughts=${u.thought_tokens} est_cost=${usd(cost)} finish=${finishReason}`);
+function logCall({ served, label, injected, u, cost, grounded, finishReason, ms }) {
+  console.log(`[gemini] ${served} label=${label || '-'}${grounded ? ' grounded' : ''} injected=${injected || 0} in=${u.prompt_tokens} cached=${u.cached_tokens} tool=${u.tool_prompt_tokens} out=${u.output_tokens} thoughts=${u.thought_tokens} est_cost=${usd(cost)}${ms ? ` ms=${ms}` : ''} finish=${finishReason}`);
 }
 
 // Conversation history for Gemini: the assistant's turns are role "model".
@@ -285,11 +285,16 @@ function toContents(messages) {
 // One text completion. `system` is a string; `messages` (or a single
 // `message`) become the contents. `schema` switches on JSON mode with that
 // response schema. A safety block throws an error with isRefusal=true.
-async function geminiText({ model, system, message, messages, maxTokens, effort, injected, label, schema }) {
+// `timing`, when passed, receives latency_ms (request sent -> full response) —
+// the one timing source telemetry reuses; the same number lands in the log.
+async function geminiText({ model, system, message, messages, maxTokens, effort, injected, label, schema, timing }) {
   const contents = toContents(messages || [{ role: 'user', content: message }]);
+  const t0 = Date.now();
   const r = await gemini.generate({ model, system, contents, maxTokens, effort, responseSchema: schema });
+  const ms = Date.now() - t0;
+  if (timing) timing.latency_ms = ms;
   const cost = recordUsage({ model: r.served, label, usage: r.usage, injected });
-  logCall({ served: r.served, label, injected, u: r.usage, cost, finishReason: r.finishReason });
+  logCall({ served: r.served, label, injected, u: r.usage, cost, finishReason: r.finishReason, ms });
   return r.text.trim();
 }
 
@@ -669,6 +674,20 @@ async function scrubTexts(texts) {
     }
   }
   return { texts: out, replacements, counts, modelOk, modelApplied };
+}
+
+// review_events rows quote report text — and feedback_note is free text that
+// may reference it — so they are scrubbed with the same passes at finalization
+const REVIEW_EVENT_TEXT_FIELDS = ['original_text', 'suggested_text', 'reason',
+  'evidence_impression', 'evidence_findings', 'adopted_text', 'feedback_note'];
+function scrubEventRow(row, replacements) {
+  const clean = {};
+  for (const f of REVIEW_EVENT_TEXT_FIELDS) {
+    clean[f] = typeof row[f] === 'string' && row[f]
+      ? scrub.applyReplacements(scrub.patternScrub(row[f]).text, replacements).text
+      : row[f];
+  }
+  return clean;
 }
 
 // The audit trail quotes report text, so it is scrubbed with the same passes
@@ -1166,6 +1185,7 @@ async function runFreeform({ messages, systemFor, injected, label, useRefs }) {
   const contents = toContents(messages);
 
   let r;
+  const t0 = Date.now();   // model wall time, refusal-retry included
   for (;;) {
     try {
       r = await gemini.generate({
@@ -1193,9 +1213,10 @@ async function runFreeform({ messages, systemFor, injected, label, useRefs }) {
     }
   }
 
+  const latencyMs = Date.now() - t0;
   const freeformLabel = label || (searchEnabled ? 'radqa' : 'freeform');
   const cost = recordUsage({ model: r.served, label: freeformLabel, usage: r.usage, injected, grounded: searchEnabled });
-  logCall({ served: r.served, label: freeformLabel, injected, u: r.usage, cost, grounded: searchEnabled, finishReason: r.finishReason });
+  logCall({ served: r.served, label: freeformLabel, injected, u: r.usage, cost, grounded: searchEnabled, finishReason: r.finishReason, ms: latencyMs });
 
   // The model never sees the URLs of what it retrieved, so the References
   // line is the server's to write: preferred radiology sources first, then by
@@ -1217,7 +1238,9 @@ async function runFreeform({ messages, systemFor, injected, label, useRefs }) {
     text,
     citations,
     refs_dropped: refsDropped,
-    truncated: r.finishReason === 'MAX_TOKENS'
+    truncated: r.finishReason === 'MAX_TOKENS',
+    model: r.served,
+    latency_ms: latencyMs
   };
 }
 
@@ -1240,8 +1263,12 @@ app.post('/api/assist', async (req, res) => {
     }
 
     const { system, injected, studyType } = await actionSystemFor(action, message, template);
+    const actionModel = ACTION_MODEL[action] || MODEL_REPORT;
+    // Model wall time for the whole action (fullreport's impression pass
+    // included) — this is the latency_ms the feedback row will carry
+    const modelStart = Date.now();
     let text = await geminiText({
-      model: ACTION_MODEL[action] || MODEL_REPORT,
+      model: actionModel,
       label: action,
       system,
       injected,
@@ -1259,6 +1286,7 @@ app.post('/api/assist', async (req, res) => {
         console.error('Impression pass failed — keeping original impression:', e.message);
       }
     }
+    const latency_ms = Date.now() - modelStart;
 
     if (action === 'describe') {
       try {
@@ -1266,15 +1294,17 @@ app.post('/api/assist', async (req, res) => {
         return res.json({
           type: 'describe',
           findings: String(parsed.findings || '').trim(),
-          impression: String(parsed.impression || '').trim()
+          impression: String(parsed.impression || '').trim(),
+          model: actionModel,
+          latency_ms
         });
       } catch (e) {
         // If JSON parsing fails, fall back to plain text so the user still gets an answer
-        return res.json({ type: 'text', text });
+        return res.json({ type: 'text', text, model: actionModel, latency_ms });
       }
     }
 
-    res.json({ type: 'text', text });
+    res.json({ type: 'text', text, model: actionModel, latency_ms });
   } catch (error) {
     console.error('Assist error:', error.message);
     res.status(500).json({ error: 'Assist request failed', details: error.message });
@@ -1284,14 +1314,16 @@ app.post('/api/assist', async (req, res) => {
 app.post('/api/assist/feedback', async (req, res) => {
   if (!requireDb(res)) return;
   try {
-    const { action_type, user_input, model_response, rating, comment } = req.body;
+    const { action_type, user_input, model_response, rating, comment, model, latency_ms } = req.body;
     if (rating !== 'up' && rating !== 'down') {
       return res.status(400).json({ error: 'rating must be "up" or "down"' });
     }
     await db.query(
-      `insert into assist_feedback (action_type, user_input, model_response, rating, comment)
-       values ($1, $2, $3, $4, $5)`,
-      [action_type || 'freeform', user_input || '', model_response || '', rating, comment || null]);
+      `insert into assist_feedback (action_type, user_input, model_response, rating, comment, model, latency_ms)
+       values ($1, $2, $3, $4, $5, $6, $7)`,
+      [action_type || 'freeform', user_input || '', model_response || '', rating, comment || null,
+       typeof model === 'string' && model ? model.slice(0, 120) : null,
+       Number.isFinite(latency_ms) ? Math.round(latency_ms) : null]);
     res.json({ success: true });
   } catch (error) {
     console.error('Feedback error:', error.message);
@@ -1342,6 +1374,58 @@ app.post('/api/assist/messages', async (req, res) => {
 
 // ============ Page 2: Draft ============
 
+// ---- Review-quality telemetry ----
+// One review_events row per suggestion at generation time. Survivors get
+// their row id back (event_id) so the client can report dispositions and
+// per-suggestion feedback; validation-dropped suggestions are recorded as
+// 'dropped_validation' — the fabrication-rate metric. edits_json stays the
+// app's working copy; this table is the analytics layer.
+async function recordReviewEvents(reportId, { source, model, latency_ms }, survivors, dropped) {
+  if (!db.configured) return;
+  const batchId = crypto.randomUUID();
+  const ms = Number.isFinite(latency_ms) ? Math.round(latency_ms) : null;
+  const insert = (e, disposition) => db.one(
+    `insert into review_events
+       (report_id, source, model, batch_id, latency_ms, category, target_section,
+        original_text, suggested_text, reason, evidence_impression, evidence_findings,
+        disposition, decided_at)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+     returning id`,
+    [reportId, source, model, batchId, ms,
+     e.category || null, e.target_section || null,
+     e.original_text || null, e.suggested_text || null, e.reason || null,
+     e.evidence ? (e.evidence.impression_quote || null) : null,
+     e.evidence ? (e.evidence.findings_quote || null) : null,
+     disposition, disposition ? new Date().toISOString() : null]);
+  for (const e of survivors) {
+    const row = await insert(e, null);
+    if (row) e.event_id = row.id;
+  }
+  for (const e of dropped) await insert(e, 'dropped_validation');
+}
+
+// The save routes report what happened to each suggestion. 'undecided' is a
+// card left pending at save time — distinct from an explicit reject.
+const REVIEW_DISPOSITIONS = new Set(['accepted', 'rejected', 'edited', 'undecided']);
+async function applyReviewDecisions(reportId, decisions) {
+  if (!Array.isArray(decisions) || !db.configured) return;
+  for (const d of decisions) {
+    if (!d || !Number.isInteger(d.event_id) || !REVIEW_DISPOSITIONS.has(d.disposition)) continue;
+    try {
+      await db.query(
+        `update review_events
+            set disposition = $3,
+                adopted_text = $4,
+                decided_at = now()
+          where id = $1 and report_id = $2 and disposition is distinct from 'dropped_validation'`,
+        [d.event_id, reportId, d.disposition,
+         d.disposition === 'edited' ? String(d.adopted_text || '') : null]);
+    } catch (e) {
+      console.error('review decision update failed:', e.message);
+    }
+  }
+}
+
 app.post('/api/draft/review', async (req, res) => {
   try {
     const { report, study_type } = req.body;
@@ -1359,6 +1443,7 @@ app.post('/api/draft/review', async (req, res) => {
     // Gemini occasionally falls into a decode loop that truncates the JSON.
     // Salvage what parses; if nothing does, retry once before giving up.
     let rawEdits = null;
+    const timing = {};   // latency of the attempt that produced the edits
     for (let attempt = 1; attempt <= 2 && !rawEdits; attempt++) {
       const text = await geminiText({
         model: MODEL_REVIEW,
@@ -1368,7 +1453,8 @@ app.post('/api/draft/review', async (req, res) => {
         message: `Review this radiology report draft:\n\n${report}`,
         maxTokens: 8000,
         effort: DRAFT_REVIEW_EFFORT,
-        schema: REVIEW_EDITS_SCHEMA
+        schema: REVIEW_EDITS_SCHEMA,
+        timing
       });
       try {
         const parsed = parseModelJson(text);
@@ -1421,7 +1507,7 @@ app.post('/api/draft/review', async (req, res) => {
       return ok;
     };
     const relocate = originalRelocator(report);
-    const edits = rawEdits
+    const candidates = rawEdits
       .filter(e => e && typeof e.original_text === 'string' && typeof e.suggested_text === 'string')
       // A runaway suggestion is never a legitimate edit (edits are small and
       // local by contract); original_text is bounded by the report itself
@@ -1438,16 +1524,34 @@ app.post('/api/draft/review', async (req, res) => {
               impression_quote: String(e.evidence.impression_quote || ''),
               findings_quote: String(e.evidence.findings_quote || '')
             } } : {})
-      }))
-      // Drop edits whose original_text can't be located in the report, and
-      // whitespace-only changes (spacing is presentation, not an error)
-      .filter(e => report.includes(e.original_text) && canon(e.original_text) !== canon(e.suggested_text))
-      // Enforce the scope rule: an edit that only ever lands in the header
-      // block is dropped, whatever the model proposed — except on COMPARISON
-      .filter(e => report.lastIndexOf(e.original_text) >= bodyStart || onComparisonLine(e.original_text))
-      .filter(evidenceOk);
+      }));
+    // Partition instead of filter: what validation rejects is telemetry, not
+    // just noise — dropped edits become 'dropped_validation' rows.
+    const edits = [];
+    const droppedEdits = [];
+    for (const e of candidates) {
+      // original_text must anchor in the report; whitespace-only changes are
+      // presentation, not errors. Scope: body only, COMPARISON excepted.
+      const anchored = report.includes(e.original_text) && canon(e.original_text) !== canon(e.suggested_text);
+      const inScope = anchored &&
+        (report.lastIndexOf(e.original_text) >= bodyStart || onComparisonLine(e.original_text));
+      if (anchored && inScope && evidenceOk(e)) edits.push(e);
+      else droppedEdits.push(e);
+    }
     // Count only — how often the model attempts unsupported claims (no PHI)
     if (droppedEvidence) console.log(`review: dropped ${droppedEvidence} edit(s) failing evidence validation`);
+
+    // Telemetry — survivors gain event_id; never blocks the review itself
+    const reportId = typeof req.body.report_id === 'string' ? req.body.report_id.trim() : '';
+    if (reportId) {
+      try {
+        await recordReviewEvents(reportId,
+          { source: 'review', model: MODEL_REVIEW, latency_ms: timing.latency_ms },
+          edits, droppedEdits);
+      } catch (e) {
+        console.error('review telemetry failed:', e.message);
+      }
+    }
 
     // body_start lets the client anchor each edit inside the body too, so a
     // phrase that also appears in the header can't be highlighted up there
@@ -1455,6 +1559,35 @@ app.post('/api/draft/review', async (req, res) => {
   } catch (error) {
     console.error('Draft review error:', error.message);
     res.status(500).json({ error: 'Review failed', details: error.message });
+  }
+});
+
+// Per-suggestion 👍/👎 + optional note. Optional and non-blocking in the UI —
+// it never gates accept/reject. Changeable until the finalization scrub
+// freezes the row (a post-scrub edit would reintroduce unscrubbed text).
+app.put('/api/review-events/:id/feedback', async (req, res) => {
+  if (!requireDb(res)) return;
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'Bad event id' });
+    const { helpful, feedback_note } = req.body || {};
+    if (helpful !== true && helpful !== false && helpful !== null) {
+      return res.status(400).json({ error: 'helpful must be true, false, or null' });
+    }
+    const note = typeof feedback_note === 'string' && feedback_note.trim()
+      ? feedback_note.trim().slice(0, 1000)
+      : null;
+    const row = await db.one(
+      `update review_events set helpful = $2, feedback_note = $3
+        where id = $1 and scrubbed_at is null returning id`,
+      [id, helpful, note]);
+    if (!row) {
+      return res.status(409).json({ error: 'Feedback is closed for this suggestion (report finalized) or it does not exist' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Review feedback error:', error.message);
+    res.status(500).json({ error: 'Failed to save feedback', details: error.message });
   }
 });
 
@@ -1881,6 +2014,17 @@ app.put('/api/reports/:id/final', async (req, res) => {
     const revisions = existing.scrubbed_at
       ? []
       : await db.many(`select id, draft_text from report_revisions where report_id = $1`, [req.params.id]);
+    // Unconditional (not gated on existing.scrubbed_at): telemetry rows can
+    // appear after a report's first finalization scrubbed everything else
+    let reviewEvents = [];
+    try {
+      reviewEvents = await db.many(
+        `select id, original_text, suggested_text, reason, evidence_impression,
+                evidence_findings, adopted_text, feedback_note
+           from review_events where report_id = $1 and scrubbed_at is null`, [req.params.id]);
+    } catch (e) {
+      console.error('review_events fetch for scrub failed:', e.message);
+    }
     const input = existing.scrubbed_at
       ? { final_text }
       : {
@@ -1907,6 +2051,20 @@ app.put('/api/reports/:id/final', async (req, res) => {
       for (const rev of revisions) {
         await client.query(`update report_revisions set draft_text = $2 where id = $1`,
           [rev.id, s.texts['rev_' + rev.id]]);
+      }
+      // Same degrade rule as the report: pattern pass always applies, but
+      // scrubbed_at is only stamped when the model pass ran, so a later
+      // finalization retries the full scrub
+      for (const ev of reviewEvents) {
+        const c = scrubEventRow(ev, s.replacements);
+        await client.query(
+          `update review_events
+              set original_text = $2, suggested_text = $3, reason = $4,
+                  evidence_impression = $5, evidence_findings = $6,
+                  adopted_text = $7, feedback_note = $8, scrubbed_at = $9
+            where id = $1`,
+          [ev.id, c.original_text, c.suggested_text, c.reason, c.evidence_impression,
+           c.evidence_findings, c.adopted_text, c.feedback_note, s.modelOk ? now : null]);
       }
       return rows[0];
     });
@@ -2152,6 +2310,7 @@ app.post('/api/reports/:id/integrate-notes', async (req, res) => {
     }
 
     const { system, injected } = await buildKnowledgeSystem(READOUT_INTEGRATE_SYSTEM, report.study_type, 'readout');
+    const timing = {};
     const text = await geminiText({
       model: MODEL_REVIEW,
       label: 'readout',
@@ -2159,7 +2318,8 @@ app.post('/api/reports/:id/integrate-notes', async (req, res) => {
       injected,
       message: `Attending read-out feedback:\n${notes}\n\nResident's current draft:\n${draft}`,
       maxTokens: 8000,
-      schema: READOUT_EDITS_SCHEMA
+      schema: READOUT_EDITS_SCHEMA,
+      timing
     });
 
     let parsed;
@@ -2172,7 +2332,7 @@ app.post('/api/reports/:id/integrate-notes', async (req, res) => {
     }
     const rawEdits = Array.isArray(parsed) ? parsed : (parsed.edits || []);
     const relocate = originalRelocator(draft);
-    const edits = rawEdits
+    const candidates = rawEdits
       .filter(e => e && typeof e.original_text === 'string' && typeof e.suggested_text === 'string')
       .map(e => ({
         original_text: relocate(e.original_text),
@@ -2181,8 +2341,22 @@ app.post('/api/reports/:id/integrate-notes', async (req, res) => {
         category: 'readout',
         ...(typeof e.target_section === 'string' && e.target_section.trim()
           ? { target_section: e.target_section.trim() } : {})
-      }))
-      .filter(e => draft.includes(e.original_text) && e.original_text !== e.suggested_text);
+      }));
+    const edits = [];
+    const droppedEdits = [];
+    for (const e of candidates) {
+      if (draft.includes(e.original_text) && e.original_text !== e.suggested_text) edits.push(e);
+      else droppedEdits.push(e);
+    }
+
+    // Telemetry — same shape as the review pass, source 'readout'
+    try {
+      await recordReviewEvents(report.id,
+        { source: 'readout', model: MODEL_REVIEW, latency_ms: timing.latency_ms },
+        edits, droppedEdits);
+    } catch (e) {
+      console.error('readout telemetry failed:', e.message);
+    }
 
     res.json({ edits });
   } catch (error) {
@@ -2263,6 +2437,10 @@ app.put('/api/reports/:id', async (req, res) => {
 
     const report = await db.one(
       `update reports set ${sets.join(', ')} where id = $1 returning *`, params);
+
+    // Telemetry: what happened to each suggestion this save resolves
+    await applyReviewDecisions(req.params.id, req.body.review_decisions);
+
     res.json({ report });
   } catch (error) {
     console.error('Update report error:', error.message);
@@ -2517,6 +2695,133 @@ app.get('/api/health', (req, res) => {
 // Per-task cost read-out. Rows are grouped by model AND label, so the same task
 // running on two models (an A/B) shows up as two rows to compare.
 // In-process only: it starts empty on every restart and redeploy.
+// ============ Review-quality dashboard (admin) ============
+// Queryable aggregates over review_events + assist_feedback, JSON only.
+// ?from=YYYY-MM-DD&to=YYYY-MM-DD (default: the last 30 days); ?report_id=R-XXXXXX
+// adds a per-report drill-down. Bulk text leaves through the export safety net:
+// rows not yet scrubbed in storage are scrubbed in the output.
+app.get('/api/admin/review-quality', async (req, res) => {
+  if (!requireDb(res)) return;
+  try {
+    const parseDay = (v, endOfDay) =>
+      v ? new Date(v.includes('T') ? v : v + (endOfDay ? 'T23:59:59.999Z' : 'T00:00:00Z')) : null;
+    // Default upper bound runs a few minutes ahead of "now" — the DB clock can
+    // lead the app clock, and a just-written row must not fall out of range
+    const to = parseDay(String(req.query.to || ''), true) || new Date(Date.now() + 5 * 60 * 1000);
+    const from = parseDay(String(req.query.from || ''), false) || new Date(to.getTime() - 30 * 24 * 3600 * 1000);
+    if (isNaN(from) || isNaN(to)) return res.status(400).json({ error: 'Bad from/to date' });
+    const range = [from.toISOString(), to.toISOString()];
+
+    // Dispositions and thumbs, rolled up per category and per model
+    const agg = field => db.many(
+      `select ${field} as key,
+              count(*)::int as generated,
+              count(*) filter (where disposition = 'accepted')::int as accepted,
+              count(*) filter (where disposition = 'rejected')::int as rejected,
+              count(*) filter (where disposition = 'edited')::int as edited,
+              count(*) filter (where disposition = 'undecided')::int as undecided,
+              count(*) filter (where disposition = 'dropped_validation')::int as dropped_validation,
+              count(*) filter (where disposition is null)::int as pending,
+              count(*) filter (where helpful)::int as thumbs_up,
+              count(*) filter (where helpful = false)::int as thumbs_down
+         from review_events
+        where created_at between $1 and $2
+        group by 1 order by generated desc`, range);
+    const withRates = rows => rows.map(r => {
+      const decided = r.accepted + r.rejected + r.edited + r.undecided;
+      const rate = n => (decided ? Number((n / decided).toFixed(3)) : null);
+      return {
+        ...r,
+        accept_rate: rate(r.accepted), reject_rate: rate(r.rejected), edit_rate: rate(r.edited),
+        dropped_rate: r.generated ? Number((r.dropped_validation / r.generated).toFixed(3)) : null
+      };
+    });
+    const [byCategory, byModel] = await Promise.all([agg('category'), agg('model')]);
+
+    // Latency over DISTINCT batches, so one call's N suggestion rows count once
+    const latency = await db.many(
+      `select model, count(*)::int as calls,
+              round(percentile_cont(0.5) within group (order by latency_ms))::int as p50_ms,
+              round(percentile_cont(0.95) within group (order by latency_ms))::int as p95_ms
+         from (select distinct model, batch_id, latency_ms
+                 from review_events
+                where created_at between $1 and $2 and latency_ms is not null) b
+        group by model order by calls desc`, range);
+
+    // The calibration cells dispositions alone miss: rejected-but-helpful
+    // ("right catch, wrong wording") and accepted-but-unhelpful
+    const crosstab = await db.many(
+      `select coalesce(disposition, 'pending') as disposition, helpful, count(*)::int as n
+         from review_events
+        where created_at between $1 and $2 and helpful is not null
+        group by 1, 2 order by 1, 2`, range);
+
+    const noteRows = await db.many(
+      `select id, report_id, source, category, disposition, helpful, feedback_note,
+              suggested_text, created_at, scrubbed_at
+         from review_events
+        where created_at between $1 and $2 and feedback_note is not null
+        order by created_at desc limit 200`, range);
+
+    let drilldown = null;
+    if (req.query.report_id) {
+      drilldown = await db.many(
+        `select id, source, model, batch_id, latency_ms, category, target_section,
+                original_text, suggested_text, reason, evidence_impression, evidence_findings,
+                disposition, adopted_text, helpful, feedback_note, created_at, decided_at, scrubbed_at
+           from review_events where report_id = $1 order by id`, [String(req.query.report_id)]);
+    }
+
+    // Export safety net: anything not yet scrubbed in storage is scrubbed in
+    // the output (one batched pass; the stored rows are not touched)
+    const pendingTexts = {};
+    const collect = (row, fields) => fields.forEach(f => {
+      if (!row.scrubbed_at && typeof row[f] === 'string' && row[f]) pendingTexts[`${row.id}|${f}`] = row[f];
+    });
+    const NOTE_FIELDS = ['feedback_note', 'suggested_text'];
+    for (const r of noteRows) collect(r, NOTE_FIELDS);
+    for (const r of drilldown || []) collect(r, REVIEW_EVENT_TEXT_FIELDS);
+    if (Object.keys(pendingTexts).length) {
+      const sOut = await scrubTexts(pendingTexts);
+      const put = (row, fields) => fields.forEach(f => {
+        const k = `${row.id}|${f}`;
+        if (k in sOut.texts) row[f] = sOut.texts[k];
+      });
+      for (const r of noteRows) put(r, NOTE_FIELDS);
+      for (const r of drilldown || []) put(r, REVIEW_EVENT_TEXT_FIELDS);
+      console.log(`[scrub] dashboard export-time scrub texts=${Object.keys(pendingTexts).length} model_ok=${sOut.modelOk}`);
+    }
+
+    // Assist: thumbs and latency by action (latency lives on feedback rows)
+    const assist = await db.many(
+      `select action_type, count(*)::int as feedback_rows,
+              count(*) filter (where rating = 'up')::int as thumbs_up,
+              count(*) filter (where rating = 'down')::int as thumbs_down,
+              round(percentile_cont(0.5) within group (order by latency_ms))::int as p50_ms,
+              round(percentile_cont(0.95) within group (order by latency_ms))::int as p95_ms
+         from assist_feedback
+        where timestamp between $1 and $2
+        group by action_type order by feedback_rows desc`, range);
+
+    res.json({
+      from: range[0],
+      to: range[1],
+      review: {
+        by_category: withRates(byCategory),
+        by_model: withRates(byModel),
+        latency_by_model: latency,
+        disposition_x_helpful: crosstab,
+        feedback_notes: noteRows
+      },
+      ...(drilldown ? { report_drilldown: { report_id: String(req.query.report_id), suggestions: drilldown } } : {}),
+      assist: { by_action_type: assist }
+    });
+  } catch (error) {
+    console.error('Review quality dashboard error:', error.message);
+    res.status(500).json({ error: 'Failed to build dashboard', details: error.message });
+  }
+});
+
 app.get('/api/usage/summary', (req, res) => {
   const rows = [...usageTally.values()].sort((a, b) => b.est_cost - a.est_cost);
   const sum = field => rows.reduce((acc, r) => acc + r[field], 0);
@@ -2556,6 +2861,49 @@ app.get('/api/usage/summary', (req, res) => {
   });
 });
 
+// Idempotent startup schema for the telemetry layer — mirrors the SQL at the
+// end of supabase.sql, so running that file manually is a no-op here (and
+// vice versa). Failures are logged, never fatal: the app runs without
+// telemetry, and every telemetry write is individually guarded.
+async function ensureTelemetrySchema() {
+  if (!db.configured) return;
+  try {
+    await db.query(`
+      create table if not exists review_events (
+        id bigint generated always as identity primary key,
+        report_id text not null references reports(id) on delete cascade,
+        source text not null check (source in ('review', 'readout')),
+        model text,
+        batch_id uuid not null,
+        latency_ms int,
+        created_at timestamptz not null default now(),
+        category text,
+        target_section text,
+        original_text text,
+        suggested_text text,
+        reason text,
+        evidence_impression text,
+        evidence_findings text,
+        disposition text check (disposition in
+          ('accepted', 'rejected', 'edited', 'dropped_validation', 'undecided')),
+        adopted_text text,
+        helpful boolean,
+        feedback_note text,
+        decided_at timestamptz,
+        scrubbed_at timestamptz
+      )`);
+    await db.query(`create index if not exists review_events_report_idx on review_events (report_id)`);
+    await db.query(`create index if not exists review_events_disposition_idx on review_events (disposition)`);
+    await db.query(`create index if not exists review_events_category_idx on review_events (category)`);
+    await db.query(`create index if not exists review_events_created_idx on review_events (created_at)`);
+    await db.query(`alter table assist_feedback add column if not exists model text`);
+    await db.query(`alter table assist_feedback add column if not exists latency_ms int`);
+    console.log('✅ Telemetry schema ensured (review_events + assist_feedback columns)');
+  } catch (e) {
+    console.error('Telemetry schema ensure failed:', e.message);
+  }
+}
+
 // One-time backfill: if shifts exist but none is active (first deploy after
 // the is_active migration), activate the most recently started one. The SQL
 // migration also does this; this covers the case where the code deploys first.
@@ -2578,5 +2926,6 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`🏥 Flow Dictation running on port ${PORT}`);
   console.log(`✨ Gemini on Vertex AI: ${MODEL_REPORT} (reports), ${MODEL_REVIEW} (review)`);
   console.log(`🗄️  Database: ${db.configured ? db.describe() : 'NOT CONFIGURED'}`);
+  ensureTelemetrySchema();
   backfillActiveShift();
 });

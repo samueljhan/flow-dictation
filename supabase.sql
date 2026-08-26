@@ -203,3 +203,47 @@ create table if not exists rad_language (
 alter table exemplar_reports enable row level security;
 alter table style_guide enable row level security;
 alter table rad_language enable row level security;
+
+-- ============================================================
+-- Review-quality telemetry (added 2026-08 — run this section on
+-- its own if the tables above already exist). The server also
+-- ensures this schema at startup, so running it manually is a
+-- no-op safety net.
+-- ============================================================
+
+-- One row per Review/read-out suggestion at generation time, including
+-- suggestions the server dropped in validation (disposition
+-- 'dropped_validation' — the fabrication-rate metric). edits_json on reports
+-- stays the app's working copy; this table is the analytics layer.
+create table if not exists review_events (
+  id bigint generated always as identity primary key,
+  report_id text not null references reports(id) on delete cascade,
+  source text not null check (source in ('review', 'readout')),
+  model text,
+  batch_id uuid not null,               -- groups one model call's suggestions
+  latency_ms int,                       -- model call wall time; identical across a batch
+  created_at timestamptz not null default now(),
+  category text,
+  target_section text,
+  original_text text,
+  suggested_text text,
+  reason text,
+  evidence_impression text,
+  evidence_findings text,
+  disposition text check (disposition in
+    ('accepted', 'rejected', 'edited', 'dropped_validation', 'undecided')),
+  adopted_text text,                    -- what was applied when disposition='edited'
+  helpful boolean,                      -- 👍/👎 on the suggestion itself
+  feedback_note text,                   -- optional short comment
+  decided_at timestamptz,
+  scrubbed_at timestamptz               -- set by the finalization scrub
+);
+create index if not exists review_events_report_idx on review_events (report_id);
+create index if not exists review_events_disposition_idx on review_events (disposition);
+create index if not exists review_events_category_idx on review_events (category);
+create index if not exists review_events_created_idx on review_events (created_at);
+alter table review_events enable row level security;
+
+-- Assist feedback gains the same model/latency telemetry
+alter table assist_feedback add column if not exists model text;
+alter table assist_feedback add column if not exists latency_ms int;

@@ -17,34 +17,49 @@ app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: false }));
 
-// Dual-provider model routing — Vertex AI Gemini AND Vertex AI Claude
-// (Anthropic partner models). MODEL_* env vars accept either provider's ids;
-// the call layer selects the client by prefix (gemini-* → Gemini, claude-* →
-// AnthropicVertex). Quality evaluation put Claude ahead on review, impression,
-// reword, and report tasks, so those default to Claude; detection and scrub
-// stay on Flash-Lite (trivial classification at a fraction of the price).
-// Every task routes independently so any one can be A/B'd — or instantly
-// reverted to Gemini — from a Cloud Run variable without touching code.
-// Deliberately NO cross-inheritance: setting MODEL_REPORT must not silently
-// drag review or impression along with it.
+// Dual-provider model routing — Vertex AI Gemini (BAA-covered, sees
+// identifiable text) AND Claude via the Anthropic FIRST-PARTY API (outside
+// the BAA boundary — receives ONLY de-identified findings/impression + study
+// type through the redaction pipeline below; claude.js enforces it). MODEL_*
+// env vars accept either provider's ids; the call layer selects the client by
+// prefix (gemini-* → Gemini, claude-* → first-party Anthropic). Quality
+// evaluation put Claude ahead on review, impression, reword, and report
+// tasks. Every task routes independently so any one can be A/B'd — or
+// instantly reverted to Gemini — from a Cloud Run variable without touching
+// code. Deliberately NO cross-inheritance beyond the documented fallbacks.
+//
+// Tasks that CANNOT go to Claude, by design of the de-identification contract:
+//   fullreport  — its job is producing the non-findings sections
+//   proofread   — operates on arbitrary full-report text verbatim
+//   chat/radqa  — free text can carry anything the user pastes, unredacted
+//   detect/scrub/redact — see identifiable text by definition
+// Those stay on Gemini regardless of env settings' intent; their MODEL_* vars
+// still accept a different Gemini id.
 //
 // Never default anything to claude-fable-5: Mythos-class models carry 30-day
-// retention on all platforms — the wrong footprint for draft-phase report
-// text. Revisit only for de-identified-only paths.
+// retention — the wrong footprint even for redacted draft-phase text.
 const MODEL_DETECT = process.env.MODEL_DETECT || 'gemini-2.5-flash-lite';   // study-type classification
-const MODEL_REPORT = process.env.MODEL_REPORT || 'claude-sonnet-4-6';       // proofread · reword · describe · full report structure
-const MODEL_REVIEW = process.env.MODEL_REVIEW || 'claude-opus-5';           // draft review + integrate-notes
-const MODEL_IMPRESSION = process.env.MODEL_IMPRESSION || 'claude-opus-5';   // Generate Impression + the full report's impression
-// Quick Rad Question SPLIT: Google Search grounding exists only on Gemini, so
-// the "Include references" toggle decides the provider — ON routes to
-// MODEL_RADQA_GROUNDED (Gemini + grounding), OFF to MODEL_RADQA (Claude).
-const MODEL_RADQA = process.env.MODEL_RADQA || 'claude-opus-5';             // Quick Rad Question, references OFF
+const MODEL_REPORT = process.env.MODEL_REPORT || 'gemini-2.5-flash';        // proofread · Generate Full Report · assist fallbacks
+const MODEL_REVIEW = process.env.MODEL_REVIEW || 'claude-opus-5';           // draft review + integrate-notes (de-identified pipeline)
+const MODEL_IMPRESSION = process.env.MODEL_IMPRESSION || 'claude-opus-5';   // Generate Impression (de-identified pipeline)
+const MODEL_REWORD = process.env.MODEL_REWORD || 'claude-sonnet-4-6';       // Reword (de-identified pipeline)
+const MODEL_DESCRIBE = process.env.MODEL_DESCRIBE || 'claude-sonnet-4-6';   // Describe Finding (de-identified pipeline)
+const MODEL_SYNTHESIZE = process.env.MODEL_SYNTHESIZE || 'claude-opus-5';   // prior report + new info (de-identified pipeline)
+// Quick Rad Question / free text: arbitrary pasted input — Gemini only (see
+// above). The references toggle additionally needs Google Search grounding.
+const MODEL_RADQA = process.env.MODEL_RADQA || 'gemini-2.5-pro';            // Quick Rad Question, references OFF
 const MODEL_RADQA_GROUNDED = process.env.MODEL_RADQA_GROUNDED || 'gemini-2.5-pro'; // references ON (grounded search)
 const MODEL_CHAT = process.env.MODEL_CHAT || MODEL_RADQA;                   // plain free text (no references)
-const MODEL_SYNTHESIZE = process.env.MODEL_SYNTHESIZE || 'claude-opus-5';   // prior report + new info → merged report
-const MODEL_SCRUB = process.env.MODEL_SCRUB || 'gemini-2.5-flash-lite';     // PHI scrub model pass (at finalization)
+const MODEL_SCRUB = process.env.MODEL_SCRUB || 'gemini-2.5-flash-lite';     // PHI scrub + reversible redaction model pass
+// Where a Claude-routed task lands when the de-identified pipeline can't run
+// (sections don't parse, redaction model pass failed, key missing, guard
+// tripped): a Gemini model, which the BAA covers for identifiable text.
+const MODEL_GEMINI_FALLBACK = process.env.MODEL_GEMINI_FALLBACK || 'gemini-2.5-pro';
 
 // Provider selection by model-id prefix — the whole of the routing layer.
+// claude.generate refuses any call that does not assert deidentified: true
+// (set only by the redaction pipeline and the selftest), so a claude-* id on
+// a path without the pipeline fails closed instead of leaking.
 const providerFor = model => (String(model || '').startsWith('claude') ? 'claude' : 'gemini');
 function llmGenerate(opts) {
   return providerFor(opts.model) === 'claude' ? claude.generate(opts) : gemini.generate(opts);
@@ -194,16 +209,20 @@ app.use(express.static('public'));
 
 console.log('=== Environment Check ===');
 console.log('Vertex AI (Gemini):', gemini.PROJECT ? `✓ project=${gemini.PROJECT} location=${gemini.LOCATION}` : '✗ (set GOOGLE_CLOUD_PROJECT)');
-console.log('Vertex AI (Claude):', claude.PROJECT ? `✓ project=${claude.PROJECT} region=${claude.REGION}` : '✗ (set GOOGLE_CLOUD_PROJECT)');
+console.log('Anthropic first-party API:', claude.configured ? '✓ ANTHROPIC_API_KEY set (de-identified pipeline only)' : '✗ (Claude-routed tasks will fall back to Gemini)');
 console.log('Database:', db.configured ? `✓ ${db.describe()}` : '✗');
 console.log('Google Client ID:', !!process.env.GOOGLE_CLIENT_ID ? '✓' : '✗');
 console.log('Google Client Secret:', !!process.env.GOOGLE_CLIENT_SECRET ? '✓' : '✗');
 const routed = m => `${m} [${providerFor(m)}]`;
-console.log('Model routing (task → model [provider]):');
-console.log(`  detect=${routed(MODEL_DETECT)} scrub=${routed(MODEL_SCRUB)}`);
-console.log(`  report=${routed(MODEL_REPORT)} review=${routed(MODEL_REVIEW)} impression=${routed(MODEL_IMPRESSION)}`);
-console.log(`  synthesize=${routed(MODEL_SYNTHESIZE)} chat=${routed(MODEL_CHAT)}`);
+console.log('Model routing (task → model [provider]; claude = Anthropic first-party API,');
+console.log('receiving ONLY de-identified findings/impression + study type via the redaction pipeline):');
+console.log(`  detect=${routed(MODEL_DETECT)} scrub/redact=${routed(MODEL_SCRUB)}`);
+console.log(`  review+readout=${routed(MODEL_REVIEW)} impression=${routed(MODEL_IMPRESSION)} synthesize=${routed(MODEL_SYNTHESIZE)}`);
+console.log(`  reword=${routed(MODEL_REWORD)} describe=${routed(MODEL_DESCRIBE)}`);
+console.log(`  proofread+fullreport=${routed(MODEL_REPORT)} — fullreport stays Gemini by design (it writes the non-findings sections); proofread handles full-report text verbatim`);
+console.log(`  chat=${routed(MODEL_CHAT)} — free text can carry unredacted pastes, Gemini only`);
 console.log(`  radqa: references ON → ${routed(MODEL_RADQA_GROUNDED)} + Google Search grounding · OFF → ${routed(MODEL_RADQA)}`);
+console.log(`  gemini fallback for pipeline-ineligible requests: ${MODEL_GEMINI_FALLBACK}`);
 console.log('========================');
 
 // ============ Gemini helpers ============
@@ -213,12 +232,11 @@ console.log('========================');
 // Vertex AI US list price per million tokens (standard tier, prompts ≤200k
 // tokens). Longest-prefix matched against the model version the API says
 // served the request, so a dated snapshot still prices correctly.
-// Claude partner-model rates verified against the Vertex pricing page
-// 2026-08-28: opus-5 $5/$25, sonnet-4-6 $3/$15 — same as first-party list.
-// cacheRead/cacheWrite are per-model multipliers of the input rate: Claude on
-// Vertex bills 5m-TTL cache writes at 1.25x ($6.25 / $3.75 per MTok) and
-// cache hits at 0.1x ($0.50 / $0.30); Gemini's implicit cache reads bill at
-// 0.25x with free writes (the defaults below).
+// Claude models bill at Anthropic FIRST-PARTY API list rates (2026-08):
+// opus-5 $5/$25, sonnet-4-6 $3/$15 per MTok. cacheRead/cacheWrite are
+// per-model multipliers of the input rate: Claude bills 5m-TTL cache writes
+// at 1.25x ($6.25 / $3.75 per MTok) and cache hits at 0.1x ($0.50 / $0.30);
+// Gemini's implicit cache reads bill at 0.25x with free writes (defaults).
 const PRICING = {
   'gemini-2.5-pro':        { input: 1.25, output: 10 },
   'gemini-2.5-flash':      { input: 0.30, output: 2.50 },
@@ -332,13 +350,15 @@ function toContents(messages) {
 // telemetry reuses; the same number lands in the log and the ledger — plus
 // api_call_id (this call's api_calls row, null if the write failed) and the
 // served model, so telemetry rows can link and copy from the ledger.
-async function llmText({ model, system, message, messages, maxTokens, effort, injected, label, schema, timing, reportId }) {
+async function llmText({ model, system, message, messages, maxTokens, effort, injected, label, schema, timing, reportId, deidentified }) {
   const contents = toContents(messages || [{ role: 'user', content: message }]);
   const t0 = Date.now();
   // Routed by model prefix: gemini-* → Gemini (schema = native JSON mode),
-  // claude-* → AnthropicVertex (schema ignored; the prompts already demand
-  // JSON, and the server-side substring validation is the real guarantee).
-  const r = await llmGenerate({ model, system, contents, maxTokens, effort, responseSchema: schema });
+  // claude-* → first-party Anthropic (schema ignored; the prompts already
+  // demand JSON, and the server-side substring validation is the real
+  // guarantee). `deidentified` is the pipeline's assertion that the payload
+  // has been section-stripped and redacted — claude.generate requires it.
+  const r = await llmGenerate({ model, system, contents, maxTokens, effort, responseSchema: schema, deidentified });
   const ms = Date.now() - t0;
   const { cost, api_call_id } = await recordUsage({
     model: r.served, label, usage: r.usage, latency_ms: ms, report_id: reportId
@@ -485,8 +505,15 @@ const DRAFT_REVIEW_EFFORT = 'high';  // typo/essential-edit review; high curbs f
 // Env-overridable to retune without a code change.
 const FREEFORM_EFFORT = process.env.FREEFORM_EFFORT || 'medium';
 
-// Per-action model routing; anything unlisted uses MODEL_REPORT.
-const ACTION_MODEL = { impression: MODEL_IMPRESSION, synthesize: MODEL_SYNTHESIZE };
+// Per-action model routing; anything unlisted (proofread, fullreport) uses
+// MODEL_REPORT — Gemini, because those tasks handle full-report text the
+// de-identified Claude contract cannot carry.
+const ACTION_MODEL = {
+  impression: MODEL_IMPRESSION,
+  synthesize: MODEL_SYNTHESIZE,
+  reword: MODEL_REWORD,
+  describe: MODEL_DESCRIBE
+};
 
 const DRAFT_REVIEW_SYSTEM = `You review radiology report drafts for a radiologist. Flag ONLY essential corrections: obvious typos (spelling, grammar, punctuation), clear speech-recognition/dictation errors, wording that is factually wrong or genuinely confusing, duplicated sentences, and the specific content edits defined below.
 
@@ -506,10 +533,10 @@ Categories — "category" must be exactly one of "typo", "style", "addition", "s
 
 EVIDENCE — any edit justified by an inconsistency or by content elsewhere in the report (every "addition" and "section" edit, and any "style" edit claiming the report contradicts itself) MUST include "evidence": {"impression_quote": "...", "findings_quote": "..."} — exact verbatim substrings of the report constituting the conflict: impression_quote = the claim being relied on (usually from the impression; for temporal conflicts, the sentence containing the temporal language), findings_quote = the conflicting or amended line (the findings section line, or the COMPARISON line). You may only claim the report says something if you can quote it exactly. If you cannot produce both quotes, do not generate the edit. The reason must be derivable from the quotes alone.
 
-TEMPORAL/COMPARISON — "previously X", "compared to", "interval", "new from prior" imply a prior exam. If the COMPARISON line says None (or no comparison), flag THAT conflict: propose updating the COMPARISON line or removing the temporal language — a findings-side fix, with evidence quoting both the temporal sentence and the COMPARISON line. But "(remeasured)" / "re-measured" means a measurement revision of the same exam, not interval change: a differing prior value with this qualifier never contradicts "stable" or "unchanged" — do not flag it. Likewise, HOW a change is characterized is the radiologist's judgment: a small measurement difference the impression calls "stable", "unchanged", or "grossly similar" is not a contradiction — do not flag it and do not harmonize the wording between sections.
+MEASUREMENTS/TEMPORAL — do not police temporal language against the COMPARISON line; that consistency check runs separately outside this review. "(remeasured)" / "re-measured" means a measurement revision of the same exam, not interval change: a differing prior value with this qualifier never contradicts "stable" or "unchanged" — do not flag it. HOW a change is characterized is the radiologist's judgment: a small measurement difference the impression calls "stable", "unchanged", or "grossly similar" is not a contradiction — do not flag it and do not harmonize the wording between sections.
 
 Rules:
-- SCOPE: review only the body of the report — the FINDINGS section and everything after it (including the IMPRESSION). Everything above FINDINGS is off limits: exam/study type, clinical history or indication, technique, protocol, patient or accession headers. Never propose an edit there, even for an obvious typo. The single exception is the COMPARISON line, which may be edited only to resolve a temporal-language conflict as described above. If a report has no FINDINGS heading, review the whole thing.
+- SCOPE: review only the body of the report — the FINDINGS section and everything after it (including the IMPRESSION). Everything above FINDINGS is off limits: exam/study type, clinical history or indication, technique, protocol, comparison, patient or accession headers. Never propose an edit there, even for an obvious typo. If a report has no FINDINGS heading, review the whole thing.
 - Essential changes only. Do NOT suggest optional stylistic polish, preference rewording, tightening, or restructuring. If a sentence is acceptable as written, leave it alone — even if you would phrase it differently.
 - Fewer, high-confidence edits beat many marginal ones. When unsure whether an edit is essential — or whether a finding is substantive enough for an "addition" — omit it. High precision over recall.
 - "original_text" must be an EXACT character-for-character substring of the report so it can be located, and must be unique enough to find (include a few surrounding words if needed).
@@ -518,6 +545,60 @@ Rules:
 - Do NOT flag the impression for omitting, summarizing, or re-prioritizing findings — the impression is intentionally selective, and that is never an error.
 - "reason" is one short sentence.
 - If nothing needs changing, return {"edits": []}.`;
+
+// ---- De-identified Claude pipeline prompts ----
+// Every Claude-routed task sends ONLY {study type, redacted findings,
+// redacted impression} (+ redacted read-out notes for integrate-notes, or the
+// redacted user text for assist tasks). This contract block rides on every
+// Claude system prompt.
+const CLAUDE_DEID_CONTRACT = `
+
+DE-IDENTIFIED INPUT CONTRACT:
+- You are given ONLY the FINDINGS and IMPRESSION sections of a radiology report (plus the study type, and for some tasks the user's own text). No other report sections exist in your scope — there is no clinical history, comparison, technique, or patient information to consult. Never speculate about, request, or propose edits to any other section, and never flag content for being inconsistent with a section you cannot see.
+- Bracketed indexed tokens like [NAME_1], [DATE_2], [MRN_1], [LOCATION_1] are redacted identifiers. Leave every token EXACTLY as written wherever it appears — never edit, expand, remove, merge, or flag a token, and never invent new ones. A token is an opaque string; text around it is edited normally.`;
+
+// The review system for the de-identified pipeline: same categories, evidence
+// rules, and impression-as-truth principle as the Gemini prompt, WITHOUT the
+// header-scope rules (the payload contains only findings/impression, so
+// everything sent is in scope) and WITHOUT the temporal/COMPARISON rules —
+// that check is a deterministic server-side pass now (see temporalCheck), and
+// Claude never sees the COMPARISON line to reason about.
+const CLAUDE_REVIEW_SYSTEM = `You review the FINDINGS and IMPRESSION of radiology report drafts for a radiologist. Flag ONLY essential corrections: obvious typos (spelling, grammar, punctuation), clear speech-recognition/dictation errors, wording that is factually wrong or genuinely confusing, duplicated sentences, and the specific content edits defined below.
+
+Return JSON only — no markdown fences, no commentary — in exactly this shape:
+{"edits": [{"original_text": "...", "suggested_text": "...", "reason": "...", "category": "typo", "target_section": "...", "evidence": {"impression_quote": "...", "findings_quote": "..."}}]}
+"evidence" is required on EVERY edit: fill both quotes for the inconsistency/content edits defined below; for a plain typo or style edit set both quotes to "". "target_section" is required for "addition" and "section" edits; omit it otherwise.
+
+CORE PRINCIPLE — the IMPRESSION is the source of truth. The radiologist puts the most attention into the impression; findings templates are filled in faster and may lag behind it. When the impression and the findings disagree, or the impression contains content the findings lack, resolve it by bringing the FINDINGS into agreement with the impression: add to or amend the findings. NEVER generate an edit that rewrites impression content to match the findings. The one exception: defects internal to the impression itself — a duplicated sentence, a typo, a self-contradiction within the impression — are fixed in place in the impression.
+
+SECTION STRUCTURE — before proposing any edit, parse the findings' structure: top-level study blocks (e.g. a combined exam with separate MRI BRAIN and MRI SPINE findings) and the labeled sections within each ("Ventricles:", "Osseous Structures:", "Soft Tissues:", ...). A labeled section scopes ONLY to its own study block: "Osseous Structures:" under MRI SPINE says nothing about the calvarium. A template-normal line ("Soft Tissues: Normal", "Marrow Signal: Expected") asserts normality only for its section's anatomy within its own block — never flag it as inconsistent with findings elsewhere unless it covers the same anatomy in the same study block. If the findings have no labeled sections (freeform prose), skip all section logic and review them as prose.
+
+Categories — "category" must be exactly one of "typo", "style", "addition", "section":
+- "typo": spelling/grammar/punctuation/dictation errors. Also use "typo" to remove a repeated or near-duplicate sentence within the impression or within a single findings section (original_text = the full passage spanning BOTH copies, suggested_text = that passage with the duplicate removed; this is the in-place impression exception). Spacing artifacts (double spaces, spacing around punctuation) are not errors — never propose a whitespace-only change.
+- "style": wording that is clearly wrong or genuinely confusing — never preferences.
+- "addition": the impression describes a substantive finding that the findings do not describe. Add it to the most appropriate findings section: set "target_section" to that section's label (include the study block when there are several, e.g. "Osseous Structures (MRI BRAIN)"), original_text = the current content of that section line (an exact substring, so it can be located), suggested_text = that line plus the added sentence(s). reason: "Impression describes X but findings do not — add to [section]." Substantive means POSITIVE findings an attending expects documented in the findings: masses, collections, edema, hemorrhage, fractures, osseous destruction/remodeling, device positions, obstruction/entrapment. NOT hedges, negatives, or summary judgments: never generate an addition for a negative statement ("no X", "without Y") — a negative in the impression needs no findings documentation — and "significant mass effect" summarizing findings already described needs no addition.
+- "section": content that clearly sits under the wrong section label (a ventricular finding under Parenchyma, enhancement under Perfusion). Propose paired remove/add edits or one replacement per section, with "target_section" naming the correct section and reason naming both sections. Only flag clear misplacements — a defensible judgment call is not an error.
+
+EVIDENCE — any edit justified by an inconsistency (every "addition" and "section" edit, and any "style" edit claiming the text contradicts itself) MUST include "evidence": {"impression_quote": "...", "findings_quote": "..."} — exact verbatim substrings of the provided text constituting the conflict: impression_quote = the claim being relied on, findings_quote = the conflicting or amended line. You may only claim the text says something if you can quote it exactly. If you cannot produce both quotes, do not generate the edit. The reason must be derivable from the quotes alone.
+
+Rules:
+- Essential changes only. Do NOT suggest optional stylistic polish, preference rewording, tightening, or restructuring. If a sentence is acceptable as written, leave it alone — even if you would phrase it differently.
+- Fewer, high-confidence edits beat many marginal ones. When unsure whether an edit is essential — or whether a finding is substantive enough for an "addition" — omit it. High precision over recall.
+- Measurement characterization is the radiologist's judgment: a measurement difference the impression calls "stable", "unchanged", or "grossly similar" is not a contradiction — do not flag it and do not harmonize the wording between sections. "(remeasured)" / "re-measured" marks a measurement revision, never a change to flag.
+- "original_text" must be an EXACT character-for-character substring of the provided text so it can be located, and must be unique enough to find (include a few surrounding words if needed).
+- Keep each edit small and local: a word, phrase, a section line, or at most one sentence. Do not rewrite everything.
+- Never change medical meaning, laterality, or measurements, and never invent findings the text does not state.
+- Do NOT flag the impression for omitting, summarizing, or re-prioritizing findings — the impression is intentionally selective, and that is never an error.
+- "reason" is one short sentence.
+- If nothing needs changing, return {"edits": []}.` + CLAUDE_DEID_CONTRACT;
+
+// Reword/synthesize on the pipeline work section-wise: Claude rewrites the
+// findings and impression it was given and the server splices them back into
+// the untouched full report. JSON keeps the two sections separable.
+const CLAUDE_SECTIONS_JSON = `
+Return JSON only — no markdown fences, no commentary — in exactly this shape:
+{"findings": "<the full revised FINDINGS text>", "impression": "<the full revised IMPRESSION text>"}
+If no IMPRESSION was provided, set "impression" to "". Preserve line breaks within each section. Return the complete text of each section, not a diff.`;
 
 const READOUT_INTEGRATE_SYSTEM = `You convert an attending radiologist's verbal read-out feedback into targeted edits to a resident's draft report. This is NOT a rewrite: change only what the feedback calls for.
 
@@ -682,12 +763,14 @@ function randomReportId() {
 // Pattern pass + one model pass over all of a report's texts together, so the
 // same name found anywhere is replaced everywhere. Model failures degrade to
 // the pattern pass alone — the caller decides what that means for scrubbed_at.
-async function modelFindPhi(text, reportId) {
+async function modelFindPhi(text, reportId, label = 'scrub') {
   const out = await llmText({
     model: MODEL_SCRUB,
-    label: 'scrub',
+    label,
     reportId,
-    system: scrub.SCRUB_SYSTEM,
+    // The reversible pass has already emitted indexed tokens — tell the model
+    // to leave them alone (the base prompt only names bare placeholders)
+    system: scrub.SCRUB_SYSTEM + (label === 'redact' ? scrub.REDACT_TOKENS_NOTE : ''),
     message: text,
     // A date-heavy multi-document input can produce a long replacement list;
     // too low a ceiling truncates the JSON mid-string
@@ -730,6 +813,58 @@ async function scrubTexts(texts, reportId) {
     }
   }
   return { texts: out, replacements, counts, modelOk, modelApplied };
+}
+
+// ---- Reversible redaction (feeds the de-identified Claude pipeline) ----
+// Same two-pass detection as scrubTexts (patterns + the flash-lite model
+// pass, ledger call_type 'redact'), but identifiers become unique indexed
+// tokens ([NAME_1], [DATE_2], ...) with a token → original map for exact
+// server-side restoration. The map NEVER leaves the server and lives only in
+// memory for the request: every flow that uses it (review, integrate-notes,
+// impression, reword, describe, synthesize) redacts, calls Claude, validates,
+// and restores within ONE request — the client always receives restored
+// text, so nothing spans requests and no redaction_maps table is needed.
+//
+// ok:false — the model pass failed — means the text CANNOT be treated as
+// de-identified. Unlike the destructive scrub (which degrades to the pattern
+// pass), callers here must fall back to Gemini: the guarantee is the point.
+async function redactReversible(texts, reportId) {
+  const state = scrub.newRedaction();
+  const out = {};
+  for (const [k, v] of Object.entries(texts)) {
+    out[k] = (typeof v === 'string' && v) ? scrub.patternRedact(v, state) : v;
+  }
+  const joined = Object.values(out).filter(t => typeof t === 'string' && t.trim()).join('\n\n----- NEXT DOCUMENT -----\n\n');
+  let ok = true;
+  if (joined.trim()) {
+    try {
+      const replacements = await modelFindPhi(joined, reportId, 'redact');
+      for (const k of Object.keys(out)) {
+        if (typeof out[k] !== 'string' || !out[k]) continue;
+        out[k] = scrub.applyReplacementsReversible(out[k], replacements, state).text;
+      }
+    } catch (e) {
+      ok = false;
+      console.warn(`[redact] model pass failed — payload NOT de-identified, caller must fall back: ${e.message}`);
+    }
+  }
+  return { texts: out, map: state.map, ok };
+}
+
+// Restore every string field of a model-returned edit through the redaction
+// map — tokens Claude echoed back become the original identifiers again.
+function restoreEditFields(e, map) {
+  const restored = { ...e };
+  for (const f of ['original_text', 'suggested_text', 'reason']) {
+    if (typeof restored[f] === 'string') restored[f] = scrub.restoreRedaction(restored[f], map);
+  }
+  if (restored.evidence && typeof restored.evidence === 'object') {
+    restored.evidence = {
+      impression_quote: scrub.restoreRedaction(String(restored.evidence.impression_quote || ''), map),
+      findings_quote: scrub.restoreRedaction(String(restored.evidence.findings_quote || ''), map)
+    };
+  }
+  return restored;
 }
 
 // review_events rows quote report text — and feedback_note is free text that
@@ -1046,16 +1181,23 @@ async function buildExemplarText(studyType, profile) {
 }
 
 // System instruction: static block first (identical bytes every call, so the
-// implicit cache can hit on it), then the exemplar block that varies by study
+// prompt cache can hit on it), then the exemplar block that varies by study
 // type. Returns the injected token estimate for logging.
-async function buildKnowledgeSystem(baseSystem, studyType, profileKey) {
+// scrubForClaude: exemplar reports (and, belt-and-braces, the knowledge
+// block) are pattern-scrubbed before injection into a Claude system prompt —
+// user-pasted exemplars aren't guaranteed identifier-free, and Claude sits
+// outside the BAA boundary. patternScrub is deterministic, so the composed
+// bytes stay stable and the prompt cache still hits.
+async function buildKnowledgeSystem(baseSystem, studyType, profileKey, opts = {}) {
   const profile = profileFor(profileKey);
   // Independent lookups — fetched together, not one after the other
   const [knowledge, exText] = await Promise.all([
     getKnowledgeBlock(profileKey),
     buildExemplarText(studyType, profile)
   ]);
-  return { system: baseSystem + knowledge + exText, injected: estimateTokens(knowledge) + estimateTokens(exText) };
+  const kb = opts.scrubForClaude ? scrub.patternScrub(knowledge).text : knowledge;
+  const ex = opts.scrubForClaude ? scrub.patternScrub(exText).text : exText;
+  return { system: baseSystem + kb + ex, injected: estimateTokens(kb) + estimateTokens(ex) };
 }
 
 // Heuristic: pasted report content is long; short inputs (finding descriptions,
@@ -1092,6 +1234,19 @@ async function upgradeImpression(reportText, studyType) {
   if (!m) return reportText;
   const body = reportText.slice(0, m.index).trimEnd();
   if (!body) return reportText;
+  // Claude-routed: the generated report is derived from user dictation and
+  // can carry identifiers, so it takes the same de-identified pipeline
+  // (extract findings → redact → generate → restore). A null result keeps
+  // the impression the structure pass already wrote.
+  if (providerFor(MODEL_IMPRESSION) === 'claude') {
+    const out = await runClaudeAssist({
+      action: 'impression', model: MODEL_IMPRESSION, message: body,
+      studyType, timing: {}, label: 'assist_fullreport_impression'
+    });
+    const impression = out && out.text ? out.text.trim() : '';
+    if (!impression) return reportText;
+    return `${body}\n\n${m[0]}\n${impression}`;
+  }
   const { system, injected } = await buildKnowledgeSystem(ASSIST_SYSTEM, studyType, 'impression');
   const impression = (await llmText({
     model: MODEL_IMPRESSION,
@@ -1233,13 +1388,10 @@ async function actionSystemFor(action, message, template) {
 // the final message is in hand, so a mid-flight retry or a server-side model
 // fallback can never leave partial text behind.
 async function runFreeform({ messages, systemFor, injected, label, useRefs }) {
-  // PROVIDER SPLIT: "Include references" ON must run on Gemini — Google
-  // Search grounding is the only grounded-search option across the two
-  // providers — so it routes to MODEL_RADQA_GROUNDED regardless of what
-  // MODEL_RADQA is set to. References OFF (and plain free text) runs the
-  // configured MODEL_RADQA/MODEL_CHAT, Claude by default. The refusal-degrade
-  // retry below stays on the grounded Gemini model (minus search) so one
-  // question never straddles providers mid-flight.
+  // Free text and Quick Rad Question run on Gemini in BOTH toggle states:
+  // arbitrary user input (pasted reports included) can't honor the
+  // de-identified Claude contract, and references ON additionally needs
+  // Google Search grounding, which only Gemini has.
   const model = useRefs ? MODEL_RADQA_GROUNDED : MODEL_CHAT;
   let searchEnabled = useRefs;
   let refsDropped = false;
@@ -1326,33 +1478,61 @@ app.post('/api/assist', async (req, res) => {
       return res.json({ type: 'text', ...out });
     }
 
-    const { system, injected, studyType } = await actionSystemFor(action, message, template);
     const actionModel = ACTION_MODEL[action] || MODEL_REPORT;
-    // Model wall time for the whole action (fullreport's impression pass
-    // included) — this is the latency_ms the feedback row will carry
+    // Model wall time for the whole action (redaction and fullreport's
+    // impression pass included) — the latency_ms the feedback row will carry
     const modelStart = Date.now();
     // timing.api_call_id links a later feedback row to this call's ledger row
-    // (for fullreport, the main structure call — the impression pass has its own)
+    // (for pipeline actions, the Claude call — the redact pass has its own)
     const timing = {};
-    let text = await llmText({
-      model: actionModel,
-      // Ledger call_type: 'assist_<action>', except synthesize which is its own
-      label: action === 'synthesize' ? 'synthesize' : 'assist_' + action,
-      system,
-      injected,
-      messages,
-      maxTokens: action === 'synthesize' ? 8000 : 4000,
-      effort: ACTION_EFFORT[action],
-      schema: action === 'describe' ? DESCRIBE_SCHEMA : undefined,
-      timing
-    });
+    let servedModel = actionModel;
+    let text = null;
+    let claudeOut = null;
 
-    // Second pass: rewrite the full report's IMPRESSION on MODEL_IMPRESSION
-    if (action === 'fullreport') {
-      try {
-        text = await upgradeImpression(text, studyType);
-      } catch (e) {
-        console.error('Impression pass failed — keeping original impression:', e.message);
+    // Claude-routed quick actions go through the de-identified pipeline
+    // (section extraction → reversible redaction → Claude → restoration →
+    // reassembly); null falls back to Gemini, which the BAA covers.
+    if (providerFor(actionModel) === 'claude') {
+      claudeOut = await runClaudeAssist({ action, model: actionModel, message, template, timing });
+    }
+    if (claudeOut && claudeOut.describe) {
+      return res.json({
+        type: 'describe',
+        findings: claudeOut.describe.findings,
+        impression: claudeOut.describe.impression,
+        model: actionModel,
+        latency_ms: Date.now() - modelStart,
+        api_call_id: timing.api_call_id || null
+      });
+    }
+    if (claudeOut) {
+      text = claudeOut.text;
+    } else {
+      const geminiModel = providerFor(actionModel) === 'claude'
+        ? (action === 'impression' || action === 'synthesize' ? MODEL_GEMINI_FALLBACK : MODEL_REPORT)
+        : actionModel;
+      servedModel = geminiModel;
+      const { system, injected, studyType } = await actionSystemFor(action, message, template);
+      text = await llmText({
+        model: geminiModel,
+        // Ledger call_type: 'assist_<action>', except synthesize which is its own
+        label: action === 'synthesize' ? 'synthesize' : 'assist_' + action,
+        system,
+        injected,
+        messages,
+        maxTokens: action === 'synthesize' ? 8000 : 4000,
+        effort: ACTION_EFFORT[action],
+        schema: action === 'describe' ? DESCRIBE_SCHEMA : undefined,
+        timing
+      });
+
+      // Second pass: rewrite the full report's IMPRESSION on MODEL_IMPRESSION
+      if (action === 'fullreport') {
+        try {
+          text = await upgradeImpression(text, studyType);
+        } catch (e) {
+          console.error('Impression pass failed — keeping original impression:', e.message);
+        }
       }
     }
     const latency_ms = Date.now() - modelStart;
@@ -1364,17 +1544,17 @@ app.post('/api/assist', async (req, res) => {
           type: 'describe',
           findings: String(parsed.findings || '').trim(),
           impression: String(parsed.impression || '').trim(),
-          model: actionModel,
+          model: servedModel,
           latency_ms,
           api_call_id: timing.api_call_id || null
         });
       } catch (e) {
         // If JSON parsing fails, fall back to plain text so the user still gets an answer
-        return res.json({ type: 'text', text, model: actionModel, latency_ms, api_call_id: timing.api_call_id || null });
+        return res.json({ type: 'text', text, model: servedModel, latency_ms, api_call_id: timing.api_call_id || null });
       }
     }
 
-    res.json({ type: 'text', text, model: actionModel, latency_ms, api_call_id: timing.api_call_id || null });
+    res.json({ type: 'text', text, model: servedModel, latency_ms, api_call_id: timing.api_call_id || null });
   } catch (error) {
     console.error('Assist error:', error.message);
     res.status(500).json({ error: 'Assist request failed', details: error.message });
@@ -1501,6 +1681,228 @@ async function applyReviewDecisions(reportId, decisions) {
   }
 }
 
+// ============ De-identified Claude pipeline ============
+// Claude (first-party API, outside the GCP BAA) receives ONLY {study type,
+// redacted findings, redacted impression} (+ redacted notes / user text where
+// the task needs them). Steps per task: deterministic section extraction →
+// reversible redaction (Gemini flash-lite detection) → Claude → validation
+// against what Claude saw → deterministic restoration → reassembly. Every
+// helper returns null when the pipeline cannot run (no FINDINGS section, no
+// key, redaction model pass failed, PHI guard tripped) — callers fall back to
+// a Gemini model, which the BAA covers for identifiable text.
+
+const canonWs = s => String(s).replace(/\s+/g, ' ').trim();
+
+// Shared tail of the review/readout pipelines: parse Claude's edits, keep
+// only those anchored in the redacted payload Claude actually saw (evidence
+// included), restore every text field, and hand both partitions back.
+function validateAndRestoreEdits(rawEdits, redactedPayload, map) {
+  const canonPayload = canonWs(redactedPayload);
+  const edits = [];
+  const dropped = [];
+  for (const e of rawEdits || []) {
+    if (!e || typeof e.original_text !== 'string' || typeof e.suggested_text !== 'string') continue;
+    const quotes = e.evidence && typeof e.evidence === 'object'
+      ? [e.evidence.impression_quote, e.evidence.findings_quote].filter(q => typeof q === 'string' && q.trim())
+      : [];
+    const anchored = canonPayload.includes(canonWs(e.original_text));
+    const evidenceOk = quotes.every(q => canonPayload.includes(canonWs(q)));
+    (anchored && evidenceOk ? edits : dropped).push(restoreEditFields(e, map));
+  }
+  return { edits, dropped };
+}
+
+// Draft review. Returns { rawEdits, predropped } with restored text, or null.
+async function claudeDeidReview({ report, studyType, reportId, timing }) {
+  if (!claude.configured) return null;
+  const parts = splitReportSections(report);
+  if (!parts || !parts.findings) {
+    console.warn('[deid] review falling back to Gemini: no FINDINGS section parsed');
+    return null;
+  }
+  const red = await redactReversible({ findings: parts.findings, impression: parts.impression || '' }, reportId);
+  if (!red.ok) return null;
+  const payload = `STUDY TYPE: ${studyType || 'unknown'}\n\nFINDINGS:\n${red.texts.findings}\n\nIMPRESSION:\n${red.texts.impression || '(none provided)'}`;
+  const { system, injected } = await buildKnowledgeSystem(CLAUDE_REVIEW_SYSTEM, studyType, 'review', { scrubForClaude: true });
+  let rawEdits = null;
+  for (let attempt = 1; attempt <= 2 && !rawEdits; attempt++) {
+    let text;
+    try {
+      text = await llmText({
+        model: MODEL_REVIEW, label: 'review', system, injected,
+        message: `Review these de-identified report sections:\n\n${payload}`,
+        maxTokens: 8000, effort: DRAFT_REVIEW_EFFORT, timing,
+        reportId: reportId || undefined, deidentified: true
+      });
+    } catch (e) {
+      if (e.code === 'PHI_GUARD') { console.warn(`[deid] review falling back to Gemini: ${e.message}`); return null; }
+      throw e;
+    }
+    try {
+      const parsed = parseModelJson(text);
+      rawEdits = Array.isArray(parsed) ? parsed : (parsed.edits || []);
+    } catch (e) {
+      const salvaged = salvageEditsJson(text);
+      if (salvaged && Array.isArray(salvaged.edits)) rawEdits = salvaged.edits;
+      else console.error(`[deid] review JSON parse failed, attempt ${attempt} (${text.length} chars): ${e.message}`);
+    }
+  }
+  if (!rawEdits) return { rawEdits: [], predropped: [] };
+  const { edits, dropped } = validateAndRestoreEdits(rawEdits, payload, red.map);
+  return { rawEdits: edits, predropped: dropped };
+}
+
+// Read-out integration. Notes are the attending's feedback — free text about
+// the case, redacted with the same map so a name shared between notes and
+// findings gets one token. Only findings/impression of the DRAFT are sent.
+async function claudeDeidReadout({ draft, notes, studyType, reportId, timing }) {
+  if (!claude.configured) return null;
+  const parts = splitReportSections(draft);
+  if (!parts || !parts.findings) {
+    console.warn('[deid] readout falling back to Gemini: no FINDINGS section parsed');
+    return null;
+  }
+  const red = await redactReversible({ findings: parts.findings, impression: parts.impression || '', notes }, reportId);
+  if (!red.ok) return null;
+  const payload = `FINDINGS:\n${red.texts.findings}\n\nIMPRESSION:\n${red.texts.impression || '(none provided)'}`;
+  const { system, injected } = await buildKnowledgeSystem(
+    READOUT_INTEGRATE_SYSTEM + CLAUDE_DEID_CONTRACT, studyType, 'readout', { scrubForClaude: true });
+  let text;
+  try {
+    text = await llmText({
+      model: MODEL_REVIEW, label: 'readout_integrate', system, injected,
+      message: `Attending read-out feedback:\n${red.texts.notes}\n\nResident's current draft (de-identified sections):\n\n${payload}`,
+      maxTokens: 8000, timing, reportId, deidentified: true
+    });
+  } catch (e) {
+    if (e.code === 'PHI_GUARD') { console.warn(`[deid] readout falling back to Gemini: ${e.message}`); return null; }
+    throw e;
+  }
+  let rawEdits;
+  try {
+    const parsed = parseModelJson(text);
+    rawEdits = Array.isArray(parsed) ? parsed : (parsed.edits || []);
+  } catch (e) {
+    console.error(`[deid] readout JSON parse failed (${text.length} chars): ${e.message}`);
+    return { rawEdits: [], predropped: [] };
+  }
+  const { edits, dropped } = validateAndRestoreEdits(rawEdits, payload, red.map);
+  return { rawEdits: edits, predropped: dropped };
+}
+
+// Assist tasks (impression, reword, describe, synthesize). Chat history is
+// deliberately NOT sent on these — earlier turns are outside the redaction —
+// so pipeline actions are one-shot on the text provided. Returns
+// { text } | { describe: {findings, impression} } | null (→ Gemini fallback).
+async function runClaudeAssist({ action, model, message, template, studyType, timing, label }) {
+  if (!claude.configured) return null;
+  const callLabel = label || (action === 'synthesize' ? 'synthesize' : 'assist_' + action);
+  try {
+    if (action === 'describe') {
+      const red = await redactReversible({ input: message }, null);
+      if (!red.ok) return null;
+      const { system, injected } = await buildKnowledgeSystem(
+        ASSIST_SYSTEM + CLAUDE_DEID_CONTRACT, null, 'describe', { scrubForClaude: true });
+      const text = await llmText({
+        model, label: callLabel, system, injected,
+        message: `${ASSIST_ACTIONS.describe}\n\n${red.texts.input}`,
+        maxTokens: 4000, effort: ACTION_EFFORT.describe, timing, deidentified: true
+      });
+      const parsed = parseModelJson(text);
+      return { describe: {
+        findings: scrub.restoreRedaction(String(parsed.findings || '').trim(), red.map),
+        impression: scrub.restoreRedaction(String(parsed.impression || '').trim(), red.map)
+      } };
+    }
+
+    if (action === 'impression') {
+      const parts = splitReportSections(message);
+      const body = parts && parts.findings ? parts.findings : message;
+      const st = studyType !== undefined ? studyType
+        : (looksLikeReport(message) ? await detectStudyType(message).catch(() => null) : null);
+      const red = await redactReversible({ body }, null);
+      if (!red.ok) return null;
+      const { system, injected } = await buildKnowledgeSystem(
+        ASSIST_SYSTEM + CLAUDE_DEID_CONTRACT, st, 'impression', { scrubForClaude: true });
+      const text = await llmText({
+        model, label: callLabel, system, injected,
+        message: `${ASSIST_ACTIONS.impression}\n\n${red.texts.body}`,
+        maxTokens: 2000, effort: ACTION_EFFORT.impression, timing, deidentified: true
+      });
+      return { text: scrub.restoreRedaction(text, red.map) };
+    }
+
+    if (action === 'reword') {
+      const parts = splitReportSections(message);
+      if (parts && parts.findings) {
+        // Structured report: Claude rewords findings + impression; the other
+        // sections are spliced through verbatim and never leave the server.
+        const st = await detectStudyType(message).catch(() => null);
+        const red = await redactReversible({ findings: parts.findings, impression: parts.impression || '' }, null);
+        if (!red.ok) return null;
+        const { system, injected } = await buildKnowledgeSystem(
+          ASSIST_SYSTEM + CLAUDE_DEID_CONTRACT, st, 'reword', { scrubForClaude: true });
+        const instr = 'Reword the FINDINGS and IMPRESSION below. Keep the exact meaning, improve clarity and flow, and use standard radiology reporting register. Preserve each section\'s structure and line breaks.' + CLAUDE_SECTIONS_JSON;
+        const text = await llmText({
+          model, label: callLabel, system, injected,
+          message: `${instr}\n\nFINDINGS:\n${red.texts.findings}\n\nIMPRESSION:\n${red.texts.impression || '(none provided)'}`,
+          maxTokens: 8000, effort: ACTION_EFFORT.reword, timing, deidentified: true
+        });
+        const parsed = parseModelJson(text);
+        const nf = scrub.restoreRedaction(String(parsed.findings || '').trim(), red.map);
+        const ni = scrub.restoreRedaction(String(parsed.impression || '').trim(), red.map);
+        if (!nf) return null;
+        return { text: spliceSections(parts, nf, parts.impression ? ni : '') };
+      }
+      // Free text (a sentence, a paragraph, a section): redact → reword → restore
+      const red = await redactReversible({ input: message }, null);
+      if (!red.ok) return null;
+      const { system, injected } = await buildKnowledgeSystem(
+        ASSIST_SYSTEM + CLAUDE_DEID_CONTRACT, null, 'reword', { scrubForClaude: true });
+      const text = await llmText({
+        model, label: callLabel, system, injected,
+        message: `${ASSIST_ACTIONS.reword}\n\n${red.texts.input}`,
+        maxTokens: 4000, effort: ACTION_EFFORT.reword, timing, deidentified: true
+      });
+      return { text: scrub.restoreRedaction(text, red.map) };
+    }
+
+    if (action === 'synthesize') {
+      const parts = splitReportSections(template);
+      // A prior report whose sections don't parse would need a whole-report
+      // rewrite — incompatible with the contract → Gemini.
+      if (!parts || !parts.findings) {
+        console.warn('[deid] synthesize falling back to Gemini: prior report has no FINDINGS section');
+        return null;
+      }
+      const st = await detectStudyType(template).catch(() => null);
+      const red = await redactReversible({ findings: parts.findings, impression: parts.impression || '', notes: message }, null);
+      if (!red.ok) return null;
+      const { system, injected } = await buildKnowledgeSystem(
+        ASSIST_SYSTEM + CLAUDE_DEID_CONTRACT, st, 'synthesize', { scrubForClaude: true });
+      const instr = 'Rewrite the PRIOR FINDINGS and PRIOR IMPRESSION so they incorporate the NEW INFORMATION, in the user\'s own reporting voice. This is an edit, not a fresh report: apply everything the new information states (it wins on conflict), leave untouched anything it does not address, and keep the impression consistent with the findings you changed. Never invent findings, measurements, or comparisons that appear in neither input; use [bracketed placeholders] for details neither input supplies.' + CLAUDE_SECTIONS_JSON;
+      const text = await llmText({
+        model, label: callLabel, system, injected,
+        message: `${instr}\n\nPRIOR FINDINGS:\n${red.texts.findings}\n\nPRIOR IMPRESSION:\n${red.texts.impression || '(none provided)'}\n\nNEW INFORMATION:\n${red.texts.notes}`,
+        maxTokens: 8000, effort: ACTION_EFFORT.synthesize, timing, deidentified: true
+      });
+      const parsed = parseModelJson(text);
+      const nf = scrub.restoreRedaction(String(parsed.findings || '').trim(), red.map);
+      const ni = scrub.restoreRedaction(String(parsed.impression || '').trim(), red.map);
+      if (!nf) return null;
+      return { text: spliceSections(parts, nf, ni) };
+    }
+
+    return null;
+  } catch (e) {
+    if (e.isRefusal) throw e;
+    // PHI guard trips and provider outages both land here: Gemini (BAA) takes
+    // the request instead. Types/messages only — never payload text.
+    console.warn(`[deid] ${action} falling back to Gemini: ${e.message}`);
+    return null;
+  }
+}
+
 app.post('/api/draft/review', async (req, res) => {
   try {
     const { report, study_type } = req.body;
@@ -1513,44 +1915,60 @@ app.post('/api/draft/review', async (req, res) => {
     if (!studyType) {
       try { studyType = await detectStudyType(report); } catch (e) { /* non-fatal */ }
     }
-    const { system, injected } = await buildKnowledgeSystem(DRAFT_REVIEW_SYSTEM, studyType, 'review');
 
     const reportId = typeof req.body.report_id === 'string' ? req.body.report_id.trim() : '';
 
-    // Gemini occasionally falls into a decode loop that truncates the JSON.
-    // Salvage what parses; if nothing does, retry once before giving up.
-    let rawEdits = null;
     // timing carries the latency, served model, and api_calls id of the
     // attempt that produced the edits (each attempt is its own ledger row)
     const timing = {};
-    for (let attempt = 1; attempt <= 2 && !rawEdits; attempt++) {
-      const text = await llmText({
-        model: MODEL_REVIEW,
-        label: 'review',
-        system,
-        injected,
-        message: `Review this radiology report draft:\n\n${report}`,
-        maxTokens: 8000,
-        effort: DRAFT_REVIEW_EFFORT,
-        schema: REVIEW_EDITS_SCHEMA,
-        timing,
-        reportId: reportId || undefined
-      });
-      try {
-        const parsed = parseModelJson(text);
-        rawEdits = Array.isArray(parsed) ? parsed : (parsed.edits || []);
-      } catch (e) {
-        // Never log the payload — it quotes the report
-        const salvaged = salvageEditsJson(text);
-        if (salvaged && Array.isArray(salvaged.edits)) {
-          console.error(`Review JSON salvaged after truncation (${text.length} chars)`);
-          rawEdits = salvaged.edits;
-        } else {
-          console.error(`Review JSON parse failed, attempt ${attempt} (${text.length} chars): ${e.message}`);
+    let rawEdits = null;
+    // Edits the de-identified pipeline dropped against the payload Claude saw
+    // (already restored) — recorded as dropped_validation like any other
+    let predropped = [];
+
+    // De-identified Claude pipeline first; null → Gemini (BAA) fallback below
+    if (providerFor(MODEL_REVIEW) === 'claude') {
+      const out = await claudeDeidReview({ report, studyType, reportId, timing });
+      if (out) {
+        rawEdits = out.rawEdits;
+        predropped = out.predropped;
+      }
+    }
+
+    if (!rawEdits) {
+      const geminiModel = providerFor(MODEL_REVIEW) === 'claude' ? MODEL_GEMINI_FALLBACK : MODEL_REVIEW;
+      const { system, injected } = await buildKnowledgeSystem(DRAFT_REVIEW_SYSTEM, studyType, 'review');
+      // Gemini occasionally falls into a decode loop that truncates the JSON.
+      // Salvage what parses; if nothing does, retry once before giving up.
+      for (let attempt = 1; attempt <= 2 && !rawEdits; attempt++) {
+        const text = await llmText({
+          model: geminiModel,
+          label: 'review',
+          system,
+          injected,
+          message: `Review this radiology report draft:\n\n${report}`,
+          maxTokens: 8000,
+          effort: DRAFT_REVIEW_EFFORT,
+          schema: REVIEW_EDITS_SCHEMA,
+          timing,
+          reportId: reportId || undefined
+        });
+        try {
+          const parsed = parseModelJson(text);
+          rawEdits = Array.isArray(parsed) ? parsed : (parsed.edits || []);
+        } catch (e) {
+          // Never log the payload — it quotes the report
+          const salvaged = salvageEditsJson(text);
+          if (salvaged && Array.isArray(salvaged.edits)) {
+            console.error(`Review JSON salvaged after truncation (${text.length} chars)`);
+            rawEdits = salvaged.edits;
+          } else {
+            console.error(`Review JSON parse failed, attempt ${attempt} (${text.length} chars): ${e.message}`);
+          }
         }
       }
     }
-    if (!rawEdits) return res.json({ edits: [] });
+    if (!rawEdits) rawEdits = [];
 
     const bodyStart = reviewableFrom(report);
     // The COMPARISON line(s) are the one header exception: editable, but only
@@ -1620,6 +2038,12 @@ app.post('/api/draft/review', async (req, res) => {
     }
     // Count only — how often the model attempts unsupported claims (no PHI)
     if (droppedEvidence) console.log(`review: dropped ${droppedEvidence} edit(s) failing evidence validation`);
+    // The de-identified pipeline's own validation drops join the same bucket
+    droppedEdits.push(...predropped);
+
+    // Deterministic temporal/COMPARISON consistency cards — server-side, no
+    // model, runs on every review regardless of provider (see temporalCheck)
+    const temporalCards = temporalCheck(report);
 
     // Telemetry — survivors gain event_id; never blocks the review itself.
     // model/api_call_id are copies from the ledger row of the producing call.
@@ -1629,10 +2053,16 @@ app.post('/api/draft/review', async (req, res) => {
           { source: 'review', model: timing.model || MODEL_REVIEW,
             latency_ms: timing.latency_ms, api_call_id: timing.api_call_id },
           edits, droppedEdits);
+        if (temporalCards.length) {
+          await recordReviewEvents(reportId,
+            { source: 'review', model: 'server-temporal-check', latency_ms: null, api_call_id: null },
+            temporalCards, []);
+        }
       } catch (e) {
         console.error('review telemetry failed:', e.message);
       }
     }
+    edits.push(...temporalCards);
 
     // body_start lets the client anchor each edit inside the body too, so a
     // phrase that also appears in the header can't be highlighted up there
@@ -2200,7 +2630,71 @@ function splitReportSections(text) {
   }
   const findings = f ? (t.slice(f.after, imp ? imp.start : t.length).trim() || null) : null;
   const impression = imp ? (t.slice(imp.after).trim() || null) : null;
-  return { full_text: t, findings, impression };
+  // offsets index into full_text (the normalized text) so the de-identified
+  // pipeline can splice rewritten sections back around untouched content
+  return { full_text: t, findings, impression, offsets: { findings: f, impression: imp } };
+}
+
+// Reassemble a full report around rewritten findings/impression: only the
+// sections the pipeline sent out come back; everything else — header,
+// history, technique, comparison — is spliced through verbatim from the
+// original and never left the server.
+function spliceSections(parts, newFindings, newImpression) {
+  const t = parts.full_text;
+  const f = parts.offsets.findings;
+  const imp = parts.offsets.impression;
+  let out = t.slice(0, f.after) + '\n' + String(newFindings || parts.findings || '').trim();
+  if (imp) {
+    const impressionText = String(newImpression || '').trim() || parts.impression || '';
+    out += '\n\n' + t.slice(imp.start, imp.after).trim() + '\n' + impressionText;
+  }
+  return out;
+}
+
+// ---- Deterministic temporal/COMPARISON consistency check (no model) ----
+// The old prompt rule, now server-side: temporal language in the body
+// ("previously", "interval decrease", "new from prior") while the COMPARISON
+// line says None is an inconsistency. Emits the same edit-card shape the
+// model review produces (category 'inconsistency', evidence quoting the
+// report) so the client renders it identically. Claude never sees the
+// COMPARISON line, and the Gemini prompt no longer carries the rule — this
+// runs on every review regardless of provider.
+const TEMPORAL_LANGUAGE = /\b(?:previously|compared\s+(?:to|with)\s+(?:the\s+)?prior|interval(?:ly)?\s+(?:change|increase|decrease|growth|resolution|development|enlargement|improvement|worsening)|new\s+(?:from|since)\s+(?:the\s+)?prior|since\s+(?:the\s+)?(?:prior|previous)\s+(?:exam|study|imaging)|no\s+longer\s+(?:seen|visualized|identified)|not\s+seen\s+on\s+(?:the\s+)?prior|unchanged\s+from\s+(?:the\s+)?prior|stable\s+(?:from|since|compared\s+(?:to|with))|redemonstrat\w*|again\s+(?:seen|noted|demonstrated|visualized))\b/i;
+const REMEASURED = /re-?\s?measured/i;
+const NO_COMPARISON = /\b(?:none|n\/a|not?\s+(?:prior|previous|comparison|available)|no\s+(?:prior|previous)\b[^\n]*)/i;
+
+function temporalCheck(report) {
+  const compMatch = report.match(/^[ \t]*(?:\*\*)?[ \t]*COMPARISON\b[^\n]*$/im);
+  if (!compMatch) return [];
+  const compLine = compMatch[0];
+  const compValue = compLine.replace(/^[ \t]*(?:\*\*)?[ \t]*COMPARISON[^:]*:?[ \t]*/i, '').replace(/\*\*/g, '').trim();
+  // A named prior (anything that isn't a "no comparison" statement) — no conflict
+  if (compValue && !NO_COMPARISON.test(compValue)) return [];
+
+  // Scan the body (findings onward) sentence-wise; "(remeasured)" sentences
+  // are measurement revisions of THIS exam, exempt by rule
+  const body = report.slice(reviewableFrom(report));
+  const bodyStartsAt = reviewableFrom(report);
+  let hit = null;
+  const sentenceRe = /[^.\n]*[.\n]|[^.\n]+$/g;
+  let m;
+  while ((m = sentenceRe.exec(body)) !== null) {
+    const sentence = m[0];
+    if (!TEMPORAL_LANGUAGE.test(sentence) || REMEASURED.test(sentence)) continue;
+    // The evidence quote must be an exact substring of the report
+    hit = report.slice(bodyStartsAt + m.index, bodyStartsAt + m.index + sentence.length).trim();
+    if (hit) break;
+  }
+  if (!hit) return [];
+
+  const headingPart = compLine.match(/^[ \t]*(?:\*\*)?[ \t]*COMPARISON[^:]*:?/i)[0];
+  return [{
+    original_text: compLine,
+    suggested_text: headingPart.trimEnd() + (headingPart.trimEnd().endsWith(':') ? '' : ':') + ' [prior exam and date]',
+    reason: `The body uses temporal language ("${hit.slice(0, 80)}${hit.length > 80 ? '…' : ''}") but the COMPARISON line names no prior — add the prior exam or remove the temporal wording.`,
+    category: 'inconsistency',
+    evidence: { impression_quote: hit, findings_quote: compLine }
+  }];
 }
 
 // Store (or refresh) one report's row. The whole report is always kept; the
@@ -2390,29 +2884,42 @@ app.post('/api/reports/:id/integrate-notes', async (req, res) => {
       return res.status(400).json({ error: 'No read-out notes to integrate' });
     }
 
-    const { system, injected } = await buildKnowledgeSystem(READOUT_INTEGRATE_SYSTEM, report.study_type, 'readout');
     const timing = {};
-    const text = await llmText({
-      model: MODEL_REVIEW,
-      label: 'readout_integrate',
-      system,
-      injected,
-      message: `Attending read-out feedback:\n${notes}\n\nResident's current draft:\n${draft}`,
-      maxTokens: 8000,
-      schema: READOUT_EDITS_SCHEMA,
-      timing,
-      reportId: report.id
-    });
+    let rawEdits = null;
+    let predropped = [];
 
-    let parsed;
-    try {
-      parsed = parseModelJson(text);
-    } catch (e) {
-      // Never log the payload — it quotes the draft and the notes
-      console.error(`Integrate JSON parse failed (${text.length} chars): ${e.message}`);
-      return res.json({ edits: [] });
+    // De-identified Claude pipeline first; null → Gemini (BAA) fallback below
+    if (providerFor(MODEL_REVIEW) === 'claude') {
+      const out = await claudeDeidReadout({ draft, notes, studyType: report.study_type, reportId: report.id, timing });
+      if (out) {
+        rawEdits = out.rawEdits;
+        predropped = out.predropped;
+      }
     }
-    const rawEdits = Array.isArray(parsed) ? parsed : (parsed.edits || []);
+
+    if (!rawEdits) {
+      const geminiModel = providerFor(MODEL_REVIEW) === 'claude' ? MODEL_GEMINI_FALLBACK : MODEL_REVIEW;
+      const { system, injected } = await buildKnowledgeSystem(READOUT_INTEGRATE_SYSTEM, report.study_type, 'readout');
+      const text = await llmText({
+        model: geminiModel,
+        label: 'readout_integrate',
+        system,
+        injected,
+        message: `Attending read-out feedback:\n${notes}\n\nResident's current draft:\n${draft}`,
+        maxTokens: 8000,
+        schema: READOUT_EDITS_SCHEMA,
+        timing,
+        reportId: report.id
+      });
+      try {
+        const parsed = parseModelJson(text);
+        rawEdits = Array.isArray(parsed) ? parsed : (parsed.edits || []);
+      } catch (e) {
+        // Never log the payload — it quotes the draft and the notes
+        console.error(`Integrate JSON parse failed (${text.length} chars): ${e.message}`);
+        return res.json({ edits: [] });
+      }
+    }
     const relocate = originalRelocator(draft);
     const candidates = rawEdits
       .filter(e => e && typeof e.original_text === 'string' && typeof e.suggested_text === 'string')
@@ -2430,6 +2937,7 @@ app.post('/api/reports/:id/integrate-notes', async (req, res) => {
       if (draft.includes(e.original_text) && e.original_text !== e.suggested_text) edits.push(e);
       else droppedEdits.push(e);
     }
+    droppedEdits.push(...predropped);
 
     // Telemetry — same shape as the review pass, source 'readout'
     try {
@@ -2760,16 +3268,38 @@ app.get('/auth/google/callback', async (req, res) => {
   }
 });
 
+// Minimal first-party Claude round trip — key validity + billing check from
+// wherever the service runs. Static one-liner, no report text, so the
+// deidentified assertion is trivially true; the call still writes a ledger
+// row (call_type 'selftest') like any other.
+app.get('/api/admin/llm-selftest', async (req, res) => {
+  try {
+    const model = typeof req.query.model === 'string' && /^claude-[a-z0-9-]+$/.test(req.query.model)
+      ? req.query.model : 'claude-sonnet-4-6';
+    const timing = {};
+    const text = await llmText({
+      model, label: 'selftest',
+      message: 'Reply with exactly: OK',
+      maxTokens: 64, effort: 'low', timing, deidentified: true
+    });
+    res.json({ ok: true, model, served_text: text.slice(0, 40), latency_ms: timing.latency_ms, api_call_id: timing.api_call_id });
+  } catch (error) {
+    console.error('LLM selftest error:', error.message);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
     service: 'Flow Dictation API',
     llm: {
-      provider: 'vertex-ai', project: gemini.PROJECT, location: gemini.LOCATION,
-      claude_region: claude.REGION,
+      gemini: { project: gemini.PROJECT, location: gemini.LOCATION },
+      anthropic_first_party: claude.configured,
       detect: MODEL_DETECT, report: MODEL_REPORT, review: MODEL_REVIEW,
-      impression: MODEL_IMPRESSION, radqa: MODEL_RADQA, radqa_grounded: MODEL_RADQA_GROUNDED,
-      synthesize: MODEL_SYNTHESIZE, chat: MODEL_CHAT
+      impression: MODEL_IMPRESSION, reword: MODEL_REWORD, describe: MODEL_DESCRIBE,
+      radqa: MODEL_RADQA, radqa_grounded: MODEL_RADQA_GROUNDED,
+      synthesize: MODEL_SYNTHESIZE, chat: MODEL_CHAT, gemini_fallback: MODEL_GEMINI_FALLBACK
     },
     auth: { google: googleLoginConfigured, password: !!APP_PASSWORD, allowed_emails: ALLOWED_EMAILS.length },
     database: db.configured ? 'configured' : 'not configured'
@@ -3103,7 +3633,7 @@ async function backfillActiveShift() {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🏥 Flow Dictation running on port ${PORT}`);
-  console.log(`✨ Vertex AI models: ${MODEL_REPORT} (reports), ${MODEL_REVIEW} (review) — full routing table above`);
+  console.log(`✨ Models: ${MODEL_REPORT} (reports), ${MODEL_REVIEW} (review, de-identified pipeline) — full routing table above`);
   console.log(`🗄️  Database: ${db.configured ? db.describe() : 'NOT CONFIGURED'}`);
   ensureTelemetrySchema();
   backfillActiveShift();

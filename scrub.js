@@ -108,4 +108,120 @@ function applyReplacements(text, replacements) {
   return { text: out, applied };
 }
 
-module.exports = { patternScrub, applyReplacements, SCRUB_SCHEMA, SCRUB_SYSTEM };
+// ---- Reversible redaction (the de-identified Claude pipeline) ----
+// Same DETECTION as the destructive scrub — the pattern pass above plus the
+// model pass the caller runs — but a different REPLACEMENT strategy: each
+// distinct identifier string becomes a UNIQUE INDEXED token ([NAME_1],
+// [DATE_2], [MRN_1], ...) and the token -> original map is returned so the
+// server can deterministically restore the text later. The map never leaves
+// the server. Identical identifier strings share one token within a redaction.
+
+// Token stems are a small closed set so restoreRedaction's regex can be exact.
+const TOKEN_RE = /\[(?:NAME|DATE|AGE|MRN|PHONE|SSN|ACCESSION|LOCATION|EMAIL|ID)_\d+\]/g;
+
+// Appended to SCRUB_SYSTEM when the model pass runs in reversible-redaction
+// mode, where the earlier pass emits INDEXED tokens the base prompt's
+// placeholder examples don't cover.
+const REDACT_TOKENS_NOTE = `
+
+Indexed tokens like [NAME_1], [DATE_2], [MRN_1] are ALREADY-REDACTED placeholders from the earlier deterministic pass — leave them exactly as written and never include them in your replacements.`;
+
+function tokenStem(type) {
+  const t = String(type || '').toUpperCase();
+  if (t.includes('NAME')) return 'NAME';
+  if (t.includes('DATE')) return 'DATE';
+  if (t.includes('AGE')) return 'AGE';
+  for (const s of ['MRN', 'PHONE', 'SSN', 'ACCESSION', 'LOCATION', 'EMAIL']) {
+    if (t.includes(s)) return s;
+  }
+  return 'ID';
+}
+
+// One redaction's shared state, threaded across every text it covers so the
+// same name found in findings, impression, and notes gets the same token.
+function newRedaction() {
+  return { map: {}, byIdentifier: new Map(), counters: {} };
+}
+
+function tokenFor(state, type, identifier) {
+  const stem = tokenStem(type);
+  const key = stem + ' ' + identifier;
+  let token = state.byIdentifier.get(key);
+  if (!token) {
+    state.counters[stem] = (state.counters[stem] || 0) + 1;
+    token = `[${stem}_${state.counters[stem]}]`;
+    state.byIdentifier.set(key, token);
+    state.map[token] = identifier;
+  }
+  return token;
+}
+
+// Pattern pass, reversible flavor: same PATTERNS, indexed tokens instead of
+// bare placeholders.
+function patternRedact(text, state) {
+  let out = String(text);
+  for (const { type, re } of PATTERNS) {
+    out = out.replace(re, m => tokenFor(state, type, m));
+  }
+  return out;
+}
+
+// Apply model-pass replacements reversibly. The model returns {original,
+// replacement} where replacement is a placeholder alone or the original with
+// just the identifier swapped for a placeholder; recover the identifier by
+// peeling the shared prefix/suffix so only the identifier itself is tokenized.
+// When that derivation fails (multiple placeholders, mismatched context), the
+// whole original is tokenized — coarser, but still exactly reversible.
+function applyReplacementsReversible(text, replacements, state) {
+  let out = String(text);
+  let applied = 0;
+  for (const r of replacements || []) {
+    if (!r || typeof r.original !== 'string' || typeof r.replacement !== 'string') continue;
+    if (r.original.length < 2 || !out.includes(r.original)) continue;
+    const m = /\[([A-Z][A-Z0-9+ ]*)\]/.exec(r.replacement);
+    if (!m) continue;                                          // must introduce a placeholder
+    if (r.replacement.length > r.original.length + 40) continue;
+    const prefix = r.replacement.slice(0, m.index);
+    const suffix = r.replacement.slice(m.index + m[0].length);
+    let identifier = r.original, pre = '', post = '';
+    const singlePlaceholder = !/\[[A-Z][A-Z0-9+ ]*\]/.test(prefix + suffix);
+    if (singlePlaceholder &&
+        r.original.startsWith(prefix) && r.original.endsWith(suffix) &&
+        r.original.length > prefix.length + suffix.length) {
+      identifier = r.original.slice(prefix.length, r.original.length - suffix.length);
+      pre = prefix;
+      post = suffix;
+    }
+    // Never re-token our own tokens: the model occasionally "normalizes" an
+    // indexed token it doesn't recognize ([NAME_1] → [PHYSICIAN NAME]);
+    // applying that would chain tokens ([NAME_2] → "[NAME_1]") and leave a
+    // literal token behind after the single-pass restoration.
+    TOKEN_RE.lastIndex = 0;
+    if (TOKEN_RE.test(identifier)) continue;
+    const token = tokenFor(state, m[1], identifier);
+    out = out.split(pre + identifier + post).join(pre + token + post);
+    // The model anchors identifiers in context; other occurrences of the same
+    // identifier may sit outside that context. This payload leaves the BAA
+    // boundary, so sweep the remaining occurrences too — but only when the
+    // identifier is unambiguous enough that a bare global replace can't touch
+    // clinical prose (multi-word, or a single long word).
+    const unambiguous = /\s/.test(identifier.trim()) || identifier.trim().length >= 6;
+    if (unambiguous && out.includes(identifier)) {
+      out = out.split(identifier).join(token);
+    }
+    applied++;
+  }
+  return { text: out, applied };
+}
+
+// Deterministic reverse substitution — no model call. Unknown tokens (a
+// bracketed string the model happened to write) are left as-is.
+function restoreRedaction(text, map) {
+  return String(text).replace(new RegExp(TOKEN_RE.source, 'g'),
+    t => (map && t in map ? map[t] : t));
+}
+
+module.exports = {
+  patternScrub, applyReplacements, SCRUB_SCHEMA, SCRUB_SYSTEM, REDACT_TOKENS_NOTE,
+  newRedaction, patternRedact, applyReplacementsReversible, restoreRedaction
+};

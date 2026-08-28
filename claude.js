@@ -1,24 +1,65 @@
-// Claude on Vertex AI (Anthropic partner models) for Flow Dictation. Mirrors
-// gemini.js's generate() contract exactly — same inputs (Gemini-shaped
-// contents), same outputs ({text, usage, finishReason, served}) — so the
-// server's call layer can route by model prefix without caring which provider
-// answers. The Gemini client stays fully intact; this is additive.
+// Claude via the Anthropic FIRST-PARTY API for Flow Dictation. Mirrors
+// gemini.js's generate() contract — same inputs (Gemini-shaped contents),
+// same outputs ({text, usage, finishReason, served}) — so the server's call
+// layer routes by model prefix without caring which provider answers.
 //
-// Auth is Application Default Credentials only, like gemini.js: the Cloud Run
-// service account in production, `gcloud auth application-default login`
-// locally. No Anthropic API keys anywhere — the AnthropicVertex client nulls
-// them out by design and authenticates with Google OAuth.
+// THE CONTRACT THIS CLIENT ENFORCES: Claude is outside the GCP BAA boundary,
+// so it must NEVER receive PHI, dates, or any report section beyond findings,
+// impression, and the study type. The server's pipeline extracts those
+// sections and reversibly redacts identifiers BEFORE calling here; this
+// module is the last line of defense, not the pipeline:
+//   1. Callers must pass deidentified: true — set only by the redaction
+//      pipeline (and the selftest). Any other call path throws.
+//   2. Every user-message text is scanned before sending: a non-findings
+//      section heading (EXAMINATION, CLINICAL HISTORY, TECHNIQUE, COMPARISON,
+//      ...) or anything the scrub patterns still match (dates, MRNs, phones)
+//      means redaction was skipped or failed — the call throws PHI_GUARD and
+//      the caller falls back to Gemini, which the BAA covers.
+// System prompts are exempt from the heading check (exemplar reports
+// legitimately show report structure; the server pattern-scrubs them), but
+// not from the identifier-pattern check.
 //
-// Region: the current Claude generation (opus-5, sonnet-4-6) serves from the
-// GLOBAL Vertex endpoint only — regional endpoints (us-east5 etc.) 404 on
-// these ids. Vertex region is independent of the Cloud Run/SQL region
-// (us-east1), so this changes nothing about where the app runs.
-const { AnthropicVertex } = require('@anthropic-ai/vertex-sdk');
+// Auth: ANTHROPIC_API_KEY (Secret Manager in production, injected as an env
+// var). No Google credentials involved.
+const Anthropic = require('@anthropic-ai/sdk');
+const scrub = require('./scrub');
 
-const PROJECT = process.env.GOOGLE_CLOUD_PROJECT || process.env.VERTEX_PROJECT || '';
-const REGION = process.env.VERTEX_CLAUDE_REGION || 'global';
+const configured = !!process.env.ANTHROPIC_API_KEY;
+const client = configured ? new Anthropic() : null;
 
-const client = new AnthropicVertex({ projectId: PROJECT, region: REGION });
+// Report sections that must never reach Claude. FINDINGS/IMPRESSION are
+// absent on purpose — they are the two sections the pipeline sends. The
+// colon is required so heading-like prose at a line start ("Comparison with
+// prior shows...") doesn't trip the guard — real headings take "WORD:" form.
+const FORBIDDEN_HEADINGS = /^[ \t]*(?:\*\*)?[ \t]*(EXAMINATION|EXAM|CLINICAL HISTORY|CLINICAL INDICATION|INDICATION|HISTORY|TECHNIQUE|COMPARISON|PROCEDURE|PATIENT|DOB|MRN|ACCESSION)[ \t]*(?:\*\*)?[ \t]*:/im;
+
+function guardError(detail) {
+  const err = new Error(`De-identification guard refused this Claude call (${detail}) — falling back is the caller's job`);
+  err.code = 'PHI_GUARD';
+  return err;
+}
+
+// Throws unless the text is plausibly de-identified. checkHeadings is off for
+// system prompts (see above).
+function assertDeidentified(text, { checkHeadings }) {
+  if (typeof text !== 'string' || !text) return;
+  if (checkHeadings && FORBIDDEN_HEADINGS.test(text)) {
+    throw guardError('payload contains a report section outside findings/impression');
+  }
+  const counts = scrub.patternScrub(text).counts;
+  const types = Object.keys(counts);
+  if (types.length) {
+    // Types only — never the matched text
+    throw guardError(`identifier patterns still present: ${types.join(', ')}`);
+  }
+}
+
+function refusal(detail) {
+  const err = new Error('This request was declined by the model’s safety filters. Try rephrasing it.');
+  err.isRefusal = true;
+  err.detail = detail;
+  return err;
+}
 
 // Effort is the same latency lever as on Gemini, expressed Claude's way:
 // adaptive thinking + output_config.effort. Thinking is never disabled —
@@ -34,13 +75,6 @@ function requestConfig(model, effort) {
   return cfg;
 }
 
-function refusal(detail) {
-  const err = new Error('This request was declined by the model’s safety filters. Try rephrasing it.');
-  err.isRefusal = true;
-  err.detail = detail;
-  return err;
-}
-
 // Gemini finish reasons are the server's lingua franca ('STOP', 'MAX_TOKENS');
 // map Claude's stop reasons onto them so downstream checks work unchanged.
 function toFinishReason(stopReason) {
@@ -54,27 +88,35 @@ function toFinishReason(stopReason) {
 
 /**
  * One Claude call, gemini.generate-shaped.
- *   model          bare Vertex Claude id (e.g. claude-opus-5)
+ *   model          claude-* id (bare first-party id)
  *   system         system instruction text (string)
  *   contents       Gemini-shaped [{role:'user'|'model', parts:[{text}]}]
  *   maxTokens      output ceiling hint — floored at 16000 (see below)
  *   effort         'low' | 'medium' | 'high' | undefined
+ *   deidentified   REQUIRED true — only the redaction pipeline sets it
  *   responseSchema ACCEPTED BUT UNUSED: Claude paths rely on prompt-for-JSON
  *                  + fence-strip + the server's substring validation (the
- *                  real guarantee), per the routing design
- *   grounding      not supported — Google Search grounding is Gemini-only;
- *                  the server routes grounded calls to Gemini before here
+ *                  real guarantee)
+ *   grounding      not supported — grounded search is Gemini-only; the server
+ *                  routes grounded calls to Gemini before here
  * Returns { text, usage, finishReason, served, grounding: null }.
- * Throws an error with isRefusal=true when Claude declines (stop 'refusal').
+ * Throws PHI_GUARD when the payload fails the de-identification checks,
+ * and an error with isRefusal=true when Claude declines.
  */
-async function generate({ model, system, contents, maxTokens, effort }) {
+async function generate({ model, system, contents, maxTokens, effort, deidentified }) {
+  if (!configured) throw new Error('ANTHROPIC_API_KEY is not set — Claude routing unavailable');
+  if (deidentified !== true) {
+    throw guardError('caller did not assert a de-identified payload');
+  }
   const messages = (contents || []).map(c => ({
     role: c.role === 'model' ? 'assistant' : 'user',
     content: (c.parts || []).map(p => p.text).join('')
   }));
-  // Claude requires the first message to be 'user'; the token-budgeted history
-  // window can open on an assistant turn — drop leaders rather than fail.
+  // Claude requires the first message to be 'user'
   while (messages.length && messages[0].role !== 'user') messages.shift();
+
+  for (const m of messages) assertDeidentified(m.content, { checkHeadings: true });
+  assertDeidentified(system, { checkHeadings: false });
 
   const r = await client.messages.create({
     model,
@@ -85,7 +127,7 @@ async function generate({ model, system, contents, maxTokens, effort }) {
     // cache_control restores prompt caching for the static knowledge-layer
     // block: the composed system prompt is byte-stable per action + study type
     // (memoised server-side), so caching the whole block as the prefix works.
-    // 5m ephemeral TTL; Vertex bills writes at 1.25x and reads at 0.1x input.
+    // 5m ephemeral TTL; cache writes bill at 1.25x and reads at 0.1x input.
     ...(system ? { system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }] } : {}),
     messages,
     ...requestConfig(model, effort)
@@ -121,4 +163,4 @@ async function generate({ model, system, contents, maxTokens, effort }) {
   };
 }
 
-module.exports = { generate, PROJECT, REGION };
+module.exports = { generate, configured };

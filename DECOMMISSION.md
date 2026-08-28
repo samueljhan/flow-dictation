@@ -75,10 +75,14 @@ Both were generated and printed once in a chat session on 2026-08-22; rotate now
 
 ## 4. Local machine
 
-- [ ] Remove stale keys from `~/Desktop/flow-dictation/.env`: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
-      `ANTHROPIC_API_KEY` (and any other unused provider keys — `OPENAI_API_KEY`, `ASSEMBLYAI_API_KEY`, `AWS_*`
+- [ ] Remove stale keys from `~/Desktop/flow-dictation/.env`: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
+      (and any other unused provider keys — `OPENAI_API_KEY`, `ASSEMBLYAI_API_KEY`, `AWS_*`
       were left in place by the migration; the app no longer reads any of them).
-      Revoke `ANTHROPIC_API_KEY` in the Anthropic console and the Supabase service-role key goes away with the project.
+      The Supabase service-role key goes away with the project.
+      **Do NOT revoke the Anthropic API key**: since 2026-08-28 the app USES it for the de-identified
+      Claude pipeline. Its only managed copy is Secret Manager (`fd-anthropic-key`, wired into Cloud Run
+      as `ANTHROPIC_API_KEY`); it has already been removed from local `.env` — local dev without it
+      simply falls back to Gemini for Claude-routed tasks.
 - [ ] Stop the local cloud-sql-proxy if you are not doing local development:
       ```
       pkill -f 'cloud-sql-proxy flow-dictation-prod'

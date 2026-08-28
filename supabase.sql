@@ -284,6 +284,13 @@ create index if not exists api_calls_call_type_idx on api_calls (call_type);
 create index if not exists api_calls_model_idx on api_calls (model);
 alter table api_calls enable row level security;
 
+-- Dual-provider routing (2026-08): model now carries either provider's ids
+-- (gemini-* or claude-*). Claude prompt-cache READS land in cached_tokens
+-- (same column as Gemini's implicit cache hits, different billing multiplier
+-- applied in code); cache WRITES — a billing category Gemini doesn't have —
+-- get their own column so est_cost stays reconcilable from token counts.
+alter table api_calls add column if not exists cache_write_tokens int;
+
 -- Suggestion rows and assist feedback link back to the ledger row of the call
 -- that produced them (review_events.model/batch_id stay convenience copies;
 -- api_calls is authoritative for cost/tokens/latency).

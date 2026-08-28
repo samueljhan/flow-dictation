@@ -6,6 +6,7 @@ const path = require('path');
 require('dotenv').config();
 const db = require('./db');
 const gemini = require('./gemini');
+const claude = require('./claude');
 const scrub = require('./scrub');
 
 const app = express();
@@ -16,22 +17,38 @@ app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: false }));
 
-// Vertex AI Gemini — models are env-configurable.
-// Detection is a trivial classification that runs on nearly every action —
-// Flash-Lite handles it at a fraction of the price of the frontier models.
-// Every task routes independently so any one can be A/B'd from a Cloud Run
-// variable without touching code. Deliberately NO cross-inheritance: setting
-// MODEL_REPORT must not silently drag review or impression along with it.
+// Dual-provider model routing — Vertex AI Gemini AND Vertex AI Claude
+// (Anthropic partner models). MODEL_* env vars accept either provider's ids;
+// the call layer selects the client by prefix (gemini-* → Gemini, claude-* →
+// AnthropicVertex). Quality evaluation put Claude ahead on review, impression,
+// reword, and report tasks, so those default to Claude; detection and scrub
+// stay on Flash-Lite (trivial classification at a fraction of the price).
+// Every task routes independently so any one can be A/B'd — or instantly
+// reverted to Gemini — from a Cloud Run variable without touching code.
+// Deliberately NO cross-inheritance: setting MODEL_REPORT must not silently
+// drag review or impression along with it.
+//
+// Never default anything to claude-fable-5: Mythos-class models carry 30-day
+// retention on all platforms — the wrong footprint for draft-phase report
+// text. Revisit only for de-identified-only paths.
 const MODEL_DETECT = process.env.MODEL_DETECT || 'gemini-2.5-flash-lite';   // study-type classification
-const MODEL_REPORT = process.env.MODEL_REPORT || 'gemini-2.5-flash';        // proofread · reword · describe · full report structure
-const MODEL_REVIEW = process.env.MODEL_REVIEW || 'gemini-2.5-pro';          // draft review + integrate-notes
-const MODEL_IMPRESSION = process.env.MODEL_IMPRESSION || 'gemini-2.5-pro';  // Generate Impression + the full report's impression
-// Quick Rad Question is the most token-heavy path — grounded search results
-// land in context — so the per-token rate is what decides its cost.
-const MODEL_RADQA = process.env.MODEL_RADQA || 'gemini-2.5-pro';            // Quick Rad Question (references on)
+const MODEL_REPORT = process.env.MODEL_REPORT || 'claude-sonnet-4-6';       // proofread · reword · describe · full report structure
+const MODEL_REVIEW = process.env.MODEL_REVIEW || 'claude-opus-5';           // draft review + integrate-notes
+const MODEL_IMPRESSION = process.env.MODEL_IMPRESSION || 'claude-opus-5';   // Generate Impression + the full report's impression
+// Quick Rad Question SPLIT: Google Search grounding exists only on Gemini, so
+// the "Include references" toggle decides the provider — ON routes to
+// MODEL_RADQA_GROUNDED (Gemini + grounding), OFF to MODEL_RADQA (Claude).
+const MODEL_RADQA = process.env.MODEL_RADQA || 'claude-opus-5';             // Quick Rad Question, references OFF
+const MODEL_RADQA_GROUNDED = process.env.MODEL_RADQA_GROUNDED || 'gemini-2.5-pro'; // references ON (grounded search)
 const MODEL_CHAT = process.env.MODEL_CHAT || MODEL_RADQA;                   // plain free text (no references)
-const MODEL_SYNTHESIZE = process.env.MODEL_SYNTHESIZE || 'gemini-2.5-pro';  // prior report + new info → merged report
+const MODEL_SYNTHESIZE = process.env.MODEL_SYNTHESIZE || 'claude-opus-5';   // prior report + new info → merged report
 const MODEL_SCRUB = process.env.MODEL_SCRUB || 'gemini-2.5-flash-lite';     // PHI scrub model pass (at finalization)
+
+// Provider selection by model-id prefix — the whole of the routing layer.
+const providerFor = model => (String(model || '').startsWith('claude') ? 'claude' : 'gemini');
+function llmGenerate(opts) {
+  return providerFor(opts.model) === 'claude' ? claude.generate(opts) : gemini.generate(opts);
+}
 
 // Postgres (Cloud SQL). db.configured is false only when no connection
 // variables are set at all; a wrong password surfaces on the first query.
@@ -176,13 +193,17 @@ app.get('/api/me', (req, res) => res.json({ user: req.user }));
 app.use(express.static('public'));
 
 console.log('=== Environment Check ===');
-console.log('Vertex AI:', gemini.PROJECT ? `✓ project=${gemini.PROJECT} location=${gemini.LOCATION}` : '✗ (set GOOGLE_CLOUD_PROJECT)');
+console.log('Vertex AI (Gemini):', gemini.PROJECT ? `✓ project=${gemini.PROJECT} location=${gemini.LOCATION}` : '✗ (set GOOGLE_CLOUD_PROJECT)');
+console.log('Vertex AI (Claude):', claude.PROJECT ? `✓ project=${claude.PROJECT} region=${claude.REGION}` : '✗ (set GOOGLE_CLOUD_PROJECT)');
 console.log('Database:', db.configured ? `✓ ${db.describe()}` : '✗');
 console.log('Google Client ID:', !!process.env.GOOGLE_CLIENT_ID ? '✓' : '✗');
 console.log('Google Client Secret:', !!process.env.GOOGLE_CLIENT_SECRET ? '✓' : '✗');
-console.log('Models:');
-console.log(`  detect=${MODEL_DETECT} report=${MODEL_REPORT} review=${MODEL_REVIEW} impression=${MODEL_IMPRESSION} radqa=${MODEL_RADQA}`);
-console.log(`  synthesize=${MODEL_SYNTHESIZE} chat=${MODEL_CHAT}`);
+const routed = m => `${m} [${providerFor(m)}]`;
+console.log('Model routing (task → model [provider]):');
+console.log(`  detect=${routed(MODEL_DETECT)} scrub=${routed(MODEL_SCRUB)}`);
+console.log(`  report=${routed(MODEL_REPORT)} review=${routed(MODEL_REVIEW)} impression=${routed(MODEL_IMPRESSION)}`);
+console.log(`  synthesize=${routed(MODEL_SYNTHESIZE)} chat=${routed(MODEL_CHAT)}`);
+console.log(`  radqa: references ON → ${routed(MODEL_RADQA_GROUNDED)} + Google Search grounding · OFF → ${routed(MODEL_RADQA)}`);
 console.log('========================');
 
 // ============ Gemini helpers ============
@@ -192,10 +213,18 @@ console.log('========================');
 // Vertex AI US list price per million tokens (standard tier, prompts ≤200k
 // tokens). Longest-prefix matched against the model version the API says
 // served the request, so a dated snapshot still prices correctly.
+// Claude partner-model rates verified against the Vertex pricing page
+// 2026-08-28: opus-5 $5/$25, sonnet-4-6 $3/$15 — same as first-party list.
+// cacheRead/cacheWrite are per-model multipliers of the input rate: Claude on
+// Vertex bills 5m-TTL cache writes at 1.25x ($6.25 / $3.75 per MTok) and
+// cache hits at 0.1x ($0.50 / $0.30); Gemini's implicit cache reads bill at
+// 0.25x with free writes (the defaults below).
 const PRICING = {
   'gemini-2.5-pro':        { input: 1.25, output: 10 },
   'gemini-2.5-flash':      { input: 0.30, output: 2.50 },
-  'gemini-2.5-flash-lite': { input: 0.10, output: 0.40 }
+  'gemini-2.5-flash-lite': { input: 0.10, output: 0.40 },
+  'claude-opus-5':         { input: 5.00, output: 25, cacheRead: 0.1, cacheWrite: 1.25 },
+  'claude-sonnet-4-6':     { input: 3.00, output: 15, cacheRead: 0.1, cacheWrite: 1.25 }
 };
 // Implicit cache hits are billed at a quarter of the input rate on Gemini 2.5.
 // There are no cache writes to price — implicit caching is free to populate.
@@ -221,19 +250,22 @@ function priceFor(model) {
   return PRICING[best];
 }
 
-// Dollars for one call, from the usage Gemini returns. promptTokenCount
-// includes the cached portion, so cached tokens are rebated down to the
-// cache-read rate rather than added. Thinking tokens bill as output.
+// Dollars for one call, from the normalized usage either provider returns.
+// prompt_tokens includes the cached and cache-written portions, so those are
+// re-priced from the base input rate rather than added on top. Thinking
+// tokens bill as output (Claude folds them into output_tokens already).
 function costFor(model, u, grounded) {
   const p = priceFor(model);
   if (!p) return 0;
   const prompt = u.prompt_tokens || 0;
   const cached = Math.min(u.cached_tokens || 0, prompt);
+  const written = Math.min(u.cache_write_tokens || 0, prompt - cached);
   const tool = u.tool_prompt_tokens || 0;
   const out = (u.output_tokens || 0) + (u.thought_tokens || 0);
   return (
-    (prompt - cached) * p.input +
-    cached * p.input * CACHE_READ_MULTIPLIER +
+    (prompt - cached - written) * p.input +
+    cached * p.input * (p.cacheRead !== undefined ? p.cacheRead : CACHE_READ_MULTIPLIER) +
+    written * p.input * (p.cacheWrite !== undefined ? p.cacheWrite : 0) +
     tool * p.input +
     out * p.output
   ) / 1e6 + (grounded ? GROUNDING_COST_PER_CALL : 0);
@@ -247,7 +279,10 @@ function costFor(model, u, grounded) {
 // admin dashboard both read this table, so their totals agree by construction.
 // A failed insert costs the ledger row, never the model call.
 // input_tokens includes search-tool prompt tokens; output_tokens includes
-// thinking tokens — the billed quantities, matching est_cost.
+// thinking tokens — the billed quantities, matching est_cost. Claude rows are
+// identical in shape: cache reads land in cached_tokens (same column as
+// Gemini's implicit cache hits) and cache WRITES — a billing category Gemini
+// doesn't have — in the cache_write_tokens column added for them.
 async function recordUsage({ model, label, usage, grounded, latency_ms, report_id }) {
   const u = usage || {};
   const cost = costFor(model, u, grounded);
@@ -257,12 +292,13 @@ async function recordUsage({ model, label, usage, grounded, latency_ms, report_i
     try {
       await db.query(
         `insert into api_calls
-           (id, call_type, model, report_id, input_tokens, output_tokens, cached_tokens, latency_ms, est_cost)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+           (id, call_type, model, report_id, input_tokens, output_tokens, cached_tokens, cache_write_tokens, latency_ms, est_cost)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [apiCallId, label || 'unlabelled', model || 'unknown', report_id || null,
          (u.prompt_tokens || 0) + (u.tool_prompt_tokens || 0),
          (u.output_tokens || 0) + (u.thought_tokens || 0),
          u.cached_tokens || 0,
+         u.cache_write_tokens || 0,
          Number.isFinite(latency_ms) ? Math.round(latency_ms) : null,
          Number(cost.toFixed(8))]);
     } catch (e) {
@@ -277,7 +313,7 @@ const usd = n => '$' + n.toFixed(4);
 
 // Only IDs and counts ever reach the logs — never prompt or answer text.
 function logCall({ served, label, injected, u, cost, grounded, finishReason, ms }) {
-  console.log(`[gemini] ${served} label=${label || '-'}${grounded ? ' grounded' : ''} injected=${injected || 0} in=${u.prompt_tokens} cached=${u.cached_tokens} tool=${u.tool_prompt_tokens} out=${u.output_tokens} thoughts=${u.thought_tokens} est_cost=${usd(cost)}${ms ? ` ms=${ms}` : ''} finish=${finishReason}`);
+  console.log(`[llm] ${served} label=${label || '-'}${grounded ? ' grounded' : ''} injected=${injected || 0} in=${u.prompt_tokens} cached=${u.cached_tokens} cachew=${u.cache_write_tokens || 0} tool=${u.tool_prompt_tokens} out=${u.output_tokens} thoughts=${u.thought_tokens} est_cost=${usd(cost)}${ms ? ` ms=${ms}` : ''} finish=${finishReason}`);
 }
 
 // Conversation history for Gemini: the assistant's turns are role "model".
@@ -296,10 +332,13 @@ function toContents(messages) {
 // telemetry reuses; the same number lands in the log and the ledger — plus
 // api_call_id (this call's api_calls row, null if the write failed) and the
 // served model, so telemetry rows can link and copy from the ledger.
-async function geminiText({ model, system, message, messages, maxTokens, effort, injected, label, schema, timing, reportId }) {
+async function llmText({ model, system, message, messages, maxTokens, effort, injected, label, schema, timing, reportId }) {
   const contents = toContents(messages || [{ role: 'user', content: message }]);
   const t0 = Date.now();
-  const r = await gemini.generate({ model, system, contents, maxTokens, effort, responseSchema: schema });
+  // Routed by model prefix: gemini-* → Gemini (schema = native JSON mode),
+  // claude-* → AnthropicVertex (schema ignored; the prompts already demand
+  // JSON, and the server-side substring validation is the real guarantee).
+  const r = await llmGenerate({ model, system, contents, maxTokens, effort, responseSchema: schema });
   const ms = Date.now() - t0;
   const { cost, api_call_id } = await recordUsage({
     model: r.served, label, usage: r.usage, latency_ms: ms, report_id: reportId
@@ -644,7 +683,7 @@ function randomReportId() {
 // same name found anywhere is replaced everywhere. Model failures degrade to
 // the pattern pass alone — the caller decides what that means for scrubbed_at.
 async function modelFindPhi(text, reportId) {
-  const out = await geminiText({
+  const out = await llmText({
     model: MODEL_SCRUB,
     label: 'scrub',
     reportId,
@@ -1054,7 +1093,7 @@ async function upgradeImpression(reportText, studyType) {
   const body = reportText.slice(0, m.index).trimEnd();
   if (!body) return reportText;
   const { system, injected } = await buildKnowledgeSystem(ASSIST_SYSTEM, studyType, 'impression');
-  const impression = (await geminiText({
+  const impression = (await llmText({
     model: MODEL_IMPRESSION,
     label: 'assist_fullreport_impression',
     system,
@@ -1194,9 +1233,14 @@ async function actionSystemFor(action, message, template) {
 // the final message is in hand, so a mid-flight retry or a server-side model
 // fallback can never leave partial text behind.
 async function runFreeform({ messages, systemFor, injected, label, useRefs }) {
-  // Quick Rad Question (references on) and plain free text are the same prompt
-  // but route separately, so each can be tuned without moving the other.
-  const model = useRefs ? MODEL_RADQA : MODEL_CHAT;
+  // PROVIDER SPLIT: "Include references" ON must run on Gemini — Google
+  // Search grounding is the only grounded-search option across the two
+  // providers — so it routes to MODEL_RADQA_GROUNDED regardless of what
+  // MODEL_RADQA is set to. References OFF (and plain free text) runs the
+  // configured MODEL_RADQA/MODEL_CHAT, Claude by default. The refusal-degrade
+  // retry below stays on the grounded Gemini model (minus search) so one
+  // question never straddles providers mid-flight.
+  const model = useRefs ? MODEL_RADQA_GROUNDED : MODEL_CHAT;
   let searchEnabled = useRefs;
   let refsDropped = false;
   const contents = toContents(messages);
@@ -1205,7 +1249,7 @@ async function runFreeform({ messages, systemFor, injected, label, useRefs }) {
   const t0 = Date.now();   // model wall time, refusal-retry included
   for (;;) {
     try {
-      r = await gemini.generate({
+      r = await llmGenerate({
         model,
         // Referenced answers run long — too low a ceiling truncates them.
         maxTokens: 8000,
@@ -1290,7 +1334,7 @@ app.post('/api/assist', async (req, res) => {
     // timing.api_call_id links a later feedback row to this call's ledger row
     // (for fullreport, the main structure call — the impression pass has its own)
     const timing = {};
-    let text = await geminiText({
+    let text = await llmText({
       model: actionModel,
       // Ledger call_type: 'assist_<action>', except synthesize which is its own
       label: action === 'synthesize' ? 'synthesize' : 'assist_' + action,
@@ -1480,7 +1524,7 @@ app.post('/api/draft/review', async (req, res) => {
     // attempt that produced the edits (each attempt is its own ledger row)
     const timing = {};
     for (let attempt = 1; attempt <= 2 && !rawEdits; attempt++) {
-      const text = await geminiText({
+      const text = await llmText({
         model: MODEL_REVIEW,
         label: 'review',
         system,
@@ -1629,7 +1673,7 @@ app.put('/api/review-events/:id/feedback', async (req, res) => {
 });
 
 async function detectStudyType(report) {
-  const text = await geminiText({
+  const text = await llmText({
     model: MODEL_DETECT,
     label: 'detect',
     system: STUDY_TYPE_SYSTEM,
@@ -2348,7 +2392,7 @@ app.post('/api/reports/:id/integrate-notes', async (req, res) => {
 
     const { system, injected } = await buildKnowledgeSystem(READOUT_INTEGRATE_SYSTEM, report.study_type, 'readout');
     const timing = {};
-    const text = await geminiText({
+    const text = await llmText({
       model: MODEL_REVIEW,
       label: 'readout_integrate',
       system,
@@ -2722,9 +2766,10 @@ app.get('/api/health', (req, res) => {
     service: 'Flow Dictation API',
     llm: {
       provider: 'vertex-ai', project: gemini.PROJECT, location: gemini.LOCATION,
+      claude_region: claude.REGION,
       detect: MODEL_DETECT, report: MODEL_REPORT, review: MODEL_REVIEW,
-      impression: MODEL_IMPRESSION, radqa: MODEL_RADQA, synthesize: MODEL_SYNTHESIZE,
-      chat: MODEL_CHAT
+      impression: MODEL_IMPRESSION, radqa: MODEL_RADQA, radqa_grounded: MODEL_RADQA_GROUNDED,
+      synthesize: MODEL_SYNTHESIZE, chat: MODEL_CHAT
     },
     auth: { google: googleLoginConfigured, password: !!APP_PASSWORD, allowed_emails: ALLOWED_EMAILS.length },
     database: db.configured ? 'configured' : 'not configured'
@@ -2930,6 +2975,7 @@ app.get('/api/usage/summary', async (req, res) => {
               coalesce(sum(input_tokens), 0)::bigint as input_tokens,
               coalesce(sum(output_tokens), 0)::bigint as output_tokens,
               coalesce(sum(cached_tokens), 0)::bigint as cached_tokens,
+              coalesce(sum(cache_write_tokens), 0)::bigint as cache_write_tokens,
               sum(est_cost)::float8 as est_cost
          from api_calls
         where created_at between $1 and $2
@@ -2941,6 +2987,7 @@ app.get('/api/usage/summary', async (req, res) => {
                 coalesce(sum(input_tokens), 0)::bigint as input_tokens,
                 coalesce(sum(output_tokens), 0)::bigint as output_tokens,
                 coalesce(sum(cached_tokens), 0)::bigint as cached_tokens,
+                coalesce(sum(cache_write_tokens), 0)::bigint as cache_write_tokens,
                 coalesce(sum(est_cost), 0)::float8 as est_cost,
                 min(created_at) as since
            from api_calls where created_at between $1 and $2`, range),
@@ -2950,12 +2997,13 @@ app.get('/api/usage/summary', async (req, res) => {
       from: range[0],
       to: range[1],
       since: totals.since,   // oldest ledger row in the window
-      pricing_note: `Vertex AI per-MTok list price; implicit cache reads x${CACHE_READ_MULTIPLIER}; thinking billed as output; Google Search grounding +$${GROUNDING_COST_PER_CALL}/call`,
+      pricing_note: `Vertex AI per-MTok list price; Gemini implicit cache reads x${CACHE_READ_MULTIPLIER} (free writes); Claude cache reads x0.1, 5m cache writes x1.25; thinking billed as output; Google Search grounding +$${GROUNDING_COST_PER_CALL}/call`,
       totals: roundCost({
         calls: totals.calls,
         input_tokens: totals.input_tokens,
         output_tokens: totals.output_tokens,
         cached_tokens: totals.cached_tokens,
+        cache_write_tokens: totals.cache_write_tokens,
         est_cost: totals.est_cost
       }),
       by_call_type_and_model: byBoth.map(roundCost),
@@ -2994,6 +3042,9 @@ async function ensureTelemetrySchema() {
     await db.query(`create index if not exists api_calls_created_idx on api_calls (created_at)`);
     await db.query(`create index if not exists api_calls_call_type_idx on api_calls (call_type)`);
     await db.query(`create index if not exists api_calls_model_idx on api_calls (model)`);
+    // Claude prompt-cache writes bill at their own rate (1.25x input on
+    // Vertex) — kept as their own column so est_cost reconciles from tokens
+    await db.query(`alter table api_calls add column if not exists cache_write_tokens int`);
     await db.query(`
       create table if not exists review_events (
         id bigint generated always as identity primary key,
@@ -3052,7 +3103,7 @@ async function backfillActiveShift() {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🏥 Flow Dictation running on port ${PORT}`);
-  console.log(`✨ Gemini on Vertex AI: ${MODEL_REPORT} (reports), ${MODEL_REVIEW} (review)`);
+  console.log(`✨ Vertex AI models: ${MODEL_REPORT} (reports), ${MODEL_REVIEW} (review) — full routing table above`);
   console.log(`🗄️  Database: ${db.configured ? db.describe() : 'NOT CONFIGURED'}`);
   ensureTelemetrySchema();
   backfillActiveShift();

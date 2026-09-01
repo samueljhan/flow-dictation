@@ -894,7 +894,7 @@
                         </div>
                         <div class="btn-row">
                             <button class="ghost" id="saveBtn">Save Draft</button>
-                            <button class="ghost" id="draftSaveFinalBtn" title="Mark this study done — moves it to the bottom of the list">Save Final</button>
+                            <button class="ghost" id="draftSaveFinalBtn" title="Mark this study done — copies the report and moves it to the bottom of the list">Save Final</button>
                         </div>
                         <button class="ghost" id="reviewBtn" title="Run an AI review pass and show suggested edits. Runs in the background — you can open another study while it works.">Review</button>
                         <button class="ghost" id="showReviewBtn" style="display:none">Show suggested edits</button>
@@ -905,7 +905,7 @@
                         <div id="editsList" style="display:flex; flex-direction:column; gap:8px;"></div>
                         <div class="btn-row">
                             <button class="ghost" id="saveReviewedBtn">Save Draft</button>
-                            <button class="ghost" id="saveReviewedFinalBtn" title="Apply accepted edits, mark done, and start the next study">Save Final</button>
+                            <button class="ghost" id="saveReviewedFinalBtn" title="Apply accepted edits, mark done, and copy the finished report">Save Final</button>
                         </div>
                         <button class="ghost" id="rejectAllSaveBtn">Reject All &amp; Save Draft</button>
                         <button class="ghost" id="cancelReviewBtn">Back to editing</button>
@@ -1882,6 +1882,41 @@
         studyTypeInput.addEventListener('input', renderStudyTypeDropdown);
         studyTypeInput.addEventListener('blur', () => setTimeout(() => { studyTypeDropdown.style.display = 'none'; }, 150));
 
+        // Autofill Study Type from the report header: most reports name the exam
+        // after "Exam:" / "Examination:" in the top lines. The exam name is used
+        // exactly as written in the report (trimmed of surrounding whitespace),
+        // but only when it looks similar to a previously entered study type —
+        // resemblance, not an exact match. An exam line resembling nothing known
+        // could be a one-off string, so the box stays blank; a box the user
+        // already filled is never overwritten.
+        function examTypeFromReport(text) {
+            // Header lines only, so an "Exam:" quoted deep in the body can't match
+            const header = text.split('\n').slice(0, 8).join('\n');
+            const m = header.match(/^[ \t*]*Exam(?:ination)?\s*:\s*(.+)$/im);
+            return m ? (m[1].trim() || null) : null;
+        }
+        const typeTokens = s => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(' ').filter(Boolean);
+        function looksLikeKnownType(name) {
+            const a = typeTokens(name);
+            if (!a.length) return false;
+            // Similar = at least half the shorter name's tokens appear in the
+            // other, ignoring case and punctuation ("CT ABD/PELVIS W CONTRAST"
+            // resembles "CT abdomen pelvis with contrast")
+            return studyTypes.some(t => {
+                const b = typeTokens(t.name);
+                if (!b.length) return false;
+                const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+                const set = new Set(longer);
+                const shared = shorter.filter(w => set.has(w)).length;
+                return shared / shorter.length >= 0.5;
+            });
+        }
+        draftText.addEventListener('input', () => {
+            if (studyTypeInput.value.trim()) return;
+            const name = examTypeFromReport(draftText.value);
+            if (name && looksLikeKnownType(name)) studyTypeInput.value = name;
+        });
+
         function setReportType(t) {
             reportType = t;
             document.getElementById('segPrelim').classList.toggle('active', t === 'prelim');
@@ -2757,6 +2792,16 @@
             return out;
         }
 
+        // Save Final puts the finished report on the clipboard, ready to paste
+        // into the dictation system. Browsers may refuse a write this long after
+        // the click (Safari especially) — the toast only says "copied" when it
+        // actually happened.
+        async function copyFinalReport(text) {
+            if (!text) return false;
+            try { await navigator.clipboard.writeText(text); return true; }
+            catch (e) { return false; }
+        }
+
         async function persistReport({ finalize = false } = {}) {
             if (saving) return;
             saving = true;
@@ -2823,7 +2868,12 @@
                     updateEditingUi();
                     loadDraftList();
                     setDraftStatus('', '');
-                    showToast((finalize ? 'Final saved — ' : 'Updated ') + savedId);
+                    if (finalize) {
+                        const copied = await copyFinalReport(savedDraft);
+                        showToast('Final saved — ' + savedId + (copied ? ' · report copied' : ''));
+                    } else {
+                        showToast('Updated ' + savedId);
+                    }
                     return;
                 }
 
@@ -2862,7 +2912,9 @@
                 await Promise.all([loadStudyTypes(), loadCurrentShift(), initDraftShifts()]);
                 finalDataStale = true;
                 setDraftStatus('', '');
-                showToast('Saved report ' + data.report.id + '\n' + (data.report.study_type || ''));
+                const copied = finalize && await copyFinalReport(data.report.draft_text || '');
+                showToast('Saved report ' + data.report.id + (copied ? ' · report copied' : '') +
+                          '\n' + (data.report.study_type || ''));
             } catch (e) {
                 statusEl.textContent = 'Save failed: ' + e.message;
                 statusEl.className = 'status error';

@@ -896,7 +896,7 @@
                             <button class="ghost" id="saveBtn">Save Draft</button>
                             <button class="ghost" id="draftSaveFinalBtn" title="Mark this study done — moves it to the bottom of the list">Save Final</button>
                         </div>
-                        <button class="ghost" id="reviewBtn" title="Run a Gemini review pass and show suggested edits. Runs in the background — you can open another study while it works.">Review</button>
+                        <button class="ghost" id="reviewBtn" title="Run an AI review pass and show suggested edits. Runs in the background — you can open another study while it works.">Review</button>
                         <button class="ghost" id="showReviewBtn" style="display:none">Show suggested edits</button>
                         <div class="status" id="draftStatus"></div>
                     </div>
@@ -1210,9 +1210,20 @@
         document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
         menuDropdown.addEventListener('click', (e) => e.stopPropagation());
 
+        // Which model runs the review pass — the server owns routing (env-set,
+        // Claude Opus 5 by default), so the UI learns it from /api/me instead of
+        // hardcoding a name that could drift from a Cloud Run variable change.
+        let reviewModelName = '';
+
         // Show who's signed in (muted, non-interactive)
         fetch('/api/me').then(r => r.json()).then(d => {
             if (d && d.user) document.getElementById('menuUser').textContent = d.user;
+            if (d && d.review_model_name) {
+                reviewModelName = d.review_model_name;
+                document.getElementById('reviewBtn').title =
+                    'Run a ' + reviewModelName + ' review pass and show suggested edits. ' +
+                    'Runs in the background — you can open another study while it works.';
+            }
         }).catch(() => {});
 
         // ==================== ASSIST PAGE ====================
@@ -2284,7 +2295,7 @@
         integrateBtn.addEventListener('click', async () => {
             if (!loadedReport || !readoutNotesEl.value.trim()) return;
             integrateBtn.disabled = true;
-            notesStatus.textContent = 'Integrating with Gemini…';
+            notesStatus.textContent = 'Integrating with ' + (reviewModelName || 'AI') + '…';
             notesStatus.className = 'status';
             try {
                 await saveNotes();
@@ -2355,7 +2366,7 @@
             return currentShift;
         }
 
-        // Save: never calls Gemini. The default, fast action for new drafts and re-saves.
+        // Save: never calls a model. The default, fast action for new drafts and re-saves.
         document.getElementById('saveBtn').addEventListener('click', async () => {
             if (!draftText.value.trim()) { setDraftStatus('Paste a report first.', 'error'); return; }
             reviewedRaw = draftText.value;
@@ -2373,7 +2384,7 @@
             await persistReport({ finalize: true });
         });
 
-        // Review: the only path to the Gemini review pass. The draft is always
+        // Review: the only path to the model review pass. The draft is always
         // saved first, so the review runs against a version that exists on the
         // server — leaving the study without saving can't lose it.
         document.getElementById('reviewBtn').addEventListener('click', async () => {
@@ -2467,7 +2478,7 @@
             showBtn.style.display = (job && job.status === 'ready' && !inReview) ? '' : 'none';
             if (!job || inReview) return;
             if (running) {
-                setDraftStatus('Reviewing with Gemini… you can open another study and come back.', '');
+                setDraftStatus('Reviewing with ' + (reviewModelName || 'AI') + '… you can open another study and come back.', '');
             } else if (job.status === 'ready') {
                 setDraftStatus(job.edits.length + ' suggested edit' + (job.edits.length === 1 ? '' : 's') +
                     ' ready' + (draftText.value === job.baseText ? '.' : ' for the version you sent to review.'), '');

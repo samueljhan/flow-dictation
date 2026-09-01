@@ -56,6 +56,18 @@ const MODEL_SCRUB = process.env.MODEL_SCRUB || 'gemini-2.5-flash-lite';     // P
 // tripped): a Gemini model, which the BAA covers for identifiable text.
 const MODEL_GEMINI_FALLBACK = process.env.MODEL_GEMINI_FALLBACK || 'gemini-2.5-pro';
 
+// Display names for the ids the UI shows to the user (review/integrate status
+// lines pull theirs from /api/me, so the client never hardcodes routing).
+// Unknown ids fall back to the raw id — stale but never wrong.
+const MODEL_DISPLAY_NAMES = {
+  'claude-opus-5': 'Claude Opus 5',
+  'claude-sonnet-4-6': 'Claude Sonnet 4.6',
+  'gemini-2.5-pro': 'Gemini 2.5 Pro',
+  'gemini-2.5-flash': 'Gemini 2.5 Flash',
+  'gemini-2.5-flash-lite': 'Gemini 2.5 Flash-Lite'
+};
+const modelDisplayName = id => MODEL_DISPLAY_NAMES[id] || String(id || '');
+
 // Provider selection by model-id prefix — the whole of the routing layer.
 // claude.generate refuses any call that does not assert deidentified: true
 // (set only by the redaction pipeline and the selftest), so a claude-* id on
@@ -202,7 +214,13 @@ app.get('/auth/logout', (req, res) => {
   res.redirect('/login');
 });
 
-app.get('/api/me', (req, res) => res.json({ user: req.user }));
+// review_model_name: what the Review/Integrate buttons say they run on —
+// reviews and note-integration both route through MODEL_REVIEW.
+app.get('/api/me', (req, res) => res.json({
+  user: req.user,
+  review_model: MODEL_REVIEW,
+  review_model_name: modelDisplayName(MODEL_REVIEW)
+}));
 
 // Static files are served only after the auth gate above
 app.use(express.static('public'));

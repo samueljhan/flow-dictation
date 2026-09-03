@@ -95,6 +95,33 @@
             transition: background 0.15s;
         }
         .header-menu-item:hover, .header-menu-item:active { background: #2f2f2f; }
+        .header-menu-mode {
+            padding: 10px 16px; font-size: 11px; color: #707070;
+            border-top: 1px solid #333333;
+        }
+        .header-menu-mode .mode-badge { color: #e0a832; font-weight: 600; }
+
+        /* ---------- Profile & Settings pages ---------- */
+        .account-page { flex: 1; overflow-y: auto; padding: 24px 16px; }
+        .account-inner { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+        .account-card { background: #242424; border: 1px solid #333333; border-radius: 12px; padding: 20px; }
+        .account-card h3 { margin: 0 0 12px; font-size: 15px; color: #e0e0e0; }
+        .account-card .hint { font-size: 12px; color: #808080; line-height: 1.5; margin: 0 0 12px; }
+        .account-form { display: flex; flex-direction: column; gap: 10px; max-width: 400px; }
+        .account-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+        .settings-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .settings-table th, .settings-table td {
+            text-align: left; padding: 8px 10px;
+            border-bottom: 1px solid #303030; vertical-align: top;
+        }
+        .settings-table th { color: #808080; font-weight: 500; font-size: 12px; }
+        .settings-table th.num, .settings-table td.num { text-align: right; white-space: nowrap; }
+        .settings-table .muted { color: #808080; font-size: 12px; }
+        .mode-pill {
+            display: inline-block; background: rgba(224, 168, 50, 0.18); color: #e0a832;
+            border-radius: 999px; padding: 4px 12px; font-size: 12px; font-weight: 600;
+        }
+        .table-scroll { overflow-x: auto; }
 
         /* Pages fill everything under the header */
         .page { display: none; flex: 1; min-height: 0; flex-direction: column; background: #1a1a1a; }
@@ -787,7 +814,10 @@
                 </button>
                 <div class="header-menu-dropdown" id="menuDropdown" style="display:none">
                     <div class="header-menu-user" id="menuUser">Signed in</div>
+                    <button class="header-menu-item" id="menuProfile">Profile</button>
+                    <button class="header-menu-item" id="menuSettings">Settings</button>
                     <a href="/auth/logout" class="header-menu-item">Sign out</a>
+                    <div class="header-menu-mode"><span class="mode-badge">Beta</span> · developing</div>
                 </div>
             </div>
         </div>
@@ -1034,6 +1064,78 @@
                 </div>
             </div>
         </section>
+
+        <!-- ================= PAGE 5: PROFILE (header menu) ================= -->
+        <section id="page-profile" class="page">
+            <div class="account-page">
+                <div class="account-inner">
+                    <div class="account-card">
+                        <h3>Username</h3>
+                        <p class="hint">Used for password sign-in. Changing it takes effect on your next sign-in.</p>
+                        <div class="account-form">
+                            <input id="profileUsername" autocomplete="username" placeholder="Username">
+                            <input id="usernameCurrentPw" type="password" autocomplete="current-password" placeholder="Current password">
+                            <div class="account-row">
+                                <button class="primary" id="saveUsernameBtn">Save username</button>
+                                <span class="status" id="usernameStatus"></span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="account-card">
+                        <h3>Password</h3>
+                        <p class="hint">At least 8 characters. Takes effect immediately for the next sign-in; your current session stays signed in.</p>
+                        <div class="account-form">
+                            <input id="pwCurrent" type="password" autocomplete="current-password" placeholder="Current password">
+                            <input id="pwNew" type="password" autocomplete="new-password" placeholder="New password">
+                            <input id="pwConfirm" type="password" autocomplete="new-password" placeholder="Confirm new password">
+                            <div class="account-row">
+                                <button class="primary" id="savePasswordBtn">Change password</button>
+                                <span class="status" id="passwordStatus"></span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="account-card">
+                        <h3>Google account</h3>
+                        <p class="hint" id="googleHint">Link a Google account to also sign in with it.</p>
+                        <div class="account-row" id="googleRow"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ================= PAGE 6: SETTINGS (header menu, view-only) ================= -->
+        <section id="page-settings" class="page">
+            <div class="account-page">
+                <div class="account-inner">
+                    <div class="account-card">
+                        <h3>Mode</h3>
+                        <div class="account-row">
+                            <span class="mode-pill" id="modePill">Beta — developing</span>
+                            <span class="hint" style="margin:0">Features and models are still changing; expect rough edges.</span>
+                        </div>
+                    </div>
+                    <div class="account-card">
+                        <h3>Models by task</h3>
+                        <p class="hint">View only — models are set by server configuration.</p>
+                        <div class="table-scroll"><table class="settings-table" id="modelsTable"></table></div>
+                    </div>
+                    <div class="account-card">
+                        <h3>Usage — last 30 days</h3>
+                        <p class="hint" id="usageTotals">Loading…</p>
+                        <div class="table-scroll"><table class="settings-table" id="usageDaily"></table></div>
+                    </div>
+                    <div class="account-card">
+                        <h3>By model — last 30 days</h3>
+                        <div class="table-scroll"><table class="settings-table" id="usageModels"></table></div>
+                    </div>
+                    <div class="account-card">
+                        <h3>Assist quick actions — last 30 days</h3>
+                        <p class="hint">Counted per send; “Free text” means typed without a quick action armed.</p>
+                        <div class="table-scroll"><table class="settings-table" id="assistButtonsTable"></table></div>
+                    </div>
+                </div>
+            </div>
+        </section>
     </div>
 
     <!-- New shift name confirmation -->
@@ -1177,6 +1279,8 @@
             if (page === 'draft') { if (draftInited) loadDraftList(); else initDraftPage(); }
             if (page === 'final') initFinalPage();
             if (page === 'review') initReviewPage();
+            if (page === 'profile') initProfilePage();
+            if (page === 'settings') initSettingsPage();
         }
         document.querySelectorAll('.tab[data-page]').forEach(tab => {
             tab.addEventListener('click', () => showPage(tab.dataset.page));
@@ -1225,6 +1329,131 @@
                     'Runs in the background — you can open another study while it works.';
             }
         }).catch(() => {});
+
+        // ==================== PROFILE & SETTINGS PAGES ====================
+
+        document.getElementById('menuProfile').addEventListener('click', () => { closeMenu(); showPage('profile'); });
+        document.getElementById('menuSettings').addEventListener('click', () => { closeMenu(); showPage('settings'); });
+
+        const setAccountStatus = (id, msg, err) => {
+            const el = document.getElementById(id);
+            el.textContent = msg || '';
+            el.className = 'status' + (err ? ' error' : '');
+        };
+
+        async function initProfilePage() {
+            try {
+                const p = await api('/api/profile');
+                const u = document.getElementById('profileUsername');
+                if (document.activeElement !== u) u.value = p.username || '';
+                const row = document.getElementById('googleRow');
+                const hint = document.getElementById('googleHint');
+                if (p.google_email) {
+                    hint.textContent = 'This Google account can sign in to Flow Dictation.';
+                    row.innerHTML = '<span class="status">Linked: ' + escapeHtml(p.google_email) + '</span>' +
+                        '<button class="ghost danger" id="unlinkGoogleBtn">Unlink</button>';
+                    row.querySelector('#unlinkGoogleBtn').addEventListener('click', async () => {
+                        try {
+                            await api('/api/profile/google/unlink', { method: 'POST', body: {} });
+                            initProfilePage();
+                        } catch (e) { showToast('Unlink failed: ' + e.message, 4000); }
+                    });
+                } else if (!p.google_login_configured) {
+                    hint.textContent = 'Google sign-in is not configured on the server.';
+                    row.innerHTML = '';
+                } else {
+                    hint.textContent = 'Link a Google account to also sign in with it.';
+                    row.innerHTML = '<a class="ghost" style="text-decoration:none" href="/auth/link/google">Link Google account</a>';
+                }
+            } catch (e) {
+                showToast('Could not load profile: ' + e.message, 4000);
+            }
+        }
+
+        document.getElementById('saveUsernameBtn').addEventListener('click', async () => {
+            const username = document.getElementById('profileUsername').value.trim();
+            const current_password = document.getElementById('usernameCurrentPw').value;
+            setAccountStatus('usernameStatus', 'Saving…');
+            try {
+                const d = await api('/api/profile/username', { method: 'POST', body: { username, current_password } });
+                document.getElementById('usernameCurrentPw').value = '';
+                setAccountStatus('usernameStatus', 'Saved — sign in as “' + d.username + '” next time.');
+            } catch (e) { setAccountStatus('usernameStatus', e.message, true); }
+        });
+
+        document.getElementById('savePasswordBtn').addEventListener('click', async () => {
+            const current_password = document.getElementById('pwCurrent').value;
+            const n1 = document.getElementById('pwNew').value;
+            const n2 = document.getElementById('pwConfirm').value;
+            if (n1 !== n2) return setAccountStatus('passwordStatus', 'New passwords do not match.', true);
+            setAccountStatus('passwordStatus', 'Saving…');
+            try {
+                await api('/api/profile/password', { method: 'POST', body: { current_password, new_password: n1 } });
+                ['pwCurrent', 'pwNew', 'pwConfirm'].forEach(id => { document.getElementById(id).value = ''; });
+                setAccountStatus('passwordStatus', 'Password changed.');
+            } catch (e) { setAccountStatus('passwordStatus', e.message, true); }
+        });
+
+        async function initSettingsPage() {
+            try {
+                const [s, u] = await Promise.all([api('/api/settings'), api('/api/usage/summary')]);
+                document.getElementById('modePill').textContent = s.mode_label || s.mode || 'Beta';
+
+                document.getElementById('modelsTable').innerHTML =
+                    '<tr><th>Task</th><th>Model</th><th>Provider</th></tr>' +
+                    (s.models || []).map(m =>
+                        '<tr><td>' + escapeHtml(m.task) +
+                        (m.note ? '<div class="muted">' + escapeHtml(m.note) + '</div>' : '') +
+                        '</td><td>' + escapeHtml(m.model_name || m.model) +
+                        '</td><td>' + escapeHtml(m.provider) + '</td></tr>').join('');
+
+                const fmtCost = c => '$' + Number(c || 0).toFixed(Number(c) >= 1 ? 2 : 3);
+                const fmtTok = t => {
+                    t = Number(t || 0);
+                    return t >= 1e6 ? (t / 1e6).toFixed(1) + 'M' : t >= 1000 ? (t / 1000).toFixed(1) + 'k' : String(t);
+                };
+                document.getElementById('usageTotals').textContent =
+                    u.totals.calls + ' model calls · ' + fmtTok(u.totals.input_tokens) + ' in / ' +
+                    fmtTok(u.totals.output_tokens) + ' out · ' + fmtCost(u.totals.est_cost) + ' estimated cost';
+
+                document.getElementById('usageDaily').innerHTML =
+                    '<tr><th>Day</th><th class="num">Calls</th><th class="num">Tokens in / out</th><th class="num">Cost</th><th>Top model</th></tr>' +
+                    (u.by_day || []).map(d => {
+                        const top = (d.by_model && d.by_model[0]) || null;
+                        return '<tr><td>' + escapeHtml(d.day) + '</td><td class="num">' + d.calls +
+                            '</td><td class="num">' + fmtTok(d.input_tokens) + ' / ' + fmtTok(d.output_tokens) +
+                            '</td><td class="num">' + fmtCost(d.est_cost) + '</td><td>' +
+                            (top ? escapeHtml(top.model) + ' <span class="muted">' + fmtCost(top.est_cost) + '</span>' : '') +
+                            '</td></tr>';
+                    }).join('');
+
+                document.getElementById('usageModels').innerHTML =
+                    '<tr><th>Model</th><th class="num">Calls</th><th class="num">Tokens in / out</th><th class="num">Cost</th></tr>' +
+                    (u.by_model || []).map(m =>
+                        '<tr><td>' + escapeHtml(m.model) + '</td><td class="num">' + m.calls +
+                        '</td><td class="num">' + fmtTok(m.input_tokens) + ' / ' + fmtTok(m.output_tokens) +
+                        '</td><td class="num">' + fmtCost(m.est_cost) + '</td></tr>').join('');
+
+                const buttonName = a => a === 'freetext' ? 'Free text' : (ACTION_LABELS[a] || a);
+                document.getElementById('assistButtonsTable').innerHTML =
+                    '<tr><th>Action</th><th class="num">Uses</th></tr>' +
+                    ((u.assist_buttons || []).map(b =>
+                        '<tr><td>' + escapeHtml(buttonName(b.action)) + '</td><td class="num">' + b.uses + '</td></tr>').join('') ||
+                        '<tr><td class="muted" colspan="2">No data yet — counting starts with this version.</td></tr>');
+            } catch (e) {
+                showToast('Could not load settings: ' + e.message, 4000);
+            }
+        }
+
+        // Returning from Google account linking lands back with a marker
+        {
+            const glink = new URLSearchParams(location.search).get('google_link');
+            if (glink) {
+                history.replaceState(null, '', location.pathname);
+                showPage('profile');
+                showToast(glink === 'ok' ? 'Google account linked' : 'Google account linking failed', 4000);
+            }
+        }
 
         // ==================== ASSIST PAGE ====================
 

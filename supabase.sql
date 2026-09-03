@@ -296,3 +296,25 @@ alter table api_calls add column if not exists cache_write_tokens int;
 -- api_calls is authoritative for cost/tokens/latency).
 alter table review_events add column if not exists api_call_id uuid references api_calls(id);
 alter table assist_feedback add column if not exists api_call_id uuid references api_calls(id);
+
+-- Assist quick-action usage (2026-09): one row per Assist send, keyed by the
+-- chip that was armed ('freetext' = none). Counts button presses, not model
+-- calls — multi-call actions and fallbacks can't skew it. No text columns:
+-- exempt from the scrub, retained indefinitely, like api_calls.
+create table if not exists assist_actions (
+  id bigint generated always as identity primary key,
+  created_at timestamptz not null default now(),
+  action text not null
+);
+create index if not exists assist_actions_created_idx on assist_actions (created_at);
+alter table assist_actions enable row level security;
+
+-- Runtime app settings (2026-09): key/value overrides set from the Profile
+-- page — app_username, app_password (scrypt hash, never plaintext),
+-- google_email (linked sign-in). Env vars remain the seed/fallback.
+create table if not exists app_settings (
+  key text primary key,
+  value text not null,
+  updated_at timestamptz not null default now()
+);
+alter table app_settings enable row level security;

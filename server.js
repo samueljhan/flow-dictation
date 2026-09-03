@@ -105,6 +105,53 @@ const ALLOWED_EMAILS = (process.env.ALLOWED_EMAILS || 'samueljhan@gmail.com')
 const APP_PASSWORD = process.env.APP_PASSWORD || '';
 // Username for password sign-in; defaults to the first allowed email
 const APP_USERNAME = (process.env.APP_USERNAME || ALLOWED_EMAILS[0] || '').toLowerCase();
+
+// Runtime credential overrides, set from the Profile page and stored in
+// app_settings — the env values above become the seed/fallback. Still
+// single-user: one username, one password (scrypt hash, never plaintext),
+// one linked Google account that may sign in alongside the env allowlist.
+const authOverrides = { username: null, passwordHash: null, googleEmail: null };
+async function loadAuthOverrides() {
+  if (!db.configured) return;
+  try {
+    const rows = await db.many(
+      `select key, value from app_settings where key in ('app_username', 'app_password', 'google_email')`);
+    for (const r of rows) {
+      if (r.key === 'app_username') authOverrides.username = r.value;
+      if (r.key === 'app_password') authOverrides.passwordHash = r.value;
+      if (r.key === 'google_email') authOverrides.googleEmail = r.value;
+    }
+    if (rows.length) console.log(`✅ Auth overrides loaded (${rows.map(r => r.key).join(', ')})`);
+  } catch (e) {
+    console.error('Auth overrides load failed (env credentials remain in effect):', e.message);
+  }
+}
+async function saveAppSetting(key, value) {
+  if (value === null) return db.query(`delete from app_settings where key = $1`, [key]);
+  return db.query(
+    `insert into app_settings (key, value, updated_at) values ($1, $2, now())
+     on conflict (key) do update set value = excluded.value, updated_at = now()`, [key, value]);
+}
+const effectiveUsername = () => authOverrides.username || APP_USERNAME;
+function hashPassword(pw) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  return 's2:' + salt + ':' + crypto.scryptSync(String(pw), salt, 64).toString('hex');
+}
+function passwordHashMatches(pw, stored) {
+  const [tag, salt, hex] = String(stored).split(':');
+  if (tag !== 's2' || !salt || !hex) return false;
+  const a = crypto.scryptSync(String(pw), salt, 64);
+  const b = Buffer.from(hex, 'hex');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+// One password check for login and the Profile page: a DB-set password
+// supersedes the env one the moment it exists.
+function verifyPassword(pw) {
+  if (authOverrides.passwordHash) return passwordHashMatches(pw, authOverrides.passwordHash);
+  if (APP_PASSWORD) return secretMatches(pw, APP_PASSWORD);
+  return false;
+}
+const passwordConfigured = () => !!(authOverrides.passwordHash || APP_PASSWORD);
 // Sessions survive restarts only if this is set explicitly.
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 if (!process.env.SESSION_SECRET) {
@@ -189,6 +236,18 @@ app.get('/auth/login/google', (req, res) => {
   res.redirect(url);
 });
 
+// Start Google account linking from the Profile page. Not in PUBLIC_PATHS,
+// so the auth gate above already requires a signed-in session.
+app.get('/auth/link/google', (req, res) => {
+  if (!googleLoginConfigured) return res.redirect('/?google_link=unconfigured');
+  const url = oauth2Client.generateAuthUrl({
+    scope: ['openid', 'email'],
+    state: 'link',
+    prompt: 'select_account'
+  });
+  res.redirect(url);
+});
+
 // Compare via fixed-length digests so length differences don't leak and
 // timingSafeEqual never throws on mismatched buffer sizes.
 function secretMatches(supplied, expected) {
@@ -198,14 +257,14 @@ function secretMatches(supplied, expected) {
 }
 
 app.post('/auth/password', (req, res) => {
-  if (!APP_PASSWORD) return res.redirect('/login?error=password_unconfigured');
+  if (!passwordConfigured()) return res.redirect('/login?error=password_unconfigured');
   const username = String((req.body && req.body.username) || '').trim().toLowerCase();
   const password = String((req.body && req.body.password) || '');
   // Always evaluate both so a wrong username costs the same as a wrong password
-  const okUser = secretMatches(username, APP_USERNAME);
-  const okPass = secretMatches(password, APP_PASSWORD);
+  const okUser = secretMatches(username, effectiveUsername());
+  const okPass = verifyPassword(password);
   if (!okUser || !okPass) return res.redirect('/login?error=bad_credentials');
-  setSessionCookie(res, APP_USERNAME || 'password-user');
+  setSessionCookie(res, effectiveUsername() || 'password-user');
   res.redirect('/');
 });
 
@@ -221,6 +280,94 @@ app.get('/api/me', (req, res) => res.json({
   review_model: MODEL_REVIEW,
   review_model_name: modelDisplayName(MODEL_REVIEW)
 }));
+
+// ============ Profile & settings (single-user) ============
+
+app.get('/api/profile', (req, res) => res.json({
+  username: effectiveUsername(),
+  password_set: passwordConfigured(),
+  google_login_configured: googleLoginConfigured,
+  google_email: authOverrides.googleEmail
+}));
+
+// Both credential changes demand the current password whenever one is
+// configured (it always is in production); a Google-only setup with no
+// password at all may set one without it.
+function checkCurrentPassword(req, res) {
+  if (!passwordConfigured()) return true;
+  if (verifyPassword(String((req.body && req.body.current_password) || ''))) return true;
+  res.status(403).json({ error: 'Current password is incorrect' });
+  return false;
+}
+
+app.post('/api/profile/username', async (req, res) => {
+  if (!requireDb(res)) return;
+  try {
+    const name = String((req.body && req.body.username) || '').trim().toLowerCase();
+    if (!/^[a-z0-9@._-]{3,80}$/.test(name)) {
+      return res.status(400).json({ error: 'Username must be 3–80 characters: letters, digits, @ . _ -' });
+    }
+    if (!checkCurrentPassword(req, res)) return;
+    await saveAppSetting('app_username', name);
+    authOverrides.username = name;
+    console.log('✅ Username changed');
+    res.json({ ok: true, username: name });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to save username', details: e.message });
+  }
+});
+
+app.post('/api/profile/password', async (req, res) => {
+  if (!requireDb(res)) return;
+  try {
+    const next = String((req.body && req.body.new_password) || '');
+    if (next.length < 8) return res.status(400).json({ error: 'New password must be at least 8 characters' });
+    if (!checkCurrentPassword(req, res)) return;
+    const hash = hashPassword(next);
+    await saveAppSetting('app_password', hash);
+    authOverrides.passwordHash = hash;
+    console.log('✅ Password changed');
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to save password', details: e.message });
+  }
+});
+
+app.post('/api/profile/google/unlink', async (req, res) => {
+  if (!requireDb(res)) return;
+  try {
+    await saveAppSetting('google_email', null);
+    authOverrides.googleEmail = null;
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to unlink', details: e.message });
+  }
+});
+
+// View-only for now: mode + which model serves each task. Models are set by
+// Cloud Run env vars (MODEL_*) — this reports what is actually in effect.
+app.get('/api/settings', (req, res) => {
+  const entry = (task, model, note) =>
+    ({ task, model, model_name: modelDisplayName(model), provider: providerFor(model), ...(note ? { note } : {}) });
+  res.json({
+    mode: 'beta',
+    mode_label: 'Beta — developing',
+    models: [
+      entry('Draft review + read-out integration', MODEL_REVIEW, 'de-identified pipeline'),
+      entry('Generate Impression', MODEL_IMPRESSION, 'de-identified pipeline'),
+      entry('Synthesize Report', MODEL_SYNTHESIZE, 'de-identified pipeline'),
+      entry('Reword', MODEL_REWORD, 'de-identified pipeline'),
+      entry('Describe Finding', MODEL_DESCRIBE, 'de-identified pipeline'),
+      entry('Proofread / Generate Full Report', MODEL_REPORT),
+      entry('Quick Rad Question — references ON', MODEL_RADQA_GROUNDED, 'Google Search grounding'),
+      entry('Quick Rad Question — references OFF', MODEL_RADQA),
+      entry('Free-text chat', MODEL_CHAT, 'Gemini only by design (may carry unredacted pastes)'),
+      entry('Study-type detection', MODEL_DETECT),
+      entry('PHI scrub / redaction', MODEL_SCRUB),
+      entry('Fallback when the de-identified pipeline can\'t run', MODEL_GEMINI_FALLBACK)
+    ]
+  });
+});
 
 // Static files are served only after the auth gate above
 app.use(express.static('public'));
@@ -1478,10 +1625,21 @@ async function runFreeform({ messages, systemFor, injected, label, useRefs }) {
   };
 }
 
+// Quick-action usage counter: which chip was armed for this send, 'freetext'
+// when none. Fire-and-forget — a failed insert costs the count, never the
+// assist call.
+function recordAssistAction(action) {
+  if (!db.configured) return;
+  const name = (typeof action === 'string' && action.trim()) ? action.trim().slice(0, 40) : 'freetext';
+  db.query(`insert into assist_actions (action) values ($1)`, [name])
+    .catch(e => console.error('assist action count failed:', e.message));
+}
+
 app.post('/api/assist', async (req, res) => {
   try {
     if (!assistValidate(req, res)) return;
     const { action, message, history, template } = req.body;
+    recordAssistAction(action);
     const instruction = action && ASSIST_ACTIONS[action] ? ASSIST_ACTIONS[action] : null;
     const messages = assistMessages({ action, instruction, message, template, history });
 
@@ -3263,7 +3421,7 @@ knowledgeCrud('language', 'rad_language', ['category', 'content']);
 app.get('/auth/google/callback', async (req, res) => {
   const { code, state } = req.query;
   try {
-    if (state !== 'login') return res.redirect('/login');
+    if (state !== 'login' && state !== 'link') return res.redirect('/login');
     const { tokens } = await oauth2Client.getToken(code);
     // Verify the Google identity and check it against the allowlist
     if (!tokens.id_token) return res.redirect('/login?error=no_identity');
@@ -3273,7 +3431,19 @@ app.get('/auth/google/callback', async (req, res) => {
     });
     const payload = ticket.getPayload() || {};
     const email = String(payload.email || '').toLowerCase();
-    if (!payload.email_verified || !ALLOWED_EMAILS.includes(email)) {
+    // Linking (from the Profile page): store the verified email so it can
+    // sign in alongside the env allowlist. Requires an existing session —
+    // the callback path is exempt from the auth gate, so check here.
+    if (state === 'link') {
+      if (!readSession(getCookie(req, COOKIE_NAME))) return res.redirect('/login');
+      if (!payload.email_verified || !email) return res.redirect('/?google_link=failed');
+      await saveAppSetting('google_email', email);
+      authOverrides.googleEmail = email;
+      console.log(`✅ Linked Google account: ${email}`);
+      return res.redirect('/?google_link=ok');
+    }
+    const allowed = ALLOWED_EMAILS.includes(email) || email === authOverrides.googleEmail;
+    if (!payload.email_verified || !allowed) {
       console.warn(`Denied sign-in for ${email || '(unknown)'}`);
       return res.redirect('/login?error=not_allowed');
     }
@@ -3518,13 +3688,14 @@ app.get('/api/usage/summary', async (req, res) => {
     const range = parseWindow(req);
     if (!range) return res.status(400).json({ error: 'Bad from/to date' });
     const roundCost = r => ({ ...r, est_cost: round6(r.est_cost) });
-    const group = cols => db.many(
-      `select ${cols}, count(*)::int as calls,
+    const SUMS = `count(*)::int as calls,
               coalesce(sum(input_tokens), 0)::bigint as input_tokens,
               coalesce(sum(output_tokens), 0)::bigint as output_tokens,
               coalesce(sum(cached_tokens), 0)::bigint as cached_tokens,
               coalesce(sum(cache_write_tokens), 0)::bigint as cache_write_tokens,
-              sum(est_cost)::float8 as est_cost
+              sum(est_cost)::float8 as est_cost`;
+    const group = cols => db.many(
+      `select ${cols}, ${SUMS}
          from api_calls
         where created_at between $1 and $2
         group by ${cols}
@@ -3541,6 +3712,31 @@ app.get('/api/usage/summary', async (req, res) => {
            from api_calls where created_at between $1 and $2`, range),
       group('call_type, model'), group('model'), group('call_type')
     ]);
+    // Assist quick-action presses ('freetext' = sent with no chip armed) —
+    // counted at the request, so it disagrees with by_call_type on purpose:
+    // that counts model calls, this counts uses.
+    const assistButtons = await db.many(
+      `select action, count(*)::int as uses
+         from assist_actions
+        where created_at between $1 and $2
+        group by action order by uses desc`, range).catch(() => []);
+
+    // Daily roll-up (UTC days, recent first), each day carrying its own
+    // per-model breakdown so cost spikes trace to the model that caused them
+    const dayExpr = `to_char(created_at at time zone 'UTC', 'YYYY-MM-DD')`;
+    const [dayTotals, dayModels] = await Promise.all([
+      db.many(`select ${dayExpr} as day, ${SUMS}
+                 from api_calls where created_at between $1 and $2
+                group by 1 order by 1 desc`, range),
+      db.many(`select ${dayExpr} as day, model, ${SUMS}
+                 from api_calls where created_at between $1 and $2
+                group by 1, 2 order by 1 desc, est_cost desc`, range)
+    ]);
+    const byDay = dayTotals.map(d => roundCost({
+      ...d,
+      by_model: dayModels.filter(m => m.day === d.day)
+        .map(({ day, ...rest }) => roundCost(rest))
+    }));
     res.json({
       from: range[0],
       to: range[1],
@@ -3556,7 +3752,9 @@ app.get('/api/usage/summary', async (req, res) => {
       }),
       by_call_type_and_model: byBoth.map(roundCost),
       by_model: byModel.map(roundCost),
-      by_call_type: byType.map(roundCost)
+      by_call_type: byType.map(roundCost),
+      by_day: byDay,
+      assist_buttons: assistButtons
     });
   } catch (error) {
     console.error('Usage summary error:', error.message);
@@ -3625,7 +3823,18 @@ async function ensureTelemetrySchema() {
     await db.query(`alter table assist_feedback add column if not exists model text`);
     await db.query(`alter table assist_feedback add column if not exists latency_ms int`);
     await db.query(`alter table assist_feedback add column if not exists api_call_id uuid references api_calls(id)`);
-    console.log('✅ Telemetry schema ensured (api_calls + review_events + assist_feedback columns)');
+    // One row per Assist send, keyed by the quick-action chip that was armed
+    // ('freetext' = none) — button presses, not model calls, so multi-call
+    // actions and fallbacks can't skew the counts. No text columns: exempt
+    // from the scrub, retained indefinitely, like api_calls.
+    await db.query(`
+      create table if not exists assist_actions (
+        id bigint generated always as identity primary key,
+        created_at timestamptz not null default now(),
+        action text not null
+      )`);
+    await db.query(`create index if not exists assist_actions_created_idx on assist_actions (created_at)`);
+    console.log('✅ Telemetry schema ensured (api_calls + review_events + assist_feedback columns + assist_actions)');
   } catch (e) {
     console.error('Telemetry schema ensure failed:', e.message);
   }
@@ -3649,10 +3858,27 @@ async function backfillActiveShift() {
   }
 }
 
+// Small key/value store for runtime app settings (credential overrides from
+// the Profile page). Mirrored in supabase.sql like the telemetry tables.
+async function ensureAppSettingsSchema() {
+  if (!db.configured) return;
+  try {
+    await db.query(`
+      create table if not exists app_settings (
+        key text primary key,
+        value text not null,
+        updated_at timestamptz not null default now()
+      )`);
+  } catch (e) {
+    console.error('App settings schema ensure failed:', e.message);
+  }
+}
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🏥 Flow Dictation running on port ${PORT}`);
   console.log(`✨ Models: ${MODEL_REPORT} (reports), ${MODEL_REVIEW} (review, de-identified pipeline) — full routing table above`);
   console.log(`🗄️  Database: ${db.configured ? db.describe() : 'NOT CONFIGURED'}`);
   ensureTelemetrySchema();
+  ensureAppSettingsSchema().then(loadAuthOverrides);
   backfillActiveShift();
 });

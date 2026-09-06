@@ -123,6 +123,42 @@
         }
         .table-scroll { overflow-x: auto; }
 
+        /* ---------- Settings: daily-cost chart ---------- */
+        .account-card { position: relative; }
+        .usage-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+        .usage-head h3 { margin: 0; }
+        .range-row { display: flex; gap: 6px; flex-wrap: wrap; }
+        .range-btn {
+            background: none; border: 1px solid #3a3a3a; color: #b0b0b0;
+            border-radius: 8px; padding: 5px 10px; font-size: 12px; cursor: pointer;
+        }
+        .range-btn:hover { background: #2f2f2f; }
+        .range-btn.active { background: #383838; color: #e8e8e8; border-color: #4a4a4a; }
+        .usage-cards { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+        .usage-tile { background: #1f1f1f; border: 1px solid #303030; border-radius: 10px; padding: 12px 16px; min-width: 110px; }
+        .usage-tile-label { font-size: 12px; color: #898781; margin-bottom: 4px; }
+        .usage-tile-value { font-size: 20px; font-weight: 600; color: #e8e8e8; }
+        .usage-tile-hero .usage-tile-value { font-size: 26px; }
+        .chart-title { margin: 14px 0 8px; font-size: 13px; font-weight: 500; color: #b0b0b0; }
+        .cost-chart svg { display: block; max-width: 100%; }
+        .cost-chart.loading, #usageDailyWrap.loading { opacity: 0.5; }
+        .cost-chart .seg.lift { filter: brightness(1.18); }
+        .cost-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; }
+        .cost-legend .key { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #c3c2b7; }
+        .cost-legend .swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+        .cost-tooltip {
+            position: absolute; z-index: 60; pointer-events: none;
+            background: #1a1a1a; border: 1px solid #3a3a3a; border-radius: 8px;
+            padding: 8px 10px; font-size: 12px; line-height: 1.5; min-width: 160px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+        }
+        .cost-tooltip .tt-day { color: #898781; margin-bottom: 4px; }
+        .cost-tooltip .tt-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+        .cost-tooltip .tt-key { width: 10px; height: 3px; border-radius: 1.5px; flex: none; }
+        .cost-tooltip .tt-cost { color: #ffffff; font-weight: 600; font-variant-numeric: tabular-nums; }
+        .cost-tooltip .tt-model { color: #c3c2b7; }
+        .cost-tooltip .tt-meta { color: #898781; }
+
         /* Pages fill everything under the header */
         .page { display: none; flex: 1; min-height: 0; flex-direction: column; background: #1a1a1a; }
         .page.active { display: flex; }
@@ -1120,16 +1156,43 @@
                         <div class="table-scroll"><table class="settings-table" id="modelsTable"></table></div>
                     </div>
                     <div class="account-card">
-                        <h3>Usage — last 30 days</h3>
-                        <p class="hint" id="usageTotals">Loading…</p>
-                        <div class="table-scroll"><table class="settings-table" id="usageDaily"></table></div>
+                        <div class="usage-head">
+                            <h3>Usage</h3>
+                            <div class="range-row">
+                                <button type="button" class="range-btn" data-days="7">Last 7 days</button>
+                                <button type="button" class="range-btn active" data-days="30">Last 30 days</button>
+                                <button type="button" class="range-btn" id="usageTableToggle">View as table</button>
+                            </div>
+                        </div>
+                        <div class="usage-cards">
+                            <div class="usage-tile usage-tile-hero">
+                                <div class="usage-tile-label">Total cost</div>
+                                <div class="usage-tile-value" id="costTotal">—</div>
+                            </div>
+                            <div class="usage-tile">
+                                <div class="usage-tile-label">Token cost</div>
+                                <div class="usage-tile-value" id="costTokens">—</div>
+                            </div>
+                            <div class="usage-tile">
+                                <div class="usage-tile-label">Web search cost</div>
+                                <div class="usage-tile-value" id="costSearch">—</div>
+                            </div>
+                        </div>
+                        <p class="hint" id="usageTotals"></p>
+                        <div id="costChartView">
+                            <h4 class="chart-title">Daily cost</h4>
+                            <div id="costChart" class="cost-chart"></div>
+                            <div id="costLegend" class="cost-legend"></div>
+                        </div>
+                        <div class="table-scroll" id="usageDailyWrap" hidden><table class="settings-table" id="usageDaily"></table></div>
+                        <div class="cost-tooltip" id="costTooltip" hidden></div>
                     </div>
                     <div class="account-card">
-                        <h3>By model — last 30 days</h3>
+                        <h3>By model</h3>
                         <div class="table-scroll"><table class="settings-table" id="usageModels"></table></div>
                     </div>
                     <div class="account-card">
-                        <h3>Assist quick actions — last 30 days</h3>
+                        <h3>Assist quick actions</h3>
                         <p class="hint">Counted per send; “Free text” means typed without a quick action armed.</p>
                         <div class="table-scroll"><table class="settings-table" id="assistButtonsTable"></table></div>
                     </div>
@@ -1183,6 +1246,7 @@
 
     <div class="toast" id="toast"></div>
 
+    <script src="chart.js"></script>
     <script>
         // ==================== Shared utilities ====================
 
@@ -1394,11 +1458,15 @@
             } catch (e) { setAccountStatus('passwordStatus', e.message, true); }
         });
 
+        // ---- Settings: usage state ----
+        let settingsDays = 30;        // Last 7 / Last 30 selector
+        let settingsUsage = null;     // latest /api/usage/summary response
+        let usageAsTable = false;     // chart is the default view
+
         async function initSettingsPage() {
             try {
-                const [s, u] = await Promise.all([api('/api/settings'), api('/api/usage/summary')]);
+                const s = await api('/api/settings');
                 document.getElementById('modePill').textContent = s.mode_label || s.mode || 'Beta';
-
                 document.getElementById('modelsTable').innerHTML =
                     '<tr><th>Task</th><th>Model</th><th>Provider</th></tr>' +
                     (s.models || []).map(m =>
@@ -1406,43 +1474,195 @@
                         (m.note ? '<div class="muted">' + escapeHtml(m.note) + '</div>' : '') +
                         '</td><td>' + escapeHtml(m.model_name || m.model) +
                         '</td><td>' + escapeHtml(m.provider) + '</td></tr>').join('');
-
-                const fmtCost = c => '$' + Number(c || 0).toFixed(Number(c) >= 1 ? 2 : 3);
-                const fmtTok = t => {
-                    t = Number(t || 0);
-                    return t >= 1e6 ? (t / 1e6).toFixed(1) + 'M' : t >= 1000 ? (t / 1000).toFixed(1) + 'k' : String(t);
-                };
-                document.getElementById('usageTotals').textContent =
-                    u.totals.calls + ' model calls · ' + fmtTok(u.totals.input_tokens) + ' in / ' +
-                    fmtTok(u.totals.output_tokens) + ' out · ' + fmtCost(u.totals.est_cost) + ' estimated cost';
-
-                document.getElementById('usageDaily').innerHTML =
-                    '<tr><th>Day</th><th class="num">Calls</th><th class="num">Tokens in / out</th><th class="num">Cost</th><th>Top model</th></tr>' +
-                    (u.by_day || []).map(d => {
-                        const top = (d.by_model && d.by_model[0]) || null;
-                        return '<tr><td>' + escapeHtml(d.day) + '</td><td class="num">' + d.calls +
-                            '</td><td class="num">' + fmtTok(d.input_tokens) + ' / ' + fmtTok(d.output_tokens) +
-                            '</td><td class="num">' + fmtCost(d.est_cost) + '</td><td>' +
-                            (top ? escapeHtml(top.model) + ' <span class="muted">' + fmtCost(top.est_cost) + '</span>' : '') +
-                            '</td></tr>';
-                    }).join('');
-
-                document.getElementById('usageModels').innerHTML =
-                    '<tr><th>Model</th><th class="num">Calls</th><th class="num">Tokens in / out</th><th class="num">Cost</th></tr>' +
-                    (u.by_model || []).map(m =>
-                        '<tr><td>' + escapeHtml(m.model) + '</td><td class="num">' + m.calls +
-                        '</td><td class="num">' + fmtTok(m.input_tokens) + ' / ' + fmtTok(m.output_tokens) +
-                        '</td><td class="num">' + fmtCost(m.est_cost) + '</td></tr>').join('');
-
-                const buttonName = a => a === 'freetext' ? 'Free text' : (ACTION_LABELS[a] || a);
-                document.getElementById('assistButtonsTable').innerHTML =
-                    '<tr><th>Action</th><th class="num">Uses</th></tr>' +
-                    ((u.assist_buttons || []).map(b =>
-                        '<tr><td>' + escapeHtml(buttonName(b.action)) + '</td><td class="num">' + b.uses + '</td></tr>').join('') ||
-                        '<tr><td class="muted" colspan="2">No data yet — counting starts with this version.</td></tr>');
             } catch (e) {
                 showToast('Could not load settings: ' + e.message, 4000);
             }
+            loadUsage();
+        }
+
+        // Fetch the usage window and re-render everything the range scopes:
+        // cards, chart, tables, assist counts — one response, so they agree.
+        async function loadUsage() {
+            const chartEl = document.getElementById('costChart');
+            chartEl.classList.add('loading');
+            document.getElementById('usageDailyWrap').classList.add('loading');
+            try {
+                const to = new Date();
+                const from = new Date(Date.now() - (settingsDays - 1) * 86400000);
+                const day = d => d.toISOString().slice(0, 10);
+                settingsUsage = await api('/api/usage/summary?from=' + day(from) + '&to=' + day(to));
+                renderUsage();
+            } catch (e) {
+                showToast('Could not load usage: ' + e.message, 4000);
+            } finally {
+                chartEl.classList.remove('loading');
+                document.getElementById('usageDailyWrap').classList.remove('loading');
+            }
+        }
+
+        function renderUsage() {
+            const u = settingsUsage;
+            if (!u) return;
+            const fmtUsd = CostChart.fmtUsd, fmtTok = CostChart.fmtTok;
+
+            // Summary cards: total, and token vs web-search split (search fees
+            // come from the ledger's search_cost column)
+            const search = u.totals.search_cost || 0;
+            document.getElementById('costTotal').textContent = fmtUsd(u.totals.est_cost);
+            document.getElementById('costTokens').textContent = fmtUsd(Math.max(0, u.totals.est_cost - search));
+            document.getElementById('costSearch').textContent = fmtUsd(search);
+            document.getElementById('usageTotals').textContent =
+                u.totals.calls + ' model calls · ' + fmtTok(u.totals.input_tokens) + ' tokens in / ' +
+                fmtTok(u.totals.output_tokens) + ' out · estimated at list price';
+
+            renderCostChart();
+            renderUsageTables();
+            document.getElementById('costChartView').hidden = usageAsTable;
+            document.getElementById('usageDailyWrap').hidden = !usageAsTable;
+        }
+
+        function renderCostChart() {
+            const u = settingsUsage;
+            if (!u) return;
+            const container = document.getElementById('costChart');
+            const model = CostChart.buildModel(u);
+            container.innerHTML = CostChart.svg(model, container.clientWidth || 640);
+            container.dataset.days = String(model.days.length);
+
+            // Chart totals must match the cards — both derive from the same
+            // response; a drift means a rendering bug, so surface it in dev.
+            const segSum = model.days.reduce((a, d) => a + d.total, 0);
+            if (Math.abs(segSum - (u.totals.est_cost || 0)) > 0.005) {
+                console.warn('cost chart drift: segments $' + segSum.toFixed(4) + ' vs totals $' + Number(u.totals.est_cost).toFixed(4));
+            }
+
+            // Legend beneath — swatches mirror the marks; names via textContent
+            const legend = document.getElementById('costLegend');
+            legend.innerHTML = '';
+            for (const m of model.models) {
+                const key = document.createElement('span');
+                key.className = 'key';
+                const sw = document.createElement('span');
+                sw.className = 'swatch';
+                sw.style.background = CostChart.modelColor(m);
+                key.appendChild(sw);
+                key.appendChild(document.createTextNode(m));
+                legend.appendChild(key);
+            }
+            container._chartModel = model;
+        }
+
+        function renderUsageTables() {
+            const u = settingsUsage;
+            const fmtUsd = CostChart.fmtUsd, fmtTok = CostChart.fmtTok;
+            document.getElementById('usageDaily').innerHTML =
+                '<tr><th>Day</th><th class="num">Calls</th><th class="num">Tokens in / out</th><th class="num">Cost</th><th>Top model</th></tr>' +
+                (u.by_day || []).map(d => {
+                    const top = (d.by_model && d.by_model[0]) || null;
+                    return '<tr><td>' + escapeHtml(d.day) + '</td><td class="num">' + d.calls +
+                        '</td><td class="num">' + fmtTok(d.input_tokens) + ' / ' + fmtTok(d.output_tokens) +
+                        '</td><td class="num">' + fmtUsd(d.est_cost) + '</td><td>' +
+                        (top ? escapeHtml(top.model) + ' <span class="muted">' + fmtUsd(top.est_cost) + '</span>' : '') +
+                        '</td></tr>';
+                }).join('');
+            document.getElementById('usageModels').innerHTML =
+                '<tr><th>Model</th><th class="num">Calls</th><th class="num">Tokens in / out</th><th class="num">Cost</th></tr>' +
+                (u.by_model || []).map(m =>
+                    '<tr><td>' + escapeHtml(m.model) + '</td><td class="num">' + m.calls +
+                    '</td><td class="num">' + fmtTok(m.input_tokens) + ' / ' + fmtTok(m.output_tokens) +
+                    '</td><td class="num">' + fmtUsd(m.est_cost) + '</td></tr>').join('');
+            const buttonName = a => a === 'freetext' ? 'Free text' : (ACTION_LABELS[a] || a);
+            document.getElementById('assistButtonsTable').innerHTML =
+                '<tr><th>Action</th><th class="num">Uses</th></tr>' +
+                ((u.assist_buttons || []).map(b =>
+                    '<tr><td>' + escapeHtml(buttonName(b.action)) + '</td><td class="num">' + b.uses + '</td></tr>').join('') ||
+                    '<tr><td class="muted" colspan="2">No data yet — counting starts with this version.</td></tr>');
+        }
+
+        // Range selector + table toggle
+        document.querySelectorAll('.range-btn[data-days]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                settingsDays = Number(btn.dataset.days);
+                document.querySelectorAll('.range-btn[data-days]').forEach(b =>
+                    b.classList.toggle('active', b === btn));
+                loadUsage();
+            });
+        });
+        document.getElementById('usageTableToggle').addEventListener('click', () => {
+            usageAsTable = !usageAsTable;
+            document.getElementById('usageTableToggle').textContent = usageAsTable ? 'View as chart' : 'View as table';
+            document.getElementById('costChartView').hidden = usageAsTable;
+            document.getElementById('usageDailyWrap').hidden = !usageAsTable;
+        });
+
+        // Tooltip: the whole day-column is the hit target; one tooltip lists
+        // every model at that day (value leads, name follows). Model names are
+        // untrusted — built with textContent, never innerHTML.
+        {
+            const chartEl = document.getElementById('costChart');
+            const tip = document.getElementById('costTooltip');
+            let liftedI = null;
+            const setLift = i => {
+                if (liftedI === i) return;
+                chartEl.querySelectorAll('.seg').forEach(el =>
+                    el.classList.toggle('lift', el.dataset.i === i));
+                liftedI = i;
+            };
+            const hide = () => { tip.hidden = true; setLift(null); };
+            chartEl.addEventListener('pointerleave', hide);
+            const onPoint = e => {
+                const model = chartEl._chartModel;
+                const hit = e.target.closest && e.target.closest('[data-i]');
+                if (!model || !hit) return hide();
+                const i = hit.dataset.i;
+                const d = model.days[Number(i)];
+                if (!d) return hide();
+                setLift(i);
+                tip.innerHTML = '';
+                const head = document.createElement('div');
+                head.className = 'tt-day';
+                head.textContent = d.day + (d.total ? ' — ' + CostChart.fmtUsd(d.total) + ' · ' + d.calls + ' calls' : ' — no usage');
+                tip.appendChild(head);
+                for (let j = d.segs.length - 1; j >= 0; j--) {   // top of stack first
+                    const s = d.segs[j];
+                    const row = document.createElement('div');
+                    row.className = 'tt-row';
+                    const key = document.createElement('span');
+                    key.className = 'tt-key';
+                    key.style.background = CostChart.modelColor(s.model);
+                    const cost = document.createElement('span');
+                    cost.className = 'tt-cost';
+                    cost.textContent = CostChart.fmtUsd(s.est_cost);
+                    const name = document.createElement('span');
+                    name.className = 'tt-model';
+                    name.textContent = s.model;
+                    const meta = document.createElement('span');
+                    meta.className = 'tt-meta';
+                    meta.textContent = '· ' + s.calls + ' calls · ' + CostChart.fmtTok(s.input_tokens) + ' / ' + CostChart.fmtTok(s.output_tokens);
+                    row.append(key, cost, name, meta);
+                    tip.appendChild(row);
+                }
+                tip.hidden = false;
+                // Position inside the card, clamped so it never overflows
+                const card = chartEl.closest('.account-card');
+                const cr = card.getBoundingClientRect();
+                const left = Math.max(8, Math.min(e.clientX - cr.left + 14, cr.width - tip.offsetWidth - 8));
+                const top = Math.max(8, e.clientY - cr.top - tip.offsetHeight - 10);
+                tip.style.left = left + 'px';
+                tip.style.top = top + 'px';
+            };
+            chartEl.addEventListener('pointermove', onPoint);
+            chartEl.addEventListener('pointerdown', onPoint);   // tap on touch
+            // Bars compress on narrow screens — re-render at the new width
+            let resizeT = null;
+            window.addEventListener('resize', () => {
+                clearTimeout(resizeT);
+                resizeT = setTimeout(() => {
+                    if (settingsUsage && document.getElementById('page-settings').classList.contains('active')) {
+                        renderCostChart();
+                    }
+                }, 150);
+            });
         }
 
         // Returning from Google account linking lands back with a marker

@@ -318,3 +318,9 @@ create table if not exists app_settings (
   updated_at timestamptz not null default now()
 );
 alter table app_settings enable row level security;
+
+-- Cost dashboard (2026-09): the web-search fee component of est_cost
+-- (Anthropic per-query / Gemini grounding per-call), split out per row so
+-- token cost and search cost can be reported separately. Default 0 backfills
+-- every pre-existing row.
+alter table api_calls add column if not exists search_cost numeric not null default 0;

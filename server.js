@@ -468,9 +468,15 @@ function costFor(model, u, grounded) {
     written * p.input * (p.cacheWrite !== undefined ? p.cacheWrite : 0) +
     tool * p.input +
     out * p.output
-  ) / 1e6 + (u.search_count
-    ? u.search_count * CLAUDE_SEARCH_COST_PER_QUERY   // Anthropic web search, per query
-    : (grounded ? GROUNDING_COST_PER_CALL : 0));      // Gemini Google grounding, per call
+  ) / 1e6 + searchFeeFor(u, grounded);
+}
+
+// The web-search component of a call's cost, split out so the ledger can
+// store it per row (api_calls.search_cost) and the dashboard can show token
+// cost and search cost as separate figures.
+function searchFeeFor(u, grounded) {
+  if (u && u.search_count) return u.search_count * CLAUDE_SEARCH_COST_PER_QUERY; // Anthropic, per query
+  return grounded ? GROUNDING_COST_PER_CALL : 0;                                 // Gemini grounding, per call
 }
 
 // Durable per-call ledger: one api_calls row per model call — EVERY call,
@@ -488,21 +494,23 @@ function costFor(model, u, grounded) {
 async function recordUsage({ model, label, usage, grounded, latency_ms, report_id }) {
   const u = usage || {};
   const cost = costFor(model, u, grounded);
+  const searchCost = searchFeeFor(u, grounded);
   let apiCallId = null;
   if (db.configured) {
     apiCallId = crypto.randomUUID();
     try {
       await db.query(
         `insert into api_calls
-           (id, call_type, model, report_id, input_tokens, output_tokens, cached_tokens, cache_write_tokens, latency_ms, est_cost)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+           (id, call_type, model, report_id, input_tokens, output_tokens, cached_tokens, cache_write_tokens, latency_ms, est_cost, search_cost)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [apiCallId, label || 'unlabelled', model || 'unknown', report_id || null,
          (u.prompt_tokens || 0) + (u.tool_prompt_tokens || 0),
          (u.output_tokens || 0) + (u.thought_tokens || 0),
          u.cached_tokens || 0,
          u.cache_write_tokens || 0,
          Number.isFinite(latency_ms) ? Math.round(latency_ms) : null,
-         Number(cost.toFixed(8))]);
+         Number(cost.toFixed(8)),
+         Number(searchCost.toFixed(8))]);
     } catch (e) {
       apiCallId = null;
       console.error('[cost] ledger write failed:', e.message);
@@ -3824,13 +3832,18 @@ app.get('/api/usage/summary', async (req, res) => {
   try {
     const range = parseWindow(req);
     if (!range) return res.status(400).json({ error: 'Bad from/to date' });
-    const roundCost = r => ({ ...r, est_cost: round6(r.est_cost) });
+    const roundCost = r => ({
+      ...r,
+      est_cost: round6(r.est_cost),
+      ...(r.search_cost !== undefined ? { search_cost: round6(r.search_cost) } : {})
+    });
     const SUMS = `count(*)::int as calls,
               coalesce(sum(input_tokens), 0)::bigint as input_tokens,
               coalesce(sum(output_tokens), 0)::bigint as output_tokens,
               coalesce(sum(cached_tokens), 0)::bigint as cached_tokens,
               coalesce(sum(cache_write_tokens), 0)::bigint as cache_write_tokens,
-              sum(est_cost)::float8 as est_cost`;
+              sum(est_cost)::float8 as est_cost,
+              coalesce(sum(search_cost), 0)::float8 as search_cost`;
     const group = cols => db.many(
       `select ${cols}, ${SUMS}
          from api_calls
@@ -3845,6 +3858,7 @@ app.get('/api/usage/summary', async (req, res) => {
                 coalesce(sum(cached_tokens), 0)::bigint as cached_tokens,
                 coalesce(sum(cache_write_tokens), 0)::bigint as cache_write_tokens,
                 coalesce(sum(est_cost), 0)::float8 as est_cost,
+                coalesce(sum(search_cost), 0)::float8 as search_cost,
                 min(created_at) as since
            from api_calls where created_at between $1 and $2`, range),
       group('call_type, model'), group('model'), group('call_type')
@@ -3885,7 +3899,8 @@ app.get('/api/usage/summary', async (req, res) => {
         output_tokens: totals.output_tokens,
         cached_tokens: totals.cached_tokens,
         cache_write_tokens: totals.cache_write_tokens,
-        est_cost: totals.est_cost
+        est_cost: totals.est_cost,
+        search_cost: totals.search_cost
       }),
       by_call_type_and_model: byBoth.map(roundCost),
       by_model: byModel.map(roundCost),
@@ -3928,6 +3943,10 @@ async function ensureTelemetrySchema() {
     // Claude prompt-cache writes bill at their own rate (1.25x input on
     // Vertex) — kept as their own column so est_cost reconciles from tokens
     await db.query(`alter table api_calls add column if not exists cache_write_tokens int`);
+    // Web-search fee component of est_cost (Anthropic per-query / Gemini
+    // grounding per-call), split out so the dashboard can separate token cost
+    // from search cost. Default 0 backfills every pre-existing row.
+    await db.query(`alter table api_calls add column if not exists search_cost numeric not null default 0`);
     await db.query(`
       create table if not exists review_events (
         id bigint generated always as identity primary key,

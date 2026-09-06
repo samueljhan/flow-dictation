@@ -4,17 +4,23 @@
 // layer routes by model prefix without caring which provider answers.
 //
 // THE CONTRACT THIS CLIENT ENFORCES: Claude is outside the GCP BAA boundary,
-// so it must NEVER receive PHI, dates, or any report section beyond findings,
-// impression, and the study type. The server's pipeline extracts those
-// sections and reversibly redacts identifiers BEFORE calling here; this
-// module is the last line of defense, not the pipeline:
+// so it must NEVER receive PHI. The server's pipeline reversibly redacts
+// identifiers BEFORE calling here; this module is the last line of defense,
+// not the pipeline:
 //   1. Callers must pass deidentified: true — set only by the redaction
 //      pipeline (and the selftest). Any other call path throws.
-//   2. Every user-message text is scanned before sending: a non-findings
-//      section heading (EXAMINATION, CLINICAL HISTORY, TECHNIQUE, COMPARISON,
-//      ...) or anything the scrub patterns still match (dates, MRNs, phones)
-//      means redaction was skipped or failed — the call throws PHI_GUARD and
-//      the caller falls back to Gemini, which the BAA covers.
+//   2. Every user-message text is scanned before sending: anything the scrub
+//      patterns still match (dates, MRNs, phones) means redaction was skipped
+//      or failed — the call throws PHI_GUARD and the caller falls back to
+//      Gemini, which the BAA covers.
+//   3. Section-based tasks (review, impression, reword, describe, synthesize)
+//      send ONLY redacted findings/impression + study type; for those, a
+//      non-findings section heading (EXAMINATION, CLINICAL HISTORY, ...) also
+//      trips the guard — it means section extraction was skipped. Whole-text
+//      tasks (proofread, fullreport, chat) legitimately carry full-report
+//      structure through the redaction pass, so they assert
+//      redactedFullText: true, which skips ONLY the heading proxy — the
+//      identifier-pattern check above always runs.
 // System prompts are exempt from the heading check (exemplar reports
 // legitimately show report structure; the server pattern-scrubs them), but
 // not from the identifier-pattern check.
@@ -94,16 +100,23 @@ function toFinishReason(stopReason) {
  *   maxTokens      output ceiling hint — floored at 16000 (see below)
  *   effort         'low' | 'medium' | 'high' | undefined
  *   deidentified   REQUIRED true — only the redaction pipeline sets it
+ *   redactedFullText  true for whole-text tasks (proofread/fullreport/chat):
+ *                  the payload passed whole-document reversible redaction, so
+ *                  report-structure headings are expected — the heading guard
+ *                  is skipped, the identifier-pattern guard still applies
  *   responseSchema ACCEPTED BUT UNUSED: Claude paths rely on prompt-for-JSON
  *                  + fence-strip + the server's substring validation (the
  *                  real guarantee)
- *   grounding      not supported — grounded search is Gemini-only; the server
- *                  routes grounded calls to Gemini before here
- * Returns { text, usage, finishReason, served, grounding: null }.
+ *   grounding      true adds Anthropic's web search server tool
+ *                  (web_search_20260209 — Opus/Sonnet 4.6+): searches run on
+ *                  Anthropic's servers, citations come back on the text
+ *                  blocks, and usage.search_count reports billable searches
+ * Returns { text, usage, finishReason, served, grounding } — grounding is
+ * { citations: [{url, title}] } when web search produced any, else null.
  * Throws PHI_GUARD when the payload fails the de-identification checks,
  * and an error with isRefusal=true when Claude declines.
  */
-async function generate({ model, system, contents, maxTokens, effort, deidentified }) {
+async function generate({ model, system, contents, maxTokens, effort, deidentified, redactedFullText, grounding }) {
   if (!configured) throw new Error('ANTHROPIC_API_KEY is not set — Claude routing unavailable');
   if (deidentified !== true) {
     throw guardError('caller did not assert a de-identified payload');
@@ -115,10 +128,10 @@ async function generate({ model, system, contents, maxTokens, effort, deidentifi
   // Claude requires the first message to be 'user'
   while (messages.length && messages[0].role !== 'user') messages.shift();
 
-  for (const m of messages) assertDeidentified(m.content, { checkHeadings: true });
+  for (const m of messages) assertDeidentified(m.content, { checkHeadings: redactedFullText !== true });
   assertDeidentified(system, { checkHeadings: false });
 
-  const r = await client.messages.create({
+  const req = {
     model,
     // Thinking tokens count toward max_tokens on Claude (unlike Gemini's
     // separate budget), so the Gemini-sized ceilings would truncate mid-answer.
@@ -129,37 +142,64 @@ async function generate({ model, system, contents, maxTokens, effort, deidentifi
     // (memoised server-side), so caching the whole block as the prefix works.
     // 5m ephemeral TTL; cache writes bill at 1.25x and reads at 0.1x input.
     ...(system ? { system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }] } : {}),
-    messages,
+    ...(grounding ? { tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 5 }] } : {}),
     ...requestConfig(model, effort)
-  });
+  };
+
+  // Server tools run in a server-side sampling loop that can hit its
+  // iteration cap mid-turn (stop_reason 'pause_turn'); resending the turn
+  // with the assistant content appended resumes it. Bounded so a stuck turn
+  // can't loop forever. Without grounding there are no server tools and the
+  // first round is the only round.
+  let convo = messages;
+  const totals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, searches: 0 };
+  const textParts = [];
+  const cites = [];
+  let r;
+  for (let round = 0; round < 4; round++) {
+    r = await client.messages.create({ ...req, messages: convo });
+    const u = r.usage || {};
+    totals.input += u.input_tokens || 0;
+    totals.cacheRead += u.cache_read_input_tokens || 0;
+    totals.cacheWrite += u.cache_creation_input_tokens || 0;
+    totals.output += u.output_tokens || 0;
+    totals.searches += (u.server_tool_use && u.server_tool_use.web_search_requests) || 0;
+    for (const b of r.content || []) {
+      if (b.type === 'text' && typeof b.text === 'string') {
+        textParts.push(b.text);
+        for (const c of b.citations || []) {
+          if (c && c.url) cites.push({ url: c.url, title: c.title || '' });
+        }
+      }
+    }
+    if (r.stop_reason !== 'pause_turn') break;
+    convo = [...convo, { role: 'assistant', content: r.content }];
+  }
 
   if (r.stop_reason === 'refusal') {
     throw refusal(`stop_reason refusal${r.stop_details && r.stop_details.category ? `: ${r.stop_details.category}` : ''}`);
   }
-  const text = (r.content || [])
-    .filter(b => b.type === 'text' && typeof b.text === 'string')
-    .map(b => b.text)
-    .join('');
 
-  const u = r.usage || {};
-  const cacheRead = u.cache_read_input_tokens || 0;
-  const cacheWrite = u.cache_creation_input_tokens || 0;
+  const seen = new Set();
+  const citations = cites.filter(c => !seen.has(c.url) && seen.add(c.url));
   return {
-    text,
+    text: textParts.join(''),
     finishReason: toFinishReason(r.stop_reason),
     served: r.model || model,
     usage: {
       // prompt_tokens is the TOTAL prompt (cached portions included), matching
       // Gemini's promptTokenCount semantics — the cost layer rebates from it.
-      prompt_tokens: (u.input_tokens || 0) + cacheRead + cacheWrite,
-      cached_tokens: cacheRead,
-      cache_write_tokens: cacheWrite,
+      prompt_tokens: totals.input + totals.cacheRead + totals.cacheWrite,
+      cached_tokens: totals.cacheRead,
+      cache_write_tokens: totals.cacheWrite,
       // Claude's output_tokens already include thinking — no separate figure
-      output_tokens: u.output_tokens || 0,
+      output_tokens: totals.output,
       thought_tokens: 0,
-      tool_prompt_tokens: 0
+      tool_prompt_tokens: 0,
+      // Billable web searches this turn ($10/1k) — the cost layer prices them
+      search_count: totals.searches
     },
-    grounding: null
+    grounding: citations.length ? { citations } : null
   };
 }
 

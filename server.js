@@ -28,10 +28,18 @@ app.use(express.urlencoded({ extended: false }));
 // instantly reverted to Gemini — from a Cloud Run variable without touching
 // code. Deliberately NO cross-inheritance beyond the documented fallbacks.
 //
-// Tasks that CANNOT go to Claude, by design of the de-identification contract:
-//   fullreport  — its job is producing the non-findings sections
-//   proofread   — operates on arbitrary full-report text verbatim
-//   chat/radqa  — free text can carry anything the user pastes, unredacted
+// Two pipeline shapes feed Claude (2026-09: whole-text tasks joined):
+//   SECTION-BASED (review, impression, reword, describe, synthesize) — the
+//     server extracts findings/impression, redacts, sends only those.
+//   WHOLE-TEXT (proofread, fullreport, chat) — the ENTIRE input goes through
+//     reversible redaction and the redacted whole (report structure included)
+//     goes out; claude.js skips its heading proxy for these
+//     (redactedFullText) but still pattern-checks for residual identifiers.
+//     Weaker isolation than section extraction by design — accepted so these
+//     tasks can run on Opus; a failed redaction model pass falls back to
+//     Gemini, never sends raw text.
+//
+// Tasks that CANNOT go to Claude:
 //   detect/scrub/redact — see identifiable text by definition
 // Those stay on Gemini regardless of env settings' intent; their MODEL_* vars
 // still accept a different Gemini id.
@@ -39,17 +47,20 @@ app.use(express.urlencoded({ extended: false }));
 // Never default anything to claude-fable-5: Mythos-class models carry 30-day
 // retention — the wrong footprint even for redacted draft-phase text.
 const MODEL_DETECT = process.env.MODEL_DETECT || 'gemini-2.5-flash-lite';   // study-type classification
-const MODEL_REPORT = process.env.MODEL_REPORT || 'gemini-2.5-flash';        // proofread · Generate Full Report · assist fallbacks
+const MODEL_REPORT = process.env.MODEL_REPORT || 'claude-opus-5';           // proofread · Generate Full Report (whole-text de-identified pipeline)
 const MODEL_REVIEW = process.env.MODEL_REVIEW || 'claude-opus-5';           // draft review + integrate-notes (de-identified pipeline)
 const MODEL_IMPRESSION = process.env.MODEL_IMPRESSION || 'claude-opus-5';   // Generate Impression (de-identified pipeline)
-const MODEL_REWORD = process.env.MODEL_REWORD || 'claude-sonnet-4-6';       // Reword (de-identified pipeline)
-const MODEL_DESCRIBE = process.env.MODEL_DESCRIBE || 'claude-sonnet-4-6';   // Describe Finding (de-identified pipeline)
+const MODEL_REWORD = process.env.MODEL_REWORD || 'claude-opus-5';           // Reword (de-identified pipeline)
+const MODEL_DESCRIBE = process.env.MODEL_DESCRIBE || 'claude-opus-5';       // Describe Finding (de-identified pipeline)
 const MODEL_SYNTHESIZE = process.env.MODEL_SYNTHESIZE || 'claude-opus-5';   // prior report + new info (de-identified pipeline)
-// Quick Rad Question / free text: arbitrary pasted input — Gemini only (see
-// above). The references toggle additionally needs Google Search grounding.
-const MODEL_RADQA = process.env.MODEL_RADQA || 'gemini-2.5-pro';            // Quick Rad Question, references OFF
-const MODEL_RADQA_GROUNDED = process.env.MODEL_RADQA_GROUNDED || 'gemini-2.5-pro'; // references ON (grounded search)
-const MODEL_CHAT = process.env.MODEL_CHAT || MODEL_RADQA;                   // plain free text (no references)
+// Free text and Quick Rad Question both run the whole-text de-identified
+// pipeline. References ON uses Anthropic's web search server tool on the
+// Claude path; the Gemini fallback (redaction failed / key missing) uses
+// MODEL_RADQA with Google Search grounding — so a sourced answer degrades to
+// Gemini+Google, never to an unsourced one.
+const MODEL_RADQA = process.env.MODEL_RADQA || 'gemini-2.5-pro';            // Gemini fallback for free text (Google grounding when refs ON)
+const MODEL_RADQA_GROUNDED = process.env.MODEL_RADQA_GROUNDED || 'claude-opus-5'; // references ON (Anthropic web search)
+const MODEL_CHAT = process.env.MODEL_CHAT || 'claude-opus-5';               // plain free text (whole-text de-identified pipeline)
 const MODEL_SCRUB = process.env.MODEL_SCRUB || 'gemini-2.5-flash-lite';     // PHI scrub + reversible redaction model pass
 // Where a Claude-routed task lands when the de-identified pipeline can't run
 // (sections don't parse, redaction model pass failed, key missing, guard
@@ -358,10 +369,13 @@ app.get('/api/settings', (req, res) => {
       entry('Synthesize Report', MODEL_SYNTHESIZE, 'de-identified pipeline'),
       entry('Reword', MODEL_REWORD, 'de-identified pipeline'),
       entry('Describe Finding', MODEL_DESCRIBE, 'de-identified pipeline'),
-      entry('Proofread / Generate Full Report', MODEL_REPORT),
-      entry('Quick Rad Question — references ON', MODEL_RADQA_GROUNDED, 'Google Search grounding'),
-      entry('Quick Rad Question — references OFF', MODEL_RADQA),
-      entry('Free-text chat', MODEL_CHAT, 'Gemini only by design (may carry unredacted pastes)'),
+      entry('Proofread / Generate Full Report', MODEL_REPORT, 'whole-text de-identified pipeline'),
+      entry('Quick Rad Question — references ON', MODEL_RADQA_GROUNDED,
+        providerFor(MODEL_RADQA_GROUNDED) === 'claude'
+          ? 'whole-text de-identified pipeline + Anthropic web search'
+          : 'Google Search grounding'),
+      entry('Free-text chat', MODEL_CHAT, 'whole-text de-identified pipeline'),
+      entry('Gemini fallback for free text', MODEL_RADQA),
       entry('Study-type detection', MODEL_DETECT),
       entry('PHI scrub / redaction', MODEL_SCRUB),
       entry('Fallback when the de-identified pipeline can\'t run', MODEL_GEMINI_FALLBACK)
@@ -384,9 +398,9 @@ console.log('receiving ONLY de-identified findings/impression + study type via t
 console.log(`  detect=${routed(MODEL_DETECT)} scrub/redact=${routed(MODEL_SCRUB)}`);
 console.log(`  review+readout=${routed(MODEL_REVIEW)} impression=${routed(MODEL_IMPRESSION)} synthesize=${routed(MODEL_SYNTHESIZE)}`);
 console.log(`  reword=${routed(MODEL_REWORD)} describe=${routed(MODEL_DESCRIBE)}`);
-console.log(`  proofread+fullreport=${routed(MODEL_REPORT)} — fullreport stays Gemini by design (it writes the non-findings sections); proofread handles full-report text verbatim`);
-console.log(`  chat=${routed(MODEL_CHAT)} — free text can carry unredacted pastes, Gemini only`);
-console.log(`  radqa: references ON → ${routed(MODEL_RADQA_GROUNDED)} + Google Search grounding · OFF → ${routed(MODEL_RADQA)}`);
+console.log(`  proofread+fullreport=${routed(MODEL_REPORT)} — whole-text pipeline (full input redacted and sent whole)`);
+console.log(`  chat=${routed(MODEL_CHAT)} — whole-text pipeline, history redacted per-request; Gemini fallback ${MODEL_RADQA}`);
+console.log(`  radqa: references ON → ${routed(MODEL_RADQA_GROUNDED)} + web search (Anthropic on claude, Google on gemini) · gemini fallback for free text: ${MODEL_RADQA}`);
 console.log(`  gemini fallback for pipeline-ineligible requests: ${MODEL_GEMINI_FALLBACK}`);
 console.log('========================');
 
@@ -415,6 +429,9 @@ const CACHE_READ_MULTIPLIER = 0.25;
 // Grounding with Google Search is a flat per-request charge on Vertex AI
 // ($35 per 1,000 grounded prompts), billed on top of the tokens.
 const GROUNDING_COST_PER_CALL = 0.035;
+// Anthropic web search bills per search executed ($10/1k), reported by
+// claude.js as usage.search_count — unlike Gemini's flat per-call fee.
+const CLAUDE_SEARCH_COST_PER_QUERY = 0.01;
 
 const unpricedModels = new Set();
 function priceFor(model) {
@@ -451,7 +468,9 @@ function costFor(model, u, grounded) {
     written * p.input * (p.cacheWrite !== undefined ? p.cacheWrite : 0) +
     tool * p.input +
     out * p.output
-  ) / 1e6 + (grounded ? GROUNDING_COST_PER_CALL : 0);
+  ) / 1e6 + (u.search_count
+    ? u.search_count * CLAUDE_SEARCH_COST_PER_QUERY   // Anthropic web search, per query
+    : (grounded ? GROUNDING_COST_PER_CALL : 0));      // Gemini Google grounding, per call
 }
 
 // Durable per-call ledger: one api_calls row per model call — EVERY call,
@@ -515,15 +534,16 @@ function toContents(messages) {
 // telemetry reuses; the same number lands in the log and the ledger — plus
 // api_call_id (this call's api_calls row, null if the write failed) and the
 // served model, so telemetry rows can link and copy from the ledger.
-async function llmText({ model, system, message, messages, maxTokens, effort, injected, label, schema, timing, reportId, deidentified }) {
+async function llmText({ model, system, message, messages, maxTokens, effort, injected, label, schema, timing, reportId, deidentified, redactedFullText }) {
   const contents = toContents(messages || [{ role: 'user', content: message }]);
   const t0 = Date.now();
   // Routed by model prefix: gemini-* → Gemini (schema = native JSON mode),
   // claude-* → first-party Anthropic (schema ignored; the prompts already
   // demand JSON, and the server-side substring validation is the real
   // guarantee). `deidentified` is the pipeline's assertion that the payload
-  // has been section-stripped and redacted — claude.generate requires it.
-  const r = await llmGenerate({ model, system, contents, maxTokens, effort, responseSchema: schema, deidentified });
+  // has been redacted — claude.generate requires it; `redactedFullText`
+  // additionally marks whole-text payloads (see claude.js).
+  const r = await llmGenerate({ model, system, contents, maxTokens, effort, responseSchema: schema, deidentified, redactedFullText });
   const ms = Date.now() - t0;
   const { cost, api_call_id } = await recordUsage({
     model: r.served, label, usage: r.usage, latency_ms: ms, report_id: reportId
@@ -671,8 +691,8 @@ const DRAFT_REVIEW_EFFORT = 'high';  // typo/essential-edit review; high curbs f
 const FREEFORM_EFFORT = process.env.FREEFORM_EFFORT || 'medium';
 
 // Per-action model routing; anything unlisted (proofread, fullreport) uses
-// MODEL_REPORT — Gemini, because those tasks handle full-report text the
-// de-identified Claude contract cannot carry.
+// MODEL_REPORT. Claude-routed actions go through the de-identified pipeline —
+// section-based or whole-text depending on the task (see runClaudeAssist).
 const ACTION_MODEL = {
   impression: MODEL_IMPRESSION,
   synthesize: MODEL_SYNTHESIZE,
@@ -756,6 +776,14 @@ Rules:
 - Do NOT flag the impression for omitting, summarizing, or re-prioritizing findings — the impression is intentionally selective, and that is never an error.
 - "reason" is one short sentence.
 - If nothing needs changing, return {"edits": []}.` + CLAUDE_DEID_CONTRACT;
+
+// Whole-text variant of the contract, for tasks whose input is the user's
+// full text after whole-document reversible redaction (proofread, fullreport,
+// chat) — full report structure IS in scope there, only the token rule holds.
+const CLAUDE_REDACTED_CONTRACT = `
+
+DE-IDENTIFIED INPUT CONTRACT:
+- The text you receive has been de-identified. Bracketed indexed tokens like [NAME_1], [DATE_2], [MRN_1], [LOCATION_1] are redacted identifiers standing in for real values. Leave every token EXACTLY as written wherever it appears — never edit, expand, remove, merge, or flag a token, never treat one as an error, and never invent new ones. A token is an opaque string; text around it is handled normally.`;
 
 // Reword/synthesize on the pipeline work section-wise: Claude rewrites the
 // findings and impression it was given and the server splices them back into
@@ -877,7 +905,7 @@ Always: never include patient names, MRNs, dates of birth, or other PHI. Plain t
 // sources are steered from the prompt instead; and the model never sees the
 // URLs of what it retrieved, so the References line is written by the server
 // from the grounding metadata rather than by the model.
-const REFERENCES_ADDENDUM = `You have Google Search available and the user has explicitly asked for a sourced answer, so search before you answer even when you already know the answer cold, and even when the question repeats one you just answered — being sure is not the same as being able to cite. The one exception is text work: rewording, proofreading, impressions and report generation need no references, so do not search for those.
+const REFERENCES_ADDENDUM = `You have web search available and the user has explicitly asked for a sourced answer, so search before you answer even when you already know the answer cold, and even when the question repeats one you just answered — being sure is not the same as being able to cite. The one exception is text work: rewording, proofreading, impressions and report generation need no references, so do not search for those.
 
 Radiopaedia (radiopaedia.org) is the preferred source: search it first and draw on the relevant Radiopaedia article whenever one exists. Use other sources only when they cover something Radiopaedia does not — ACR Appropriateness Criteria (acr.org) for protocol/appropriateness questions, RadioGraphics and Radiology (pubs.rsna.org) for in-depth reviews, Radiology Assistant (radiologyassistant.nl) for pattern-based teaching. Prefer these over forums, commercial sites, and general medical portals.
 
@@ -1553,11 +1581,14 @@ async function actionSystemFor(action, message, template) {
 // the final message is in hand, so a mid-flight retry or a server-side model
 // fallback can never leave partial text behind.
 async function runFreeform({ messages, systemFor, injected, label, useRefs }) {
-  // Free text and Quick Rad Question run on Gemini in BOTH toggle states:
-  // arbitrary user input (pasted reports included) can't honor the
-  // de-identified Claude contract, and references ON additionally needs
-  // Google Search grounding, which only Gemini has.
-  const model = useRefs ? MODEL_RADQA_GROUNDED : MODEL_CHAT;
+  // The Gemini leg of free text — the fallback when the whole-text Claude
+  // pipeline can't run (and the primary when MODEL_CHAT/MODEL_RADQA_GROUNDED
+  // point at Gemini). Either configured model may be a claude id, so never
+  // use one directly — MODEL_RADQA is the Gemini stand-in, and references ON
+  // keeps Google Search grounding here.
+  const model = useRefs
+    ? (providerFor(MODEL_RADQA_GROUNDED) === 'gemini' ? MODEL_RADQA_GROUNDED : MODEL_RADQA)
+    : (providerFor(MODEL_CHAT) === 'gemini' ? MODEL_CHAT : MODEL_RADQA);
   let searchEnabled = useRefs;
   let refsDropped = false;
   const contents = toContents(messages);
@@ -1625,6 +1656,69 @@ async function runFreeform({ messages, systemFor, injected, label, useRefs }) {
   };
 }
 
+// Free text on the whole-text de-identified pipeline: the message AND the
+// carried history turns are redacted together under one request-scoped map,
+// Opus answers with the freeform playbook, identifiers are restored before
+// the response leaves. References ON runs Anthropic's web search server tool
+// and returns the same citations shape as the Gemini grounded path, so the
+// client renders either identically. null → Gemini fallback (runFreeform).
+async function runClaudeFreeform({ message, history, useRefs }) {
+  if (!claude.configured) return null;
+  const model = useRefs ? MODEL_RADQA_GROUNDED : MODEL_CHAT;
+  const label = useRefs ? 'assist_radqa' : 'assist_freetext';
+  try {
+    const kept = budgetHistory(history);
+    const texts = { message };
+    kept.forEach((h, i) => { texts['h' + i] = h.content; });
+    const red = await redactReversible(texts, null);
+    if (!red.ok) return null;
+    // Knowledge/exemplar selection reads the ORIGINAL text server-side (its
+    // detect call runs on Gemini, which may see identifiable text); only the
+    // redacted text goes out to Claude.
+    const { systemFor, injected } = await freeformSystemFactory(message);
+    const msgs = kept.map((h, i) => ({ role: h.role, content: red.texts['h' + i] }));
+    msgs.push({ role: 'user', content: red.texts.message });
+
+    const t0 = Date.now();
+    const r = await llmGenerate({
+      model,
+      system: systemFor(useRefs) + CLAUDE_REDACTED_CONTRACT,
+      contents: toContents(msgs),
+      maxTokens: 8000, effort: FREEFORM_EFFORT,
+      deidentified: true, redactedFullText: true, grounding: !!useRefs
+    });
+    const ms = Date.now() - t0;
+    const { cost, api_call_id } = await recordUsage({
+      model: r.served, label, usage: r.usage, grounded: !!useRefs, latency_ms: ms
+    });
+    logCall({ served: r.served, label, injected, u: r.usage, cost, grounded: !!useRefs, finishReason: r.finishReason, ms });
+
+    let text = scrub.restoreRedaction(r.text.trim(), red.map);
+    // Same References line as the Gemini path: preferred radiology sources
+    // first, capped, appended server-side.
+    let citations = [];
+    if (useRefs && r.grounding && r.grounding.citations) {
+      citations = r.grounding.citations
+        .sort((a, b) => sourceRank(a.url) - sourceRank(b.url))
+        .slice(0, MAX_REFERENCES)
+        .map(c => ({ url: c.url, title: c.title }));
+      if (citations.length) {
+        text += '\n\nReferences:\n' +
+          citations.map(c => c.url + (c.title && c.title !== c.url ? ' — ' + c.title : '')).join('\n');
+      }
+    }
+    return {
+      text, citations, refs_dropped: false,
+      truncated: r.finishReason === 'MAX_TOKENS',
+      model: r.served, latency_ms: ms, api_call_id: api_call_id || null
+    };
+  } catch (e) {
+    if (e.isRefusal) throw e;
+    console.warn(`[deid] free text falling back to Gemini: ${e.message}`);
+    return null;
+  }
+}
+
 // Quick-action usage counter: which chip was armed for this send, 'freetext'
 // when none. Fire-and-forget — a failed insert costs the count, never the
 // assist call.
@@ -1646,8 +1740,15 @@ app.post('/api/assist', async (req, res) => {
     // Free text (no quick action armed): one prompt that works out for itself
     // whether this is a question, text work, or a follow-up.
     if (!instruction) {
-      const { systemFor, injected } = await freeformSystemFactory(message);
       const useRefs = wantsReferences(req.body);
+      // Free text tries the whole-text de-identified pipeline first in both
+      // toggle states (references ON adds Anthropic web search); null means
+      // it couldn't run and Gemini takes the request.
+      if (providerFor(useRefs ? MODEL_RADQA_GROUNDED : MODEL_CHAT) === 'claude') {
+        const out = await runClaudeFreeform({ message, history, useRefs });
+        if (out) return res.json({ type: 'text', ...out });
+      }
+      const { systemFor, injected } = await freeformSystemFactory(message);
       const out = await runFreeform({
         messages, systemFor, injected, useRefs, label: useRefs ? 'assist_radqa' : 'assist_freetext'
       });
@@ -1684,9 +1785,9 @@ app.post('/api/assist', async (req, res) => {
     if (claudeOut) {
       text = claudeOut.text;
     } else {
-      const geminiModel = providerFor(actionModel) === 'claude'
-        ? (action === 'impression' || action === 'synthesize' ? MODEL_GEMINI_FALLBACK : MODEL_REPORT)
-        : actionModel;
+      // Fallback must be a Gemini id — MODEL_REPORT itself may route to
+      // Claude now, so every pipeline miss lands on MODEL_GEMINI_FALLBACK.
+      const geminiModel = providerFor(actionModel) === 'claude' ? MODEL_GEMINI_FALLBACK : actionModel;
       servedModel = geminiModel;
       const { system, injected, studyType } = await actionSystemFor(action, message, template);
       text = await llmText({
@@ -2039,6 +2140,42 @@ async function runClaudeAssist({ action, model, message, template, studyType, ti
         model, label: callLabel, system, injected,
         message: `${ASSIST_ACTIONS.reword}\n\n${red.texts.input}`,
         maxTokens: 4000, effort: ACTION_EFFORT.reword, timing, deidentified: true
+      });
+      return { text: scrub.restoreRedaction(text, red.map) };
+    }
+
+    if (action === 'proofread') {
+      // Whole-text pipeline: the full input (headers included) is reversibly
+      // redacted and sent whole — proofread must see the text verbatim to
+      // correct it, so there is no section extraction to hide behind.
+      const red = await redactReversible({ input: message }, null);
+      if (!red.ok) return null;
+      const { system, injected } = await buildKnowledgeSystem(
+        ASSIST_SYSTEM + CLAUDE_REDACTED_CONTRACT, null, 'proofread', { scrubForClaude: true });
+      const text = await llmText({
+        model, label: callLabel, system, injected,
+        message: `${ASSIST_ACTIONS.proofread}\n\n${red.texts.input}`,
+        maxTokens: 8000, effort: ACTION_EFFORT.proofread, timing,
+        deidentified: true, redactedFullText: true
+      });
+      return { text: scrub.restoreRedaction(text, red.map) };
+    }
+
+    if (action === 'fullreport') {
+      // Whole-text pipeline: the dictation is redacted whole and Opus writes
+      // the complete report around it (study-type templates/exemplars come
+      // scrubbed via the knowledge system). No separate impression pass —
+      // the impression model IS this model.
+      const st = await detectStudyType(message).catch(() => null);
+      const red = await redactReversible({ input: message }, null);
+      if (!red.ok) return null;
+      const { system, injected } = await buildKnowledgeSystem(
+        ASSIST_SYSTEM + CLAUDE_REDACTED_CONTRACT, st, 'fullreport', { scrubForClaude: true });
+      const text = await llmText({
+        model, label: callLabel, system, injected,
+        message: `${ASSIST_ACTIONS.fullreport}\n\n${red.texts.input}`,
+        maxTokens: 8000, effort: ACTION_EFFORT.fullreport, timing,
+        deidentified: true, redactedFullText: true
       });
       return { text: scrub.restoreRedaction(text, red.map) };
     }
@@ -3741,7 +3878,7 @@ app.get('/api/usage/summary', async (req, res) => {
       from: range[0],
       to: range[1],
       since: totals.since,   // oldest ledger row in the window
-      pricing_note: `Vertex AI per-MTok list price; Gemini implicit cache reads x${CACHE_READ_MULTIPLIER} (free writes); Claude cache reads x0.1, 5m cache writes x1.25; thinking billed as output; Google Search grounding +$${GROUNDING_COST_PER_CALL}/call`,
+      pricing_note: `Vertex AI per-MTok list price; Gemini implicit cache reads x${CACHE_READ_MULTIPLIER} (free writes); Claude cache reads x0.1, 5m cache writes x1.25; thinking billed as output; Google Search grounding +$${GROUNDING_COST_PER_CALL}/call; Anthropic web search +$${CLAUDE_SEARCH_COST_PER_QUERY}/search`,
       totals: roundCost({
         calls: totals.calls,
         input_tokens: totals.input_tokens,

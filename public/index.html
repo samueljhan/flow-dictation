@@ -102,12 +102,20 @@
         .header-menu-mode .mode-badge { color: #e0a832; font-weight: 600; }
 
         /* ---------- Assist: Generate Report panel ---------- */
-        .gen-panel {
-            background: #242424; border: 1px solid #333333; border-radius: 12px;
-            padding: 14px; margin-bottom: 10px;
-            display: flex; flex-direction: column; gap: 14px;
-            max-height: 60vh; overflow-y: auto;
+        /* The form IS an assistant bubble: .message-content supplies the
+           background, border, radius, and 85% max-width; the panel only lays
+           out the sections inside it. white-space resets so element gaps
+           don't render as pre-wrap blank lines. */
+        .gen-card .message-content { width: 100%; white-space: normal; }
+        .gen-panel { display: flex; flex-direction: column; gap: 14px; }
+        .gen-panel textarea { background: #2a2a2a; }
+        .gen-panel-head { display: flex; align-items: center; justify-content: space-between; }
+        .gen-panel-title { font-size: 14px; font-weight: 700; color: #e8e8e8; }
+        .gen-close {
+            background: none; border: none; color: #808080; cursor: pointer;
+            font-size: 14px; padding: 2px 6px; border-radius: 6px; line-height: 1;
         }
+        .gen-close:hover { background: #333333; color: #e0e0e0; }
         .gen-section { display: flex; flex-direction: column; gap: 8px; }
         .gen-head { display: flex; align-items: center; gap: 12px; }
         .gen-title { font-size: 13px; font-weight: 600; color: #d0d0d0; }
@@ -192,6 +200,9 @@
         textarea:focus, input:focus, select:focus { outline: none; border-color: #606060; }
         textarea { resize: none; line-height: 1.55; }
         ::placeholder { color: #707070; }
+        /* The hidden attribute must always win — .message and friends set
+           display:flex, which would otherwise override the UA's [hidden] rule */
+        [hidden] { display: none !important; }
 
         .primary {
             background: #e0e0e0; color: #1a1a1a;
@@ -899,41 +910,52 @@
                         </div>
                     </div>
                 </div>
+                <!-- Generate Report form: lives inline in the conversation flow.
+                     Hidden at rest; arming the action re-appends it to the end of
+                     the transcript, so field values survive dismissal. -->
+                <div class="message assistant gen-card" id="genCard" hidden>
+                  <div class="message-content">
+                    <div id="genPanel" class="gen-panel">
+                        <div class="gen-panel-head">
+                            <span class="gen-panel-title">Generate Report</span>
+                            <button type="button" class="gen-close" id="genCloseBtn" aria-label="Close" title="Close">✕</button>
+                        </div>
+                        <div class="gen-section">
+                            <div class="gen-head">
+                                <span class="gen-title">Template?</span>
+                                <div class="gen-toggle" id="genTemplateToggle">
+                                    <button type="button" data-on="1" class="active">Yes</button>
+                                    <button type="button" data-on="">No</button>
+                                </div>
+                            </div>
+                            <textarea id="genTemplate" rows="4" placeholder="Paste your normal study template for this exam…"></textarea>
+                        </div>
+                        <div class="gen-section">
+                            <div class="gen-head">
+                                <span class="gen-title">Prior?</span>
+                                <div class="gen-toggle" id="genPriorToggle">
+                                    <button type="button" data-on="1">Yes</button>
+                                    <button type="button" data-on="" class="active">No</button>
+                                </div>
+                            </div>
+                            <textarea id="genPrior" rows="4" placeholder="Paste the prior report…" hidden></textarea>
+                        </div>
+                        <div class="gen-section">
+                            <div class="gen-head"><span class="gen-title">Findings / Impression</span></div>
+                            <textarea id="genNotes" rows="4" placeholder="Relevant findings and impression notes for this study…"></textarea>
+                            <div class="gen-actions">
+                                <button class="primary" id="genGoBtn">Generate Report</button>
+                                <span class="status" id="genStatus"></span>
+                            </div>
+                        </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
             <div class="input-container">
               <div class="input-inner">
                 <div class="quick-bar" id="quickBar"></div>
-                <div id="genPanel" class="gen-panel" hidden>
-                    <div class="gen-section">
-                        <div class="gen-head">
-                            <span class="gen-title">Template?</span>
-                            <div class="gen-toggle" id="genTemplateToggle">
-                                <button type="button" data-on="1" class="active">Yes</button>
-                                <button type="button" data-on="">No</button>
-                            </div>
-                        </div>
-                        <textarea id="genTemplate" rows="4" placeholder="Paste your normal study template for this exam…"></textarea>
-                    </div>
-                    <div class="gen-section">
-                        <div class="gen-head">
-                            <span class="gen-title">Prior?</span>
-                            <div class="gen-toggle" id="genPriorToggle">
-                                <button type="button" data-on="1">Yes</button>
-                                <button type="button" data-on="" class="active">No</button>
-                            </div>
-                        </div>
-                        <textarea id="genPrior" rows="4" placeholder="Paste the prior report…" hidden></textarea>
-                    </div>
-                    <div class="gen-section">
-                        <div class="gen-head"><span class="gen-title">Findings / Impression</span></div>
-                        <textarea id="genNotes" rows="4" placeholder="Relevant findings and impression notes for this study…"></textarea>
-                        <div class="gen-actions">
-                            <button class="primary" id="genGoBtn">Generate Report</button>
-                            <span class="status" id="genStatus"></span>
-                        </div>
-                    </div>
-                </div>
                 <div class="input-wrapper">
                     <textarea id="userInput" placeholder="Ask a question, or paste text to work on…" rows="1"></textarea>
                     <button id="sendBtn" title="Send message">
@@ -1719,7 +1741,7 @@
 
         const ACTION_HINTS = {
             impression: 'Paste the report body — I’ll generate an Impression: the findings that change management, one per line.',
-            generate: 'Fill in the panel below: template and prior report are optional; the findings/impression notes drive the report. Review it carefully before use.',
+            generate: 'Fill in the form below: template and prior report are optional; the findings/impression notes drive the report. Review it carefully before use.',
             radqa: 'Ask your question — I’ll search Radiopaedia, ACR and RadioGraphics and cite what I used. Slower than asking plainly; skip it when you just want the answer.'
         };
         // Full label map — retired actions stay so old telemetry and stored
@@ -1742,8 +1764,12 @@
             chip.dataset.action = action;
             chip.textContent = label;
             chip.addEventListener('click', () => {
-                if (pendingAction === action) disarmAction();   // click again to cancel
-                else armAction(action);
+                if (pendingAction === action) {                 // click again to cancel
+                    if (action === 'generate') dismissGenerate();
+                    else disarmAction();
+                } else {
+                    armAction(action);
+                }
             });
             quickBar.appendChild(chip);
         }
@@ -1753,19 +1779,38 @@
                 c.classList.toggle('armed', c.dataset.action === pendingAction));
         }
 
-        // Generate Report uses a structured panel instead of the composer;
-        // arming it swaps the input row for the panel and disarming restores it.
+        // Generate Report renders as a card inside the conversation flow; the
+        // composer stays put. Arming re-appends the (persistent) card to the
+        // end of the transcript, so field values survive dismissal.
         function syncGeneratePanel() {
             const on = pendingAction === 'generate';
-            document.getElementById('genPanel').hidden = !on;
-            document.querySelector('#page-assist .input-wrapper').style.display = on ? 'none' : '';
+            const card = document.getElementById('genCard');
+            card.hidden = !on;
+            if (on) {
+                chatContainer.appendChild(card);
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+        }
+
+        const genHasContent = () =>
+            ['genTemplate', 'genPrior', 'genNotes'].some(id => document.getElementById(id).value.trim());
+
+        // Dismissing with content asks first — entries are kept either way and
+        // come back when the form is re-opened.
+        function dismissGenerate() {
+            if (genHasContent() &&
+                !confirm('Close the Generate Report form? Your entries are kept and will reappear when you reopen it.')) {
+                return false;
+            }
+            disarmAction();
+            return true;
         }
 
         function armAction(action) {
             pendingAction = action;
             syncQuickBar();
-            syncGeneratePanel();
             addHintMessage(ACTION_LABELS[action] + ' — ' + ACTION_HINTS[action]);
+            syncGeneratePanel();   // after the hint, so the card sits last in the flow
             if (action === 'generate') {
                 const tpl = document.getElementById('genTemplate');
                 (tpl.hidden || tpl.value.trim() ? document.getElementById('genNotes') : tpl).focus();
@@ -1803,6 +1848,7 @@
         }
         wireGenToggle('genTemplateToggle', 'genTemplate');
         wireGenToggle('genPriorToggle', 'genPrior');
+        document.getElementById('genCloseBtn').addEventListener('click', dismissGenerate);
 
         async function submitGenerate() {
             const genOn = id => !!document.querySelector('#' + id + ' button.active').dataset.on;
@@ -1819,8 +1865,13 @@
             if (genOn('genPriorToggle') && !prior) return setGen('Paste the prior report, or set Prior? to No.', true);
             setGen('');
 
-            const attached = [template && 'template', prior && 'prior report'].filter(Boolean).join(' + ');
-            addUserMessage(notes + (attached ? '\n\n(' + attached + ' attached)' : ''));
+            // The form collapses into a compact user-turn summary; the full
+            // notes still drive the request (and follow-up context).
+            const firstWords = notes.split(/\s+/).slice(0, 10).join(' ');
+            const summary = 'Generate Report — template ' + (template ? '✓' : '✗') +
+                ', prior ' + (prior ? '✓' : '✗') +
+                ', notes: ' + firstWords + (notes.split(/\s+/).length > 10 ? '…' : '');
+            addUserMessage(summary);
             disarmAction();
             const loading = addLoadingMessage('Generating report…');
             try {
@@ -1836,7 +1887,7 @@
                 chatHistory.push({ role: 'assistant', content: plainText });
                 if (chatHistory.length > 24) chatHistory = chatHistory.slice(-24);
                 api('/api/assist/messages', { method: 'POST', body: {
-                    user_text: notes + (attached ? '\n\n(' + attached + ' attached)' : ''),
+                    user_text: summary,
                     assistant_text: plainText,
                     action_type: 'generate'
                 }}).catch(e => console.error('History save failed:', e));
@@ -2015,6 +2066,11 @@
         async function sendMessage() {
             const message = userInput.value.trim();
             if (!message) return;
+
+            // Typing a free-text message while the Generate Report form is open
+            // dismisses the form (confirm when it holds content) and sends the
+            // message as plain free text.
+            if (pendingAction === 'generate' && !dismissGenerate()) return;
 
             const actionType = pendingAction;
             const template = null;   // Generate Report sends its own structured body

@@ -366,7 +366,7 @@ app.get('/api/settings', (req, res) => {
     models: [
       entry('Draft review + read-out integration', MODEL_REVIEW, 'de-identified pipeline'),
       entry('Generate Impression', MODEL_IMPRESSION, 'de-identified pipeline'),
-      entry('Synthesize Report', MODEL_SYNTHESIZE, 'de-identified pipeline'),
+      entry('Generate Report', MODEL_SYNTHESIZE, 'whole-text de-identified pipeline'),
       entry('Reword', MODEL_REWORD, 'de-identified pipeline'),
       entry('Describe Finding', MODEL_DESCRIBE, 'de-identified pipeline'),
       entry('Proofread / Generate Full Report', MODEL_REPORT, 'whole-text de-identified pipeline'),
@@ -679,7 +679,15 @@ Rules:
 - Never invent findings, measurements, or comparisons that appear in neither input.
 - Use [bracketed placeholders] for details neither input supplies.
 - Match the style guide, language reference, and exemplar reports provided — they are the user's own conventions.
-- Return only the finished report, with no commentary about what you changed.`
+- Return only the finished report, with no commentary about what you changed.`,
+  generate: `Generate a complete radiology report from the radiologist's findings/impression notes, using the optional REPORT TEMPLATE and PRIOR REPORT below. Rules:
+- If a REPORT TEMPLATE is provided, it describes a NORMAL study of this type: produce the report by filling in that template. Keep its exact section structure, headings, ordering, and normal/default statements, changing only what the notes require. Anatomy the notes do not mention keeps the template's normal wording verbatim.
+- If no template is provided, use standard report structure — EXAMINATION, CLINICAL HISTORY, TECHNIQUE, COMPARISON, FINDINGS, IMPRESSION — matching any exemplar reports provided for this study type.
+- If a PRIOR REPORT is provided, use it for comparison: describe interval change explicitly, carry forward stable findings in the radiologist's own voice, and make the COMPARISON section reference it. If none is provided, do not invent one.
+- Include every finding the notes state, worded in standard radiology register. Never alter laterality, measurements, or meaning.
+- Use [bracketed placeholders] for details the inputs do not supply (e.g. [clinical history], [comparison date]) rather than inventing them.
+- Keep the IMPRESSION selective: only findings that change patient management or answer the clinical question. Order by clinical significance, one item per line, unnumbered and unbulleted.
+- Return only the report text, nothing else.`
 };
 
 // Speed: mechanical transformations run at low effort, moderate tasks at
@@ -691,7 +699,8 @@ const ACTION_EFFORT = {
   describe: 'medium',
   impression: 'medium',
   fullreport: 'high',
-  synthesize: 'high'
+  synthesize: 'high',
+  generate: 'high'
 };
 const DRAFT_REVIEW_EFFORT = 'high';  // typo/essential-edit review; high curbs false "inconsistency" flags
 // Free text is the most-used path, so it is also the most latency-sensitive.
@@ -704,6 +713,7 @@ const FREEFORM_EFFORT = process.env.FREEFORM_EFFORT || 'medium';
 const ACTION_MODEL = {
   impression: MODEL_IMPRESSION,
   synthesize: MODEL_SYNTHESIZE,
+  generate: MODEL_SYNTHESIZE,
   reword: MODEL_REWORD,
   describe: MODEL_DESCRIBE
 };
@@ -1161,6 +1171,7 @@ const KNOWLEDGE_PROFILES = {
   impression: { style: true,  language: 'all',              exemplars: 2, impressionPairs: true },
   fullreport: { style: true,  language: 'all',              exemplars: 2 },
   synthesize: { style: true,  language: 'all',              exemplars: 2 },
+  generate:   { style: true,  language: 'all',              exemplars: 2 },
   review:     { style: true,  language: ['words_to_avoid'], exemplars: 1 },
   readout:    { style: true,  language: ['words_to_avoid'], exemplars: 1 },
   freeform:   { style: true,  language: 'all',              exemplars: 2 }
@@ -1467,6 +1478,13 @@ async function upgradeImpression(reportText, studyType) {
 // Shared by the buffered and streaming endpoints, so both build exactly the
 // same request and only differ in how the answer is delivered.
 
+// Generate Report's three sections composed into one user message — used by
+// both the Claude pipeline (with redacted texts) and the Gemini fallback.
+function generateUserContent({ instruction, template, prior, notes }) {
+  const part = s => (typeof s === 'string' && s.trim()) ? s.trim() : '(none provided)';
+  return `${instruction}\n\nREPORT TEMPLATE:\n${part(template)}\n\nPRIOR REPORT:\n${part(prior)}\n\nFINDINGS/IMPRESSION NOTES:\n${notes}`;
+}
+
 function assistValidate(req, res) {
   const { action, message, template } = req.body;
   if (!message || !message.trim()) {
@@ -1528,10 +1546,13 @@ function budgetHistory(history) {
   return kept.reverse();
 }
 
-function assistMessages({ action, instruction, message, template, history }) {
-  // Synthesize is the one two-part action: prior report + the new information
+function assistMessages({ action, instruction, message, template, prior, history }) {
+  // Synthesize and generate are the multi-part actions; everything else is
+  // instruction + the user's text.
   const userMessage = action === 'synthesize'
     ? `${instruction}\n\nPRIOR REPORT:\n${template}\n\nNEW INFORMATION:\n${message}`
+    : action === 'generate'
+    ? generateUserContent({ instruction, template, prior, notes: message })
     : (instruction ? `${instruction}\n\n${message}` : message);
 
   const messages = budgetHistory(history);
@@ -1572,9 +1593,11 @@ async function actionSystemFor(action, message, template) {
   // inputs are often short dictations, but knowing the study type is what pulls
   // in the right exemplars — always try to detect it there. For synthesize, the
   // prior report is the reliable source.
-  const detectFrom = action === 'synthesize' ? template : message;
+  const detectFrom = action === 'synthesize' ? template
+    : action === 'generate' ? ((template && template.trim()) || message)
+    : message;
   const needsDetect = profile.exemplars > 0 &&
-    (action === 'fullreport' || action === 'synthesize' || looksLikeReport(detectFrom));
+    (action === 'fullreport' || action === 'synthesize' || action === 'generate' || looksLikeReport(detectFrom));
   // Detection and the static block are independent — overlap them; the block is
   // memoised, so buildKnowledgeSystem's own lookup is free after this
   const [studyType] = await Promise.all([
@@ -1740,10 +1763,10 @@ function recordAssistAction(action) {
 app.post('/api/assist', async (req, res) => {
   try {
     if (!assistValidate(req, res)) return;
-    const { action, message, history, template } = req.body;
+    const { action, message, history, template, prior } = req.body;
     recordAssistAction(action);
     const instruction = action && ASSIST_ACTIONS[action] ? ASSIST_ACTIONS[action] : null;
-    const messages = assistMessages({ action, instruction, message, template, history });
+    const messages = assistMessages({ action, instruction, message, template, prior, history });
 
     // Free text (no quick action armed): one prompt that works out for itself
     // whether this is a question, text work, or a follow-up.
@@ -1778,7 +1801,7 @@ app.post('/api/assist', async (req, res) => {
     // (section extraction → reversible redaction → Claude → restoration →
     // reassembly); null falls back to Gemini, which the BAA covers.
     if (providerFor(actionModel) === 'claude') {
-      claudeOut = await runClaudeAssist({ action, model: actionModel, message, template, timing });
+      claudeOut = await runClaudeAssist({ action, model: actionModel, message, template, prior, timing });
     }
     if (claudeOut && claudeOut.describe) {
       return res.json({
@@ -1805,7 +1828,7 @@ app.post('/api/assist', async (req, res) => {
         system,
         injected,
         messages,
-        maxTokens: action === 'synthesize' ? 8000 : 4000,
+        maxTokens: (action === 'synthesize' || action === 'generate') ? 8000 : 4000,
         effort: ACTION_EFFORT[action],
         schema: action === 'describe' ? DESCRIBE_SCHEMA : undefined,
         timing
@@ -2079,10 +2102,32 @@ async function claudeDeidReadout({ draft, notes, studyType, reportId, timing }) 
 // deliberately NOT sent on these — earlier turns are outside the redaction —
 // so pipeline actions are one-shot on the text provided. Returns
 // { text } | { describe: {findings, impression} } | null (→ Gemini fallback).
-async function runClaudeAssist({ action, model, message, template, studyType, timing, label }) {
+async function runClaudeAssist({ action, model, message, template, prior, studyType, timing, label }) {
   if (!claude.configured) return null;
   const callLabel = label || (action === 'synthesize' ? 'synthesize' : 'assist_' + action);
   try {
+    if (action === 'generate') {
+      // Whole-text pipeline: template, prior, and notes are redacted together
+      // under one request-scoped map; Opus writes the report; identifiers are
+      // restored server-side. The template names the study — detect from it
+      // when present, else from the notes.
+      const st = await detectStudyType((template && template.trim()) || message).catch(() => null);
+      const red = await redactReversible({ template: template || '', prior: prior || '', notes: message }, null);
+      if (!red.ok) return null;
+      const { system, injected } = await buildKnowledgeSystem(
+        ASSIST_SYSTEM + CLAUDE_REDACTED_CONTRACT, st, 'generate', { scrubForClaude: true });
+      const text = await llmText({
+        model, label: callLabel, system, injected,
+        message: generateUserContent({
+          instruction: ASSIST_ACTIONS.generate,
+          template: red.texts.template, prior: red.texts.prior, notes: red.texts.notes
+        }),
+        maxTokens: 8000, effort: ACTION_EFFORT.generate, timing,
+        deidentified: true, redactedFullText: true
+      });
+      return { text: scrub.restoreRedaction(text, red.map) };
+    }
+
     if (action === 'describe') {
       const red = await redactReversible({ input: message }, null);
       if (!red.ok) return null;

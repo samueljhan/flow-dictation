@@ -101,6 +101,25 @@
         }
         .header-menu-mode .mode-badge { color: #e0a832; font-weight: 600; }
 
+        /* ---------- Assist: Generate Report panel ---------- */
+        .gen-panel {
+            background: #242424; border: 1px solid #333333; border-radius: 12px;
+            padding: 14px; margin-bottom: 10px;
+            display: flex; flex-direction: column; gap: 14px;
+            max-height: 60vh; overflow-y: auto;
+        }
+        .gen-section { display: flex; flex-direction: column; gap: 8px; }
+        .gen-head { display: flex; align-items: center; gap: 12px; }
+        .gen-title { font-size: 13px; font-weight: 600; color: #d0d0d0; }
+        .gen-toggle { display: flex; border: 1px solid #3a3a3a; border-radius: 8px; overflow: hidden; }
+        .gen-toggle button {
+            background: none; border: none; color: #909090;
+            font-size: 12px; padding: 4px 14px; cursor: pointer;
+        }
+        .gen-toggle button.active { background: #3a3a3a; color: #e8e8e8; }
+        .gen-panel textarea { width: 100%; box-sizing: border-box; resize: vertical; min-height: 64px; }
+        .gen-actions { display: flex; align-items: center; gap: 12px; }
+
         /* ---------- Profile & Settings pages ---------- */
         .account-page { flex: 1; overflow-y: auto; padding: 24px 16px; }
         .account-inner { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
@@ -866,29 +885,13 @@
                     <h2>What would you like to do?</h2>
                     <p>Just type — a question, a report to work on, or a follow-up. Quick options are shortcuts.</p>
                     <div class="example-prompts">
-                        <div class="example-prompt" data-action="describe">
-                            <strong>Describe a Finding</strong>
-                            <span>Get Findings + Impression wording</span>
-                        </div>
-                        <div class="example-prompt" data-action="reword">
-                            <strong>Reword</strong>
-                            <span>Improve clarity and flow</span>
-                        </div>
-                        <div class="example-prompt" data-action="proofread">
-                            <strong>Proofread</strong>
-                            <span>Fix typos and dictation errors</span>
-                        </div>
                         <div class="example-prompt" data-action="impression">
                             <strong>Generate Impression</strong>
                             <span>Key findings only, one per line</span>
                         </div>
-                        <div class="example-prompt" data-action="fullreport">
-                            <strong>Generate Full Report</strong>
-                            <span>Complete report from dictated findings</span>
-                        </div>
-                        <div class="example-prompt" data-action="synthesize">
-                            <strong>Synthesize Report</strong>
-                            <span>Update a prior/template report with new information</span>
+                        <div class="example-prompt" data-action="generate">
+                            <strong>Generate Report</strong>
+                            <span>Full report from your notes, template, and prior</span>
                         </div>
                         <div class="example-prompt" data-action="radqa">
                             <strong>Quick Rad Question</strong>
@@ -901,6 +904,36 @@
             <div class="input-container">
               <div class="input-inner">
                 <div class="quick-bar" id="quickBar"></div>
+                <div id="genPanel" class="gen-panel" hidden>
+                    <div class="gen-section">
+                        <div class="gen-head">
+                            <span class="gen-title">Template?</span>
+                            <div class="gen-toggle" id="genTemplateToggle">
+                                <button type="button" data-on="1" class="active">Yes</button>
+                                <button type="button" data-on="">No</button>
+                            </div>
+                        </div>
+                        <textarea id="genTemplate" rows="4" placeholder="Paste your normal study template for this exam…"></textarea>
+                    </div>
+                    <div class="gen-section">
+                        <div class="gen-head">
+                            <span class="gen-title">Prior?</span>
+                            <div class="gen-toggle" id="genPriorToggle">
+                                <button type="button" data-on="1">Yes</button>
+                                <button type="button" data-on="" class="active">No</button>
+                            </div>
+                        </div>
+                        <textarea id="genPrior" rows="4" placeholder="Paste the prior report…" hidden></textarea>
+                    </div>
+                    <div class="gen-section">
+                        <div class="gen-head"><span class="gen-title">Findings / Impression</span></div>
+                        <textarea id="genNotes" rows="4" placeholder="Relevant findings and impression notes for this study…"></textarea>
+                        <div class="gen-actions">
+                            <button class="primary" id="genGoBtn">Generate Report</button>
+                            <span class="status" id="genStatus"></span>
+                        </div>
+                    </div>
+                </div>
                 <div class="input-wrapper">
                     <textarea id="userInput" placeholder="Ask a question, or paste text to work on…" rows="1"></textarea>
                     <button id="sendBtn" title="Send message">
@@ -1682,29 +1715,27 @@
         const sendBtn = document.getElementById('sendBtn');
 
         let pendingAction = null;       // armed quick action
-        let synthTemplate = null;       // Synthesize step 1: the prior report, held until step 2
         let chatHistory = [];           // [{role, content}] sent with each request for follow-up intelligence
 
         const ACTION_HINTS = {
-            describe: 'Describe the finding you’re struggling to word — I’ll suggest Findings wording and matching Impression wording.',
-            reword: 'Paste the sentence, section, or entire report you’d like reworded.',
-            proofread: 'Paste the text to proofread — corrections will be shown in bold (copies as plain text).',
             impression: 'Paste the report body — I’ll generate an Impression: the findings that change management, one per line.',
-            fullreport: 'Dictate or paste your findings — I’ll generate a complete structured report with normals filled in. Review it carefully before use.',
-            synthesize: 'Step 1 of 2 — paste the prior report or template you want to start from.',
+            generate: 'Fill in the panel below: template and prior report are optional; the findings/impression notes drive the report. Review it carefully before use.',
             radqa: 'Ask your question — I’ll search Radiopaedia, ACR and RadioGraphics and cite what I used. Slower than asking plainly; skip it when you just want the answer.'
         };
+        // Full label map — retired actions stay so old telemetry and stored
+        // history still display readable names; QUICK_ACTIONS picks the chips.
         const ACTION_LABELS = {
             describe: 'Describe a Finding', reword: 'Reword', proofread: 'Proofread',
             impression: 'Generate Impression', fullreport: 'Generate Full Report',
-            synthesize: 'Synthesize Report', radqa: 'Quick Rad Question'
+            synthesize: 'Synthesize Report', generate: 'Generate Report', radqa: 'Quick Rad Question'
         };
+        const QUICK_ACTIONS = ['impression', 'generate', 'radqa'];
 
         // Quick options are always available above the composer. Using one is
-        // optional — typing without arming anything lets Gemini work out the
+        // optional — typing without arming anything lets the model work out the
         // task itself (question, rewording, impression, follow-up…).
         const quickBar = document.getElementById('quickBar');
-        for (const [action, label] of Object.entries(ACTION_LABELS)) {
+        for (const [action, label] of QUICK_ACTIONS.map(a => [a, ACTION_LABELS[a]])) {
             const chip = document.createElement('button');
             chip.type = 'button';
             chip.className = 'quick-chip';
@@ -1722,18 +1753,31 @@
                 c.classList.toggle('armed', c.dataset.action === pendingAction));
         }
 
+        // Generate Report uses a structured panel instead of the composer;
+        // arming it swaps the input row for the panel and disarming restores it.
+        function syncGeneratePanel() {
+            const on = pendingAction === 'generate';
+            document.getElementById('genPanel').hidden = !on;
+            document.querySelector('#page-assist .input-wrapper').style.display = on ? 'none' : '';
+        }
+
         function armAction(action) {
             pendingAction = action;
-            synthTemplate = null;          // starting fresh cancels a half-built Synthesize
             syncQuickBar();
+            syncGeneratePanel();
             addHintMessage(ACTION_LABELS[action] + ' — ' + ACTION_HINTS[action]);
-            userInput.focus();
+            if (action === 'generate') {
+                const tpl = document.getElementById('genTemplate');
+                (tpl.hidden || tpl.value.trim() ? document.getElementById('genNotes') : tpl).focus();
+            } else {
+                userInput.focus();
+            }
         }
 
         function disarmAction() {
             pendingAction = null;
-            synthTemplate = null;
             syncQuickBar();
+            syncGeneratePanel();
             userInput.focus();
         }
 
@@ -1741,6 +1785,71 @@
         document.querySelectorAll('.example-prompt').forEach(card => {
             card.addEventListener('click', () => armAction(card.dataset.action));
         });
+
+        // ---- Generate Report panel ----
+        // Yes/No toggle headers: Template? (default yes — assumed to be the
+        // normal study template) and Prior? (default no). Yes reveals the
+        // paste area; No hides it and excludes it from the request.
+        function wireGenToggle(toggleId, areaId) {
+            const toggle = document.getElementById(toggleId);
+            const area = document.getElementById(areaId);
+            toggle.querySelectorAll('button').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    toggle.querySelectorAll('button').forEach(b => b.classList.toggle('active', b === btn));
+                    area.hidden = !btn.dataset.on;
+                    if (!area.hidden) area.focus();
+                });
+            });
+        }
+        wireGenToggle('genTemplateToggle', 'genTemplate');
+        wireGenToggle('genPriorToggle', 'genPrior');
+
+        async function submitGenerate() {
+            const genOn = id => !!document.querySelector('#' + id + ' button.active').dataset.on;
+            const notes = document.getElementById('genNotes').value.trim();
+            const template = genOn('genTemplateToggle') ? document.getElementById('genTemplate').value.trim() : '';
+            const prior = genOn('genPriorToggle') ? document.getElementById('genPrior').value.trim() : '';
+            const setGen = (m, err) => {
+                const el = document.getElementById('genStatus');
+                el.textContent = m || '';
+                el.className = 'status' + (err ? ' error' : '');
+            };
+            if (!notes) return setGen('Enter the findings/impression notes.', true);
+            if (genOn('genTemplateToggle') && !template) return setGen('Paste a template, or set Template? to No.', true);
+            if (genOn('genPriorToggle') && !prior) return setGen('Paste the prior report, or set Prior? to No.', true);
+            setGen('');
+
+            const attached = [template && 'template', prior && 'prior report'].filter(Boolean).join(' + ');
+            addUserMessage(notes + (attached ? '\n\n(' + attached + ' attached)' : ''));
+            disarmAction();
+            const loading = addLoadingMessage('Generating report…');
+            try {
+                const data = await api('/api/assist', { method: 'POST', body: {
+                    action: 'generate', message: notes,
+                    template: template || null, prior: prior || null, history: []
+                } });
+                loading.remove();
+                const plainText = data.text;
+                addAssistantResponse({ html: escapeHtml(data.text), plainText, actionType: 'generate', userText: notes,
+                    model: data.model, latencyMs: data.latency_ms, apiCallId: data.api_call_id });
+                chatHistory.push({ role: 'user', content: notes });
+                chatHistory.push({ role: 'assistant', content: plainText });
+                if (chatHistory.length > 24) chatHistory = chatHistory.slice(-24);
+                api('/api/assist/messages', { method: 'POST', body: {
+                    user_text: notes + (attached ? '\n\n(' + attached + ' attached)' : ''),
+                    assistant_text: plainText,
+                    action_type: 'generate'
+                }}).catch(e => console.error('History save failed:', e));
+                // Notes and prior are per-study; the template often serves the
+                // next study of the same type, so it survives.
+                document.getElementById('genNotes').value = '';
+                document.getElementById('genPrior').value = '';
+            } catch (e) {
+                loading.querySelector('.message-content').innerHTML =
+                    '<span style="color:#dc7a7a">⚠️ ' + escapeHtml(e.message) + '</span>';
+            }
+        }
+        document.getElementById('genGoBtn').addEventListener('click', submitGenerate);
 
         // Selecting text anywhere in the transcript copies it — this replaces the
         // per-message Copy button. Text selected inside a form field never reaches
@@ -1908,24 +2017,10 @@
             if (!message) return;
 
             const actionType = pendingAction;
-
-            // Synthesize is two-part: the first message is the prior report and
-            // is only captured, not sent. The action stays armed for step 2.
-            if (actionType === 'synthesize' && synthTemplate === null) {
-                addUserMessage(message);
-                synthTemplate = message;
-                userInput.value = '';
-                userInput.style.height = 'auto';
-                addHintMessage('Step 2 of 2 — now paste or describe the new information to work into that report. ' +
-                               'I’ll apply it in your own reporting style.');
-                userInput.focus();
-                return;
-            }
-
-            const template = synthTemplate;
+            const template = null;   // Generate Report sends its own structured body
             pendingAction = null;
-            synthTemplate = null;
             syncQuickBar();
+            syncGeneratePanel();
             // Reference search is what Quick Rad Question is for; asking plainly
             // answers from knowledge, which is markedly faster
             const includeRefs = actionType === 'radqa';

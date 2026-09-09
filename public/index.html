@@ -904,6 +904,10 @@
                             <strong>Generate Report</strong>
                             <span>Full report from your notes, template, and prior</span>
                         </div>
+                        <div class="example-prompt" data-action="ddx">
+                            <strong>Ddx</strong>
+                            <span>Ranked differential from a finding + patient context, with Radiopaedia and StatDx links</span>
+                        </div>
                         <div class="example-prompt" data-action="radqa">
                             <strong>Quick Rad Question</strong>
                             <span>Answer with references (Radiopaedia, ACR, RadioGraphics…)</span>
@@ -1742,6 +1746,7 @@
         const ACTION_HINTS = {
             impression: 'Paste the report body — I’ll generate an Impression: the findings that change management, one per line.',
             generate: 'Fill in the form below: template and prior report are optional; the findings/impression notes drive the report. Review it carefully before use.',
+            ddx: 'Describe the finding WITH patient context — age, sex, relevant history — and I’ll rank a differential weighted by them, with Radiopaedia and StatDx links.',
             radqa: 'Ask your question — I’ll search Radiopaedia, ACR and RadioGraphics and cite what I used. Slower than asking plainly; skip it when you just want the answer.'
         };
         // Full label map — retired actions stay so old telemetry and stored
@@ -1749,9 +1754,16 @@
         const ACTION_LABELS = {
             describe: 'Describe a Finding', reword: 'Reword', proofread: 'Proofread',
             impression: 'Generate Impression', fullreport: 'Generate Full Report',
-            synthesize: 'Synthesize Report', generate: 'Generate Report', radqa: 'Quick Rad Question'
+            synthesize: 'Synthesize Report', generate: 'Generate Report',
+            ddx: 'Ddx', radqa: 'Quick Rad Question'
         };
-        const QUICK_ACTIONS = ['impression', 'generate', 'radqa'];
+        const QUICK_ACTIONS = ['impression', 'generate', 'ddx', 'radqa'];
+
+        // Arming Ddx swaps the composer placeholder for an input pattern
+        const DEFAULT_INPUT_PLACEHOLDER = 'Ask a question, or paste text to work on…';
+        const ACTION_PLACEHOLDERS = {
+            ddx: 'e.g. pediatric male, CT showing a hyperdense suprasellar mass with calcifications…'
+        };
 
         // Quick options are always available above the composer. Using one is
         // optional — typing without arming anything lets the model work out the
@@ -1809,6 +1821,7 @@
         function armAction(action) {
             pendingAction = action;
             syncQuickBar();
+            userInput.placeholder = ACTION_PLACEHOLDERS[action] || DEFAULT_INPUT_PLACEHOLDER;
             addHintMessage(ACTION_LABELS[action] + ' — ' + ACTION_HINTS[action]);
             syncGeneratePanel();   // after the hint, so the card sits last in the flow
             if (action === 'generate') {
@@ -1823,6 +1836,7 @@
             pendingAction = null;
             syncQuickBar();
             syncGeneratePanel();
+            userInput.placeholder = DEFAULT_INPUT_PLACEHOLDER;
             userInput.focus();
         }
 
@@ -2077,9 +2091,12 @@
             pendingAction = null;
             syncQuickBar();
             syncGeneratePanel();
+            userInput.placeholder = DEFAULT_INPUT_PLACEHOLDER;
             // Reference search is what Quick Rad Question is for; asking plainly
-            // answers from knowledge, which is markedly faster
+            // answers from knowledge, which is markedly faster. Ddx always
+            // searches (server-side), so it shares the searching notice.
             const includeRefs = actionType === 'radqa';
+            const searches = includeRefs || actionType === 'ddx';
 
             addUserMessage(message);
             userInput.value = '';
@@ -2092,7 +2109,7 @@
             // worth the wait.
             // A searched answer takes ~20s, most of it before any text exists —
             // say what the wait is for rather than showing a bare spinner
-            const loading = addLoadingMessage(includeRefs ? 'Searching references…' : 'Thinking…');
+            const loading = addLoadingMessage(searches ? 'Searching references…' : 'Thinking…');
             try {
                 const data = await api('/api/assist', { method: 'POST', body });
                 loading.remove();
@@ -2112,9 +2129,9 @@
                         plainText, actionType, userText: message,
                         model: data.model, latencyMs: data.latency_ms, apiCallId: data.api_call_id
                     });
-                } else if (!actionType || actionType === 'radqa') {
-                    // Free text and Quick Rad Question share the one prompt, so they
-                    // share this render: answers may use **bold**; URLs become links.
+                } else if (!actionType || actionType === 'radqa' || actionType === 'ddx') {
+                    // Free text, Quick Rad Question, and Ddx share this render:
+                    // answers may use **bold**; URLs become links (new tabs).
                     // If the answer already has its own References section, trust that
                     // curated list; otherwise surface any cited URLs it didn't write out.
                     const hasOwnRefs = /^\s*(\*\*)?references\b/im.test(data.text);

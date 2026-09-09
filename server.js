@@ -60,6 +60,7 @@ const MODEL_SYNTHESIZE = process.env.MODEL_SYNTHESIZE || 'claude-opus-5';   // p
 // Gemini+Google, never to an unsourced one.
 const MODEL_RADQA = process.env.MODEL_RADQA || 'gemini-2.5-pro';            // Gemini fallback for free text (Google grounding when refs ON)
 const MODEL_RADQA_GROUNDED = process.env.MODEL_RADQA_GROUNDED || 'claude-opus-5'; // references ON (Anthropic web search)
+const MODEL_DDX = process.env.MODEL_DDX || 'claude-opus-5';                 // Ddx (whole-text pipeline + Anthropic web search, always on)
 const MODEL_CHAT = process.env.MODEL_CHAT || 'claude-opus-5';               // plain free text (whole-text de-identified pipeline)
 const MODEL_SCRUB = process.env.MODEL_SCRUB || 'gemini-2.5-flash-lite';     // PHI scrub + reversible redaction model pass
 // Where a Claude-routed task lands when the de-identified pipeline can't run
@@ -370,6 +371,10 @@ app.get('/api/settings', (req, res) => {
       entry('Reword', MODEL_REWORD, 'de-identified pipeline'),
       entry('Describe Finding', MODEL_DESCRIBE, 'de-identified pipeline'),
       entry('Proofread / Generate Full Report', MODEL_REPORT, 'whole-text de-identified pipeline'),
+      entry('Differential diagnosis (Ddx)', MODEL_DDX,
+        providerFor(MODEL_DDX) === 'claude'
+          ? 'whole-text de-identified pipeline + Anthropic web search'
+          : 'Google Search grounding'),
       entry('Quick Rad Question — references ON', MODEL_RADQA_GROUNDED,
         providerFor(MODEL_RADQA_GROUNDED) === 'claude'
           ? 'whole-text de-identified pipeline + Anthropic web search'
@@ -794,6 +799,33 @@ Rules:
 - Do NOT flag the impression for omitting, summarizing, or re-prioritizing findings — the impression is intentionally selective, and that is never an error.
 - "reason" is one short sentence.
 - If nothing needs changing, return {"edits": []}.` + CLAUDE_DEID_CONTRACT;
+
+// Ddx: ranked differential from a described finding + patient context, with
+// web search always on. Ages under 90 reach the model verbatim by design
+// (see scrub.js) — they are the point of the action. The [[statdx:...]]
+// markers are replaced server-side with deterministic StatDx search links.
+const DDX_SYSTEM = `You are an expert academic radiologist building a differential diagnosis inside Flow Dictation, a radiology reporting tool. The user describes an imaging finding along with patient context — age, sex, relevant history. Produce a RANKED differential explicitly weighted by that context: demographics and history change the ranking, and your reasoning must show it (in an infant, the age-appropriate entity supplants the adult-typical one — say so in those terms).
+
+Search the web for the relevant Radiopaedia article for each entity you list. You have at most 5 searches — budget them: queries like "<entity> radiopaedia" surface the article URL directly, and one query naming two or three candidate entities together with "radiopaedia" can cover several at once. Copy article URLs exactly as they appear in the results.
+
+List typically 3 to 6 entities, most likely first — fewer when the finding is near-pathognomonic, and say so plainly when it is. For EACH entity:
+1. **Entity name** (numbered, bold). Append " (don't miss)" to an entity included for its consequence rather than its likelihood — include one whenever it applies.
+2. One or two lines tying it to the DESCRIBED features and context: what fits, and what argues against it.
+3. One line of discriminating imaging features to look for next.
+4. A links line: "Radiopaedia: <URL>" — the URL must come from your web search results EXACTLY as found; NEVER construct, guess, or pattern-match a Radiopaedia URL, and omit the link entirely if search did not surface the article. Then, on the same line: [[statdx:<entity name>]] — written exactly like that, once per entity, plain entity name inside; it becomes a StatDx search link server-side.
+
+Rules:
+- Rank by likelihood GIVEN the stated age, sex, and history — never by textbook frequency alone.
+- If a key piece of context is missing, add one line naming the SINGLE detail that would most change the ranking.
+- On follow-ups ("it enhances peripherally"), re-rank the differential already on the table against the new information — do not start over.
+- No preamble before the first entity. End with exactly one line inviting refinement, e.g. "Tell me more — enhancement pattern, growth over time — to narrow this."`;
+
+// Deterministic StatDx search links, built server-side from the entity names
+// the model marked — the model never writes StatDx URLs itself.
+function applyStatdxLinks(text) {
+  return String(text).replace(/\[\[statdx:([^\[\]\n]{2,120})\]\]/gi,
+    (_, name) => 'StatDx ⌕: https://my.statdx.com/search?q=' + encodeURIComponent(name.trim()));
+}
 
 // Whole-text variant of the contract, for tasks whose input is the user's
 // full text after whole-document reversible redaction (proofread, fullreport,
@@ -1693,10 +1725,10 @@ async function runFreeform({ messages, systemFor, injected, label, useRefs }) {
 // the response leaves. References ON runs Anthropic's web search server tool
 // and returns the same citations shape as the Gemini grounded path, so the
 // client renders either identically. null → Gemini fallback (runFreeform).
-async function runClaudeFreeform({ message, history, useRefs }) {
+async function runClaudeFreeform({ message, history, useRefs, system, label, model }) {
   if (!claude.configured) return null;
-  const model = useRefs ? MODEL_RADQA_GROUNDED : MODEL_CHAT;
-  const label = useRefs ? 'assist_radqa' : 'assist_freetext';
+  model = model || (useRefs ? MODEL_RADQA_GROUNDED : MODEL_CHAT);
+  label = label || (useRefs ? 'assist_radqa' : 'assist_freetext');
   try {
     const kept = budgetHistory(history);
     const texts = { message };
@@ -1705,15 +1737,23 @@ async function runClaudeFreeform({ message, history, useRefs }) {
     if (!red.ok) return null;
     // Knowledge/exemplar selection reads the ORIGINAL text server-side (its
     // detect call runs on Gemini, which may see identifiable text); only the
-    // redacted text goes out to Claude.
-    const { systemFor, injected } = await freeformSystemFactory(message);
+    // redacted text goes out to Claude. A caller-supplied system (Ddx) skips
+    // the freeform knowledge machinery entirely.
+    let systemText, injected = 0;
+    if (system) {
+      systemText = system;
+    } else {
+      const f = await freeformSystemFactory(message);
+      systemText = f.systemFor(useRefs) + CLAUDE_REDACTED_CONTRACT;
+      injected = f.injected;
+    }
     const msgs = kept.map((h, i) => ({ role: h.role, content: red.texts['h' + i] }));
     msgs.push({ role: 'user', content: red.texts.message });
 
     const t0 = Date.now();
     const r = await llmGenerate({
       model,
-      system: systemFor(useRefs) + CLAUDE_REDACTED_CONTRACT,
+      system: systemText,
       contents: toContents(msgs),
       maxTokens: 8000, effort: FREEFORM_EFFORT,
       deidentified: true, redactedFullText: true, grounding: !!useRefs
@@ -1767,6 +1807,25 @@ app.post('/api/assist', async (req, res) => {
     recordAssistAction(action);
     const instruction = action && ASSIST_ACTIONS[action] ? ASSIST_ACTIONS[action] : null;
     const messages = assistMessages({ action, instruction, message, template, prior, history });
+
+    // Ddx: ranked differential with web search always on. Claude pipeline
+    // first (redaction in front); Gemini + Google grounding when it can't run.
+    if (action === 'ddx') {
+      let out = providerFor(MODEL_DDX) === 'claude'
+        ? await runClaudeFreeform({
+            message, history, useRefs: true, model: MODEL_DDX, label: 'assist_ddx',
+            system: DDX_SYSTEM + CLAUDE_REDACTED_CONTRACT
+          })
+        : null;
+      if (!out) {
+        out = await runFreeform({
+          messages, systemFor: () => DDX_SYSTEM, injected: 0,
+          useRefs: true, label: 'assist_ddx'
+        });
+      }
+      out.text = applyStatdxLinks(out.text);
+      return res.json({ type: 'text', ...out });
+    }
 
     // Free text (no quick action armed): one prompt that works out for itself
     // whether this is a question, text work, or a follow-up.

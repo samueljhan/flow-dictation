@@ -171,6 +171,14 @@ async function generate({ model, system, contents, maxTokens, effort, deidentifi
           if (c && c.url) cites.push({ url: c.url, title: c.title || '' });
         }
       }
+      // Search-result URLs are citations too — text-block citations are often
+      // absent even when searches ran, and the References line needs sources.
+      // An error result's content is an OBJECT, success is a LIST — branch.
+      if (b.type === 'web_search_tool_result' && Array.isArray(b.content)) {
+        for (const item of b.content) {
+          if (item && item.url) cites.push({ url: item.url, title: item.title || '' });
+        }
+      }
     }
     if (r.stop_reason !== 'pause_turn') break;
     convo = [...convo, { role: 'assistant', content: r.content }];

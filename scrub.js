@@ -38,6 +38,18 @@ const PATTERNS = [
   { type: 'MRN', re: /(?<![\d.\-])\d{6,10}(?!\d|\.\d|\s?(?:mm|cm|mL|cc|HU)\b)/g }
 ];
 
+// Ages: Safe Harbor treats 90+ as an identifier; younger ages are diagnostic
+// context (a 5-month-old's differential is not an adult's) and pass through
+// every pass verbatim. This rule applies to OUTBOUND reversible redaction
+// only (patternRedact): it never runs in patternScrub, so the destructive
+// finalization scrub for STORED text keeps its existing behavior unchanged —
+// patterns leave all ages alone, and its model pass maps 90+ to [AGE 90+].
+// "19-year-old" can't match: \b requires a boundary before the leading 9.
+const AGE_90_PLUS = {
+  type: 'AGE',
+  re: /\b(?:9\d|1[0-4]\d)(?:[- ]?(?:year|yr)s?[- ]old|[- ]?y\/?o\b)/gi
+};
+
 // One text -> { text, counts } where counts is {TYPE: n} for types that hit
 function patternScrub(text) {
   const counts = {};
@@ -156,11 +168,11 @@ function tokenFor(state, type, identifier) {
   return token;
 }
 
-// Pattern pass, reversible flavor: same PATTERNS, indexed tokens instead of
-// bare placeholders.
+// Pattern pass, reversible flavor: same PATTERNS plus the outbound-only
+// 90+ age rule, indexed tokens instead of bare placeholders.
 function patternRedact(text, state) {
   let out = String(text);
-  for (const { type, re } of PATTERNS) {
+  for (const { type, re } of [...PATTERNS, AGE_90_PLUS]) {
     out = out.replace(re, m => tokenFor(state, type, m));
   }
   return out;

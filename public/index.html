@@ -906,7 +906,7 @@
                         </div>
                         <div class="example-prompt" data-action="ddx">
                             <strong>Ddx</strong>
-                            <span>Ranked differential from a finding + patient context, with Radiopaedia and StatDx links</span>
+                            <span>Ranked differential from a finding + patient context; ask for references to add links</span>
                         </div>
                         <div class="example-prompt" data-action="radqa">
                             <strong>Quick Rad Question</strong>
@@ -1746,7 +1746,7 @@
         const ACTION_HINTS = {
             impression: 'Paste the report body — I’ll generate an Impression: the findings that change management, one per line.',
             generate: 'Fill in the form below: template and prior report are optional; the findings/impression notes drive the report. Review it carefully before use.',
-            ddx: 'Describe the finding WITH patient context — age, sex, relevant history — and I’ll rank a differential weighted by them, with Radiopaedia and StatDx links.',
+            ddx: 'Describe the finding WITH patient context — age, sex, relevant history — and I’ll rank a differential weighted by them. Ask for references to add Radiopaedia and StatDx links.',
             radqa: 'Ask your question — I’ll search Radiopaedia, ACR and RadioGraphics and cite what I used. Slower than asking plainly; skip it when you just want the answer.'
         };
         // Full label map — retired actions stay so old telemetry and stored
@@ -2093,10 +2093,11 @@
             syncGeneratePanel();
             userInput.placeholder = DEFAULT_INPUT_PLACEHOLDER;
             // Reference search is what Quick Rad Question is for; asking plainly
-            // answers from knowledge, which is markedly faster. Ddx always
-            // searches (server-side), so it shares the searching notice.
+            // answers from knowledge, which is markedly faster. Ddx searches only
+            // when the message asks for references/links (mirrors the server).
             const includeRefs = actionType === 'radqa';
-            const searches = includeRefs || actionType === 'ddx';
+            const searches = includeRefs ||
+                (actionType === 'ddx' && /\b(links?|references?|sources?|citations?|radiopaedia|statdx)\b/i.test(message));
 
             addUserMessage(message);
             userInput.value = '';

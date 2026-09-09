@@ -373,8 +373,8 @@ app.get('/api/settings', (req, res) => {
       entry('Proofread / Generate Full Report', MODEL_REPORT, 'whole-text de-identified pipeline'),
       entry('Differential diagnosis (Ddx)', MODEL_DDX,
         providerFor(MODEL_DDX) === 'claude'
-          ? 'whole-text de-identified pipeline + Anthropic web search'
-          : 'Google Search grounding'),
+          ? 'whole-text de-identified pipeline; Anthropic web search when references requested'
+          : 'Google Search grounding when references requested'),
       entry('Quick Rad Question — references ON', MODEL_RADQA_GROUNDED,
         providerFor(MODEL_RADQA_GROUNDED) === 'claude'
           ? 'whole-text de-identified pipeline + Anthropic web search'
@@ -806,19 +806,26 @@ Rules:
 // markers are replaced server-side with deterministic StatDx search links.
 const DDX_SYSTEM = `You are an expert academic radiologist building a differential diagnosis inside Flow Dictation, a radiology reporting tool. The user describes an imaging finding along with patient context — age, sex, relevant history. Produce a RANKED differential explicitly weighted by that context: demographics and history change the ranking, and your reasoning must show it (in an infant, the age-appropriate entity supplants the adult-typical one — say so in those terms).
 
-Search the web for the relevant Radiopaedia article for each entity you list. You have at most 5 searches — budget them: queries like "<entity> radiopaedia" surface the article URL directly, and one query naming two or three candidate entities together with "radiopaedia" can cover several at once. Copy article URLs exactly as they appear in the results.
-
 List typically 3 to 6 entities, most likely first — fewer when the finding is near-pathognomonic, and say so plainly when it is. For EACH entity:
 1. **Entity name** (numbered, bold). Append " (don't miss)" to an entity included for its consequence rather than its likelihood — include one whenever it applies.
 2. One or two lines tying it to the DESCRIBED features and context: what fits, and what argues against it.
 3. One line of discriminating imaging features to look for next.
-4. A links line: "Radiopaedia: <URL>" — the URL must come from your web search results EXACTLY as found; NEVER construct, guess, or pattern-match a Radiopaedia URL, and omit the link entirely if search did not surface the article. Then, on the same line: [[statdx:<entity name>]] — written exactly like that, once per entity, plain entity name inside; it becomes a StatDx search link server-side.
 
 Rules:
 - Rank by likelihood GIVEN the stated age, sex, and history — never by textbook frequency alone.
+- Do NOT include links or URLs unless the user asks for references/links.
 - If a key piece of context is missing, add one line naming the SINGLE detail that would most change the ranking.
 - On follow-ups ("it enhances peripherally"), re-rank the differential already on the table against the new information — do not start over.
 - No preamble before the first entity. End with exactly one line inviting refinement, e.g. "Tell me more — enhancement pattern, growth over time — to narrow this."`;
+
+// Appended (with web search enabled) only when the user asks for
+// references/links — the default Ddx answer is link-free and search-free.
+const DDX_LINKS_ADDENDUM = `
+
+The user has asked for references. Search the web for the relevant Radiopaedia article for each entity — you have at most 5 searches, so budget them: queries like "<entity> radiopaedia" surface the article URL directly, and one query naming two or three candidate entities together with "radiopaedia" can cover several at once. Give each entity a links line: "Radiopaedia: <URL>" — the URL must come from your web search results EXACTLY as found; NEVER construct, guess, or pattern-match a Radiopaedia URL, and omit the link entirely if search did not surface the article. Then, on the same line: [[statdx:<entity name>]] — written exactly like that, once per entity, plain entity name inside; it becomes a StatDx search link server-side. When re-answering with references for a differential already on the table, keep the same entities and ranking.`;
+
+// "give me the links/references" in the Ddx message (first ask or follow-up)
+const wantsDdxLinks = txt => /\b(links?|references?|sources?|citations?|radiopaedia|statdx)\b/i.test(String(txt || ''));
 
 // Deterministic StatDx search links, built server-side from the entity names
 // the model marked — the model never writes StatDx URLs itself.
@@ -1725,7 +1732,7 @@ async function runFreeform({ messages, systemFor, injected, label, useRefs }) {
 // the response leaves. References ON runs Anthropic's web search server tool
 // and returns the same citations shape as the Gemini grounded path, so the
 // client renders either identically. null → Gemini fallback (runFreeform).
-async function runClaudeFreeform({ message, history, useRefs, system, label, model }) {
+async function runClaudeFreeform({ message, history, useRefs, system, label, model, appendReferences = true }) {
   if (!claude.configured) return null;
   model = model || (useRefs ? MODEL_RADQA_GROUNDED : MODEL_CHAT);
   label = label || (useRefs ? 'assist_radqa' : 'assist_freetext');
@@ -1773,7 +1780,7 @@ async function runClaudeFreeform({ message, history, useRefs, system, label, mod
         .sort((a, b) => sourceRank(a.url) - sourceRank(b.url))
         .slice(0, MAX_REFERENCES)
         .map(c => ({ url: c.url, title: c.title }));
-      if (citations.length) {
+      if (citations.length && appendReferences) {
         text += '\n\nReferences:\n' +
           citations.map(c => c.url + (c.title && c.title !== c.url ? ' — ' + c.title : '')).join('\n');
       }
@@ -1808,22 +1815,29 @@ app.post('/api/assist', async (req, res) => {
     const instruction = action && ASSIST_ACTIONS[action] ? ASSIST_ACTIONS[action] : null;
     const messages = assistMessages({ action, instruction, message, template, prior, history });
 
-    // Ddx: ranked differential with web search always on. Claude pipeline
-    // first (redaction in front); Gemini + Google grounding when it can't run.
+    // Ddx: ranked differential, link-free by default. Asking for
+    // references/links turns on web search and the Radiopaedia + StatDx
+    // links lines. Claude pipeline first (redaction in front); Gemini (+
+    // Google grounding when links are wanted) when it can't run.
     if (action === 'ddx') {
+      const wantLinks = wantsDdxLinks(message);
+      const ddxSystem = DDX_SYSTEM + (wantLinks ? DDX_LINKS_ADDENDUM : '');
       let out = providerFor(MODEL_DDX) === 'claude'
         ? await runClaudeFreeform({
-            message, history, useRefs: true, model: MODEL_DDX, label: 'assist_ddx',
-            system: DDX_SYSTEM + CLAUDE_REDACTED_CONTRACT
+            message, history, useRefs: wantLinks, model: MODEL_DDX, label: 'assist_ddx',
+            system: ddxSystem + CLAUDE_REDACTED_CONTRACT, appendReferences: false
           })
         : null;
       if (!out) {
         out = await runFreeform({
-          messages, systemFor: () => DDX_SYSTEM, injected: 0,
-          useRefs: true, label: 'assist_ddx'
+          messages, systemFor: () => ddxSystem, injected: 0,
+          useRefs: wantLinks, label: 'assist_ddx'
         });
       }
       out.text = applyStatdxLinks(out.text);
+      // Links live inline per entity; no trailing References block or
+      // client-side citation appendix for Ddx.
+      out.citations = [];
       return res.json({ type: 'text', ...out });
     }
 

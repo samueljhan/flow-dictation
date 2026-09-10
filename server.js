@@ -3269,6 +3269,77 @@ app.put('/api/reports/:id/notes', async (req, res) => {
 });
 
 // Current draft vs. the one saved immediately before it
+// Which studies have a review waiting, for the drafts-list badges. Kept off
+// the /api/reports/:id path so it can't be read as a report id. Counts are
+// deduped the same way the per-report restore is.
+app.get('/api/review/pending', async (req, res) => {
+  if (!requireDb(res)) return;
+  try {
+    const rows = await db.many(
+      `select report_id, count(*)::int as pending from (
+         select distinct on (report_id, original_text, suggested_text) report_id
+           from review_events
+          where disposition is null
+            and scrubbed_at is null
+            and original_text is not null
+            and suggested_text is not null
+          order by report_id, original_text, suggested_text, id desc
+       ) d group by report_id`);
+    res.json({ pending: rows });
+  } catch (error) {
+    console.error('Pending review index error:', error.message);
+    res.status(500).json({ error: 'Failed to load pending reviews', details: error.message });
+  }
+});
+
+// Suggestions from a finished review that were never decided — the durable
+// home of a pending review. The client keeps in-memory jobs while the tab
+// lives; this restores them after a reload, on another device, or whenever
+// that memory is gone. No new storage: these are the rows recordReviewEvents
+// already wrote. Scrubbed rows are excluded (their text is redacted, so it
+// could not anchor into the draft anyway).
+app.get('/api/reports/:id/pending-review', async (req, res) => {
+  if (!requireDb(res)) return;
+  try {
+    // distinct on: a review re-run leaves the previous batch undecided when the
+    // save that would have retired it never happened (a reload mid-review), so
+    // the same suggestion can sit in two batches — keep only the newest.
+    const rows = await db.many(
+      `select * from (
+         select distinct on (original_text, suggested_text)
+                id, source, category, target_section, original_text, suggested_text, reason,
+                evidence_impression, evidence_findings
+           from review_events
+          where report_id = $1
+            and disposition is null
+            and scrubbed_at is null
+            and original_text is not null
+            and suggested_text is not null
+          order by original_text, suggested_text, id desc
+       ) newest order by id`, [req.params.id]);
+    res.json({
+      edits: rows.map(r => ({
+        event_id: r.id,
+        category: r.category || 'style',
+        ...(r.target_section ? { target_section: r.target_section } : {}),
+        original_text: r.original_text,
+        suggested_text: r.suggested_text,
+        reason: r.reason || '',
+        ...(r.evidence_impression || r.evidence_findings ? {
+          evidence: {
+            impression_quote: r.evidence_impression || '',
+            findings_quote: r.evidence_findings || ''
+          }
+        } : {}),
+        source: r.source
+      }))
+    });
+  } catch (error) {
+    console.error('Pending review load error:', error.message);
+    res.status(500).json({ error: 'Failed to load pending review', details: error.message });
+  }
+});
+
 app.get('/api/reports/:id/changes', async (req, res) => {
   if (!requireDb(res)) return;
   try {

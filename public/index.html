@@ -2788,6 +2788,7 @@
             const shiftId = draftShiftSelect.value;
             const listEl = document.getElementById('draftList');
             if (!shiftId) { listEl.innerHTML = ''; return; }
+            refreshServerPending();   // badges for reviews waiting from an earlier session
             try {
                 const data = await api('/api/reports?shift_id=' + encodeURIComponent(shiftId));
                 const drafts = (data.reports || []).filter(r => !r.final_saved_at);
@@ -2870,7 +2871,10 @@
                 updateEditingUi();
                 loadDraftList();
                 // A review that finished while this study was closed opens straight
-                // into its edit cards; one still running just says so
+                // into its edit cards; one still running just says so. Nothing in
+                // memory for this study means asking the server whether a review
+                // is still waiting on it (survives reloads and other devices).
+                await restorePendingReview(id, draftText.value);
                 if (!showPendingReview(id)) updateReviewUi();
             } catch (e) {
                 setDraftStatus('Failed to load draft: ' + e.message, 'error');
@@ -3077,6 +3081,7 @@
                 const edits = locateEdits(baseText, data.edits || [], data.body_start || 0);
                 if (edits.length === 0) {
                     reviewJobs.delete(reportId);
+                    serverPending.delete(reportId);
                     if (loadedReport && loadedReport.id === reportId) {
                         setDraftStatus('No edits suggested — draft is already saved.', '');
                     } else {
@@ -3102,6 +3107,11 @@
         // Open a finished review's edit cards. Only when the study is on screen,
         // nothing else is mid-review, and the draft still matches what was sent —
         // edit positions are offsets into that exact text.
+        //
+        // The job is NOT consumed by being shown: currentEdits points at the very
+        // same array, so every accept/reject/hand-edit writes straight through to
+        // the job. Leaving the study — or backing out to editing — therefore keeps
+        // the suggestions and the decisions already made; only saving clears them.
         function showPendingReview(reportId) {
             const job = reviewJobs.get(reportId);
             if (!job || job.status !== 'ready') return false;
@@ -3110,13 +3120,41 @@
             if (draftText.value !== job.baseText) return false;
             reviewedRaw = job.baseText;
             currentEdits = job.edits;
-            integrating = false;
-            reviewJobs.delete(reportId);
+            integrating = !!job.integrating;
             setDraftStatus('', '');
             enterReviewMode();
             refreshReviewBadges();
             updateReviewUi();
             return true;
+        }
+
+        // Restore a review that finished before this tab existed (a reload, or
+        // another device): undecided suggestions live in review_events, so the
+        // server can hand them back. Only fills a gap — never overwrites a job
+        // this tab already holds.
+        async function restorePendingReview(reportId, baseText) {
+            if (reviewJobs.has(reportId)) return false;
+            try {
+                const data = await api('/api/reports/' + encodeURIComponent(reportId) + '/pending-review');
+                const raw = data.edits || [];
+                // Positions are offsets into this exact text; anything that no
+                // longer anchors is dropped by locateEdits. Anchor from the
+                // FINDINGS heading, as the review pass itself does, so a phrase
+                // that also appears in the header can't match up there.
+                const m = baseText.match(/^[ \t]*(?:\*\*)?\s*FINDINGS\b[^\n]*$/im);
+                const edits = locateEdits(baseText, raw, m ? m.index : 0);
+                if (!edits.length) return false;
+                reviewJobs.set(reportId, {
+                    status: 'ready', baseText, edits,
+                    // Read-out integrations restore as what they were, so saving
+                    // still records them as notes-integrated
+                    integrating: raw.length > 0 && raw.every(e => e.source === 'readout')
+                });
+                refreshReviewBadges();
+                return true;
+            } catch (e) {
+                return false;   // a restore that fails just means no pending review
+            }
         }
 
         // Reflect the loaded study's review state in the buttons and status line
@@ -3154,10 +3192,27 @@
             showPendingReview(id);
         });
 
+        // Reviews still waiting according to the server — studies reviewed in an
+        // earlier session, before this tab existed. In-memory jobs always win.
+        const serverPending = new Map();
+        async function refreshServerPending() {
+            try {
+                const data = await api('/api/review/pending');
+                serverPending.clear();
+                for (const row of data.pending || []) serverPending.set(row.report_id, row.pending);
+                refreshReviewBadges();
+            } catch (e) { /* badges are a hint, never a blocker */ }
+        }
+
         // Small marker on each drafts-list row: a review running, or waiting
         function reviewBadgeHtml(reportId) {
             const job = reviewJobs.get(reportId);
-            if (!job) return '';
+            if (!job) {
+                const n = serverPending.get(reportId);
+                return n
+                    ? '<span class="di-review ready" title="Suggested edits waiting — open the study">' + n + '</span>'
+                    : '';
+            }
             if (job.status === 'running') return '<span class="di-review running" title="Review running">⟳</span>';
             if (job.status === 'ready') return '<span class="di-review ready" title="Suggested edits ready">' + job.edits.length + '</span>';
             return '<span class="di-review error" title="Review failed">!</span>';
@@ -3234,8 +3289,12 @@
             setNotesVisible(!!loadedReport);
             reviewStatus.textContent = '';
         }
+        // "Back to editing" steps out of the cards without discarding them: the
+        // job survives, so the badge and "Show suggested edits" bring the same
+        // suggestions — and any decisions already made — straight back.
         document.getElementById('cancelReviewBtn').addEventListener('click', () => {
             exitReviewMode();
+            refreshReviewBadges();
             updateReviewUi();
         });
 
@@ -3475,6 +3534,10 @@
                     loadedReport = data.report;
                     const savedId = loadedReport.id;
                     const savedDraft = loadedReport.draft_text;
+                    // Saving is what consumes a review: the decisions are now
+                    // recorded server-side, so the pending job retires with them.
+                    reviewJobs.delete(savedId);
+                    serverPending.delete(savedId);
                     exitReviewMode();
                     currentEdits = [];
                     reviewedRaw = '';

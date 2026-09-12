@@ -524,6 +524,27 @@
             color: #d0d0d0; font-size: 13px; padding: 7px 10px; border-radius: 6px; cursor: pointer;
         }
         .di-menu button:hover { background: #4a4a4a; color: #fff; }
+        .di-menu hr { border: none; border-top: 1px solid #555; margin: 4px 2px; }
+        .di-menu button.danger { color: #dc8a8a; }
+        .di-menu button.danger:hover { background: #5a3535; color: #ffb3b3; }
+
+        /* Drafts panel: clear-all, cleared section, undo strip */
+        .dl-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+        .dl-linkbtn {
+            background: none; border: none; color: #808080; cursor: pointer;
+            font-size: 11px; padding: 2px 4px; border-radius: 5px;
+        }
+        .dl-linkbtn:hover { background: #333; color: #d0d0d0; }
+        .dl-undo {
+            display: flex; align-items: center; justify-content: space-between; gap: 8px;
+            background: #2a2a2a; border: 1px solid #3a3a3a; border-radius: 8px;
+            padding: 6px 10px; margin-top: 6px; font-size: 12px; color: #909090;
+        }
+        .dl-undo button {
+            background: none; border: none; color: #e0a832; cursor: pointer;
+            font-size: 12px; font-weight: 600; padding: 2px 4px;
+        }
+        .draft-item.cleared .di-main { color: #7c7c7c; font-style: italic; }
         .modal.wide { max-width: 760px; }
         .modal .diff-view { margin-bottom: 0; max-height: 55vh; overflow-y: auto; }
         #readoutNotes { min-height: 90px; font-size: 13px; resize: none; }
@@ -998,9 +1019,19 @@
                         </div>
                     </div>
                     <div class="panel" id="draftsPanel">
-                        <div class="panel-title">Drafts</div>
+                        <div class="panel-title dl-head">
+                            <span>Drafts</span>
+                            <button type="button" class="dl-linkbtn" id="clearAllBtn" style="display:none"
+                                    title="Clear every study currently listed for this shift">Clear all</button>
+                        </div>
                         <select id="draftShiftSelect"></select>
                         <div id="draftList"></div>
+                        <div id="clearedUndo" class="dl-undo" style="display:none">
+                            <span id="clearedUndoText">Cleared</span>
+                            <button type="button" id="clearedUndoBtn">Undo</button>
+                        </div>
+                        <button type="button" class="dl-linkbtn" id="showClearedBtn" style="display:none"></button>
+                        <div id="clearedList"></div>
                         <button class="ghost" id="newDraftBtn" style="display:none">New Draft</button>
                     </div>
                     <div class="panel" id="metaPanel">
@@ -2681,15 +2712,27 @@
             btn.classList.add('open');
             const menu = document.createElement('div');
             menu.className = 'di-menu';
-            const item = document.createElement('button');
-            item.type = 'button';
-            item.textContent = 'See recent changes';
-            item.addEventListener('click', (ev) => {
-                ev.stopPropagation();
-                closeRowMenu();
-                showRecentChanges(report);
-            });
-            menu.appendChild(item);
+            const addItem = (label, onClick, cls) => {
+                const b = document.createElement('button');
+                b.type = 'button';
+                if (cls) b.className = cls;
+                b.textContent = label;
+                b.addEventListener('click', ev => {
+                    ev.stopPropagation();
+                    closeRowMenu();
+                    onClick();
+                });
+                menu.appendChild(b);
+                return b;
+            };
+            addItem('See recent changes', () => showRecentChanges(report));
+            if (report.cleared_at) {
+                addItem('Restore to list', () => setReportCleared(report.id, false));
+            } else {
+                addItem('Clear from list', () => setReportCleared(report.id, true));
+            }
+            menu.appendChild(document.createElement('hr'));
+            addItem('Delete draft', () => deleteReport(report), 'danger');
             menu.addEventListener('click', ev => ev.stopPropagation());
             document.body.appendChild(menu);
             const r = btn.getBoundingClientRect();
@@ -2791,44 +2834,158 @@
             refreshServerPending();   // badges for reviews waiting from an earlier session
             try {
                 const data = await api('/api/reports?shift_id=' + encodeURIComponent(shiftId));
-                const drafts = (data.reports || []).filter(r => !r.final_saved_at);
+                // Finalized studies leave the working list as they always have;
+                // cleared ones move behind the "Show cleared" toggle.
+                const open = (data.reports || []).filter(r => !r.final_saved_at);
+                const drafts = open.filter(r => !r.cleared_at);
+                const cleared = open.filter(r => r.cleared_at);
+                renderClearedSection(cleared);
+                document.getElementById('clearAllBtn').style.display = drafts.length ? '' : 'none';
                 if (drafts.length === 0) {
-                    listEl.innerHTML = '<div class="draft-list-empty">No unfinalized drafts in this shift.</div>';
+                    listEl.innerHTML = '<div class="draft-list-empty">' +
+                        (cleared.length ? 'Nothing left in this shift’s list.' : 'No unfinalized drafts in this shift.') +
+                        '</div>';
                     return;
                 }
                 // Finalized studies sink to the bottom; within each group the
                 // server's newest-first order is preserved
                 drafts.sort((a, b) => (a.finalized_at ? 1 : 0) - (b.finalized_at ? 1 : 0));
                 listEl.innerHTML = '';
-                drafts.forEach(r => {
-                    const dot = dotFor(r);
-                    const item = document.createElement('div');
-                    item.dataset.id = r.id;       // so review badges can be refreshed in place
-                    item.className = 'draft-item'
-                        + (loadedReport && loadedReport.id === r.id ? ' current' : '')
-                        + (r.finalized_at ? ' finalized' : '');
-                    const t = new Date(r.created_at);
-                    // Lead with the Study ID — that's what identifies the case at read-out
-                    const tail = [r.study_type, r.id].filter(Boolean).join(' · ');
-                    const label = r.study_id_label
-                        ? escapeHtml(r.study_id_label) + ' — ' + escapeHtml(tail)
-                        : escapeHtml(tail);
-                    item.innerHTML =
-                        (dot ? '<span class="note-dot ' + dot + '" title="' +
-                            (dot === 'green' ? 'Final saved' : 'Read out') + '"></span>' : '') +
-                        '<span class="di-main">' + label + '</span>' +
-                        '<span class="di-badge">' + reviewBadgeHtml(r.id) + '</span>' +
-                        '<span class="di-time">' + pad2(t.getHours()) + ':' + pad2(t.getMinutes()) + '</span>' +
-                        '<button type="button" class="di-menu-btn" title="More">…</button>';
-                    item.querySelector('.di-menu-btn').addEventListener('click', (ev) => {
-                        ev.stopPropagation();          // don't open the draft
-                        openRowMenu(ev.currentTarget, r);
-                    });
-                    item.addEventListener('click', () => openDraft(r.id));
-                    listEl.appendChild(item);
-                });
+                drafts.forEach(r => listEl.appendChild(draftRow(r)));
             } catch (e) {
                 listEl.innerHTML = '<div class="draft-list-empty">⚠️ ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        // One row of the drafts list — used by both the working list and the
+        // cleared section, so they behave identically.
+        function draftRow(r) {
+            const dot = dotFor(r);
+            const item = document.createElement('div');
+            item.dataset.id = r.id;       // so review badges can be refreshed in place
+            item.className = 'draft-item'
+                + (loadedReport && loadedReport.id === r.id ? ' current' : '')
+                + (r.finalized_at ? ' finalized' : '')
+                + (r.cleared_at ? ' cleared' : '');
+            const t = new Date(r.created_at);
+            // Lead with the Study ID — that's what identifies the case at read-out
+            const tail = [r.study_type, r.id].filter(Boolean).join(' · ');
+            const label = r.study_id_label
+                ? escapeHtml(r.study_id_label) + ' — ' + escapeHtml(tail)
+                : escapeHtml(tail);
+            item.innerHTML =
+                (dot ? '<span class="note-dot ' + dot + '" title="' +
+                    (dot === 'green' ? 'Final saved' : 'Read out') + '"></span>' : '') +
+                '<span class="di-main">' + label + '</span>' +
+                '<span class="di-badge">' + reviewBadgeHtml(r.id) + '</span>' +
+                '<span class="di-time">' + pad2(t.getHours()) + ':' + pad2(t.getMinutes()) + '</span>' +
+                '<button type="button" class="di-menu-btn" title="More">…</button>';
+            item.querySelector('.di-menu-btn').addEventListener('click', (ev) => {
+                ev.stopPropagation();          // don't open the draft
+                openRowMenu(ev.currentTarget, r);
+            });
+            item.addEventListener('click', () => openDraft(r.id));
+            return item;
+        }
+
+        // ---- Cleared studies: hidden from the working list, one click away ----
+        let showCleared = false;
+
+        function renderClearedSection(cleared) {
+            const toggle = document.getElementById('showClearedBtn');
+            const listEl = document.getElementById('clearedList');
+            if (!cleared.length) {
+                toggle.style.display = 'none';
+                listEl.innerHTML = '';
+                return;
+            }
+            toggle.style.display = '';
+            toggle.textContent = (showCleared ? 'Hide' : 'Show') + ' cleared (' + cleared.length + ')';
+            listEl.innerHTML = '';
+            if (!showCleared) return;
+            cleared.forEach(r => listEl.appendChild(draftRow(r)));
+        }
+        document.getElementById('showClearedBtn').addEventListener('click', () => {
+            showCleared = !showCleared;
+            loadDraftList();
+        });
+
+        // A cleared study is one click from coming back — the strip covers the
+        // misclick, the "Show cleared" list covers everything after that.
+        let undoTimer = null;
+        function showClearedUndo(text, onUndo) {
+            const strip = document.getElementById('clearedUndo');
+            document.getElementById('clearedUndoText').textContent = text;
+            strip.style.display = '';
+            clearTimeout(undoTimer);
+            undoTimer = setTimeout(() => { strip.style.display = 'none'; }, 9000);
+            const btn = document.getElementById('clearedUndoBtn');
+            btn.onclick = async () => {
+                strip.style.display = 'none';
+                clearTimeout(undoTimer);
+                await onUndo();
+            };
+        }
+
+        async function setReportCleared(id, cleared) {
+            try {
+                await api('/api/reports/' + encodeURIComponent(id) + '/cleared',
+                    { method: 'PUT', body: { cleared } });
+                await loadDraftList();
+                if (cleared) {
+                    showClearedUndo('Cleared ' + id, () => setReportCleared(id, false));
+                }
+            } catch (e) {
+                showToast('Could not update ' + id + ': ' + e.message, 4000);
+            }
+        }
+
+        document.getElementById('clearAllBtn').addEventListener('click', async () => {
+            const shiftId = draftShiftSelect.value;
+            if (!shiftId) return;
+            const n = document.querySelectorAll('#draftList .draft-item').length;
+            if (!n) return;
+            if (!confirm('Clear ' + n + ' stud' + (n === 1 ? 'y' : 'ies') + ' from this shift’s list?\n\n' +
+                         'They stay on the Final and Review pages — this only hides them here, and ' +
+                         '“Show cleared” brings them back.')) return;
+            try {
+                const data = await api('/api/reports/bulk-clear', { method: 'POST', body: { shift_id: shiftId } });
+                await loadDraftList();
+                const ids = data.ids || [];
+                showClearedUndo('Cleared ' + data.cleared + ' stud' + (data.cleared === 1 ? 'y' : 'ies'), async () => {
+                    for (const id of ids) {
+                        await api('/api/reports/' + encodeURIComponent(id) + '/cleared',
+                            { method: 'PUT', body: { cleared: false } }).catch(() => {});
+                    }
+                    loadDraftList();
+                });
+            } catch (e) {
+                showToast('Clear all failed: ' + e.message, 4000);
+            }
+        });
+
+        // Permanent, and said so plainly. Finalized studies are refused by the
+        // server (RPR/learning data) — the message points at Clear instead.
+        async function deleteReport(report) {
+            if (report.final_saved_at) {
+                alert('Finalized reports can’t be deleted — clear it from the list instead.');
+                return;
+            }
+            const name = [report.study_id_label, report.study_type, report.id].filter(Boolean).join(' · ');
+            if (!confirm('Delete ' + name + ' permanently?\n\n' +
+                         'This removes the report and everything attached to it: its saved revisions, ' +
+                         'review events and suggested edits, extracted sections, and read-out notes.\n\n' +
+                         'This cannot be undone.')) return;
+            try {
+                await api('/api/reports/' + encodeURIComponent(report.id), { method: 'DELETE' });
+                reviewJobs.delete(report.id);
+                serverPending.delete(report.id);
+                if (loadedReport && loadedReport.id === report.id) resetComposer();
+                else loadDraftList();
+                finalDataStale = true;
+                showToast('Deleted ' + report.id);
+            } catch (e) {
+                showToast(e.message, 5000);
             }
         }
         draftShiftSelect.addEventListener('change', loadDraftList);
@@ -3219,7 +3376,7 @@
         }
 
         function refreshReviewBadges() {
-            document.querySelectorAll('#draftList .draft-item').forEach(el => {
+            document.querySelectorAll('#draftList .draft-item, #clearedList .draft-item').forEach(el => {
                 const slot = el.querySelector('.di-badge');
                 if (slot) slot.innerHTML = reviewBadgeHtml(el.dataset.id);
             });

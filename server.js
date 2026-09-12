@@ -2895,7 +2895,7 @@ app.get('/api/reports', async (req, res) => {
     // and cannot appear here.
     const { shift_id, grade, study_type, q } = req.query;
     const terms = parseSearchTerms((q || '').trim());
-    const LIST_COLUMNS = 'id, shift_id, study_type, study_id_label, subspecialty, report_type, created_at, final_saved_at, rpr_grade, rpr_note, readout_notes, notes_integrated_at, read_out_at, finalized_at';
+    const LIST_COLUMNS = 'id, shift_id, study_type, study_id_label, subspecialty, report_type, created_at, final_saved_at, rpr_grade, rpr_note, readout_notes, notes_integrated_at, read_out_at, finalized_at, cleared_at';
     // Searching needs the text columns to build snippets; they are stripped
     // from the response below rather than shipped to the browser
     const columns = terms.length ? LIST_COLUMNS + ', raw_text, draft_text, final_text' : LIST_COLUMNS;
@@ -2988,7 +2988,10 @@ app.put('/api/reports/:id/final', async (req, res) => {
     const now = new Date().toISOString();
 
     const report = await db.tx(async client => {
+      // An attending final retires the study from the Draft working list, the
+      // same state the explicit "Clear from list" sets — so both paths agree.
       const sets = [`final_text = $2`, `final_saved_at = $3`, `study_id_label = null`,
+                    `cleared_at = coalesce(cleared_at, $3)`,
                     `scrubbed_at = ${s.modelOk ? '$3' : (existing.scrubbed_at ? 'scrubbed_at' : 'null')}`];
       const params = [req.params.id, s.texts.final_text, now];
       if (!existing.scrubbed_at) {
@@ -3269,6 +3272,69 @@ app.put('/api/reports/:id/notes', async (req, res) => {
 });
 
 // Current draft vs. the one saved immediately before it
+// ---- Draft-list visibility (clear) and permanent deletion ----
+
+// Clear hides a study from the Draft working list and nothing more: the row,
+// its history, telemetry, and its presence on Final/Review are untouched, and
+// it is reversible (cleared: false restores it).
+app.put('/api/reports/:id/cleared', async (req, res) => {
+  if (!requireDb(res)) return;
+  try {
+    const cleared = req.body && req.body.cleared !== false;
+    const report = await db.one(
+      `update reports set cleared_at = ${cleared ? 'now()' : 'null'} where id = $1 returning *`,
+      [req.params.id]);
+    if (!report) return res.status(404).json({ error: 'Report not found' });
+    res.json({ report });
+  } catch (error) {
+    console.error('Clear report error:', error.message);
+    res.status(500).json({ error: 'Failed to update report', details: error.message });
+  }
+});
+
+// Clear everything the Draft list is currently showing for a shift — the same
+// set the UI lists: not yet finalized, not already cleared.
+app.post('/api/reports/bulk-clear', async (req, res) => {
+  if (!requireDb(res)) return;
+  try {
+    const shiftId = req.body && req.body.shift_id;
+    if (!shiftId) return res.status(400).json({ error: 'shift_id is required' });
+    const rows = await db.many(
+      `update reports set cleared_at = now()
+        where shift_id = $1 and cleared_at is null and final_saved_at is null
+        returning id`, [shiftId]);
+    res.json({ cleared: rows.length, ids: rows.map(r => r.id) });
+  } catch (error) {
+    console.error('Bulk clear error:', error.message);
+    res.status(500).json({ error: 'Failed to clear reports', details: error.message });
+  }
+});
+
+// Permanent deletion, for mistakes and test rows. report_sections,
+// report_revisions, and review_events cascade off the report's FK. api_calls
+// rows are deliberately kept: they are real spend, carry no report text, and
+// have no FK to cascade through. A finalized report is RPR/learning data and
+// is refused here — removing one is a deliberate DB operation, not a click.
+app.delete('/api/reports/:id', async (req, res) => {
+  if (!requireDb(res)) return;
+  try {
+    const existing = await db.one(`select id, final_text from reports where id = $1`, [req.params.id]);
+    if (!existing) return res.status(404).json({ error: 'Report not found' });
+    if (existing.final_text) {
+      return res.status(409).json({
+        error: 'Finalized reports can’t be deleted — clear it from the list instead.'
+      });
+    }
+    await db.query(`delete from reports where id = $1`, [req.params.id]);
+    // Id only — never report text (there is no access_log table yet)
+    console.log(`🗑️  Report deleted: ${req.params.id}`);
+    res.json({ ok: true, id: req.params.id });
+  } catch (error) {
+    console.error('Delete report error:', error.message);
+    res.status(500).json({ error: 'Failed to delete report', details: error.message });
+  }
+});
+
 // Which studies have a review waiting, for the drafts-list badges. Kept off
 // the /api/reports/:id path so it can't be read as a report id. Counts are
 // deduped the same way the per-report restore is.
@@ -4203,6 +4269,19 @@ async function backfillActiveShift() {
   }
 }
 
+// Columns added to reports after the original schema. Mirrored in
+// supabase.sql; idempotent, so running either is a no-op for the other.
+async function ensureReportColumns() {
+  if (!db.configured) return;
+  try {
+    // cleared_at: hidden from the Draft working list. Purely a list-visibility
+    // flag — the report stays whole for Final, Review, exports, and telemetry.
+    await db.query(`alter table reports add column if not exists cleared_at timestamptz`);
+  } catch (e) {
+    console.error('Report column ensure failed:', e.message);
+  }
+}
+
 // Small key/value store for runtime app settings (credential overrides from
 // the Profile page). Mirrored in supabase.sql like the telemetry tables.
 async function ensureAppSettingsSchema() {
@@ -4224,6 +4303,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`✨ Models: ${MODEL_REPORT} (reports), ${MODEL_REVIEW} (review, de-identified pipeline) — full routing table above`);
   console.log(`🗄️  Database: ${db.configured ? db.describe() : 'NOT CONFIGURED'}`);
   ensureTelemetrySchema();
+  ensureReportColumns();
   ensureAppSettingsSchema().then(loadAuthOverrides);
   backfillActiveShift();
 });

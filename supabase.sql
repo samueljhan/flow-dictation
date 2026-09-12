@@ -324,3 +324,9 @@ alter table app_settings enable row level security;
 -- token cost and search cost can be reported separately. Default 0 backfills
 -- every pre-existing row.
 alter table api_calls add column if not exists search_cost numeric not null default 0;
+
+-- Draft-list visibility (2026-09): cleared_at hides a study from the Draft
+-- working list without touching the record — it stays on Final, Review, in
+-- exports and telemetry, and clearing is reversible (set back to null).
+-- Saving an attending final stamps it too, so both paths agree.
+alter table reports add column if not exists cleared_at timestamptz;

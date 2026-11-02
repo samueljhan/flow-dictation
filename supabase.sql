@@ -164,6 +164,41 @@ create table if not exists assist_messages (
 
 alter table assist_messages enable row level security;
 
+-- Chats (2026-11): every Assist exchange belongs to a chat; the old single
+-- stream becomes the "Earlier conversations" chat. Mirrored by
+-- ensureChatSchema() in server.js (idempotent both ways). scrubbed_at follows
+-- the report posture: set when the destructive scrub's model pass ran over
+-- every message; cleared again whenever a new message lands.
+create table if not exists assist_chats (
+  id uuid primary key default gen_random_uuid(),
+  title text,
+  pinned boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),   -- bumped on every message
+  last_action_type text,
+  scrubbed_at timestamptz
+);
+create index if not exists assist_chats_order_idx on assist_chats (pinned desc, updated_at desc);
+alter table assist_chats enable row level security;
+alter table assist_messages add column if not exists chat_id uuid references assist_chats(id) on delete cascade;
+create index if not exists assist_messages_chat_idx on assist_messages (chat_id, created_at);
+alter table assist_feedback add column if not exists chat_id uuid references assist_chats(id) on delete set null;
+-- Migration: attach every existing message to one chat, then require chat_id
+do $$
+declare earlier uuid;
+begin
+  if exists (select 1 from assist_messages where chat_id is null) then
+    select id into earlier from assist_chats where title = 'Earlier conversations' limit 1;
+    if earlier is null then
+      insert into assist_chats (title, created_at, updated_at)
+        select 'Earlier conversations', min(created_at), max(created_at) from assist_messages where chat_id is null
+        returning id into earlier;
+    end if;
+    update assist_messages set chat_id = earlier where chat_id is null;
+  end if;
+end $$;
+alter table assist_messages alter column chat_id set not null;
+
 -- ============================================================
 -- Knowledge layer (added later — run this section on its own if
 -- the tables above already exist in your database)

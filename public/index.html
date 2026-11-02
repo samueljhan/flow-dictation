@@ -222,6 +222,69 @@
         .ghost.danger:hover { background: #5a3535; }
 
         /* ---------- Assist: chat ---------- */
+        /* ---------- Assist: chat sidebar ---------- */
+        .assist-layout { display: flex; flex: 1; min-height: 0; position: relative; }
+        .assist-main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+        .chat-sidebar {
+            width: 260px; flex: 0 0 260px; display: flex; flex-direction: column;
+            background: #1f1f1f; border-right: 1px solid #333333; min-height: 0;
+        }
+        .assist-layout.collapsed .chat-sidebar { display: none; }
+        .sidebar-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 8px; }
+        .new-chat {
+            flex: 1; background: #3a3a3a; border: 1px solid #4a4a4a; color: #e0e0e0; font-size: 13px;
+            padding: 8px 12px; border-radius: 10px; cursor: pointer; text-align: left;
+        }
+        .new-chat:hover { background: #4a4a4a; }
+        .sidebar-toggle {
+            background: transparent; border: 1px solid transparent; color: #909090; font-size: 16px;
+            width: 32px; height: 32px; border-radius: 8px; cursor: pointer; line-height: 1; flex-shrink: 0;
+        }
+        .sidebar-toggle:hover { background: #2f2f2f; color: #e0e0e0; }
+        .chat-search { margin: 0 12px 8px; }
+        .chat-search input { width: 100%; font-size: 13px; padding: 7px 10px; box-sizing: border-box; }
+        .chat-list { flex: 1; overflow-y: auto; padding: 0 8px 12px; }
+        .chat-section { font-size: 11px; font-weight: 700; letter-spacing: 0.6px; color: #707070; padding: 10px 8px 4px; text-transform: uppercase; }
+        .chat-row {
+            display: flex; align-items: center; gap: 6px; padding: 7px 8px; border-radius: 8px; cursor: pointer;
+            color: #c8c8c8; font-size: 13px; position: relative; user-select: none; -webkit-user-select: none;
+        }
+        .chat-row:hover { background: #2a2a2a; }
+        .chat-row.active { background: #343434; color: #ffffff; }
+        .chat-row .cr-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+        .chat-row .cr-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .chat-row .cr-title .pin { color: #e0a832; font-size: 10px; margin-right: 4px; }
+        .chat-row .cr-time { font-size: 11px; color: #707070; }
+        .chat-row .cr-title input { width: 100%; font-size: 13px; padding: 2px 6px; box-sizing: border-box; }
+        .chat-row .cr-menu-btn {
+            background: transparent; border: none; color: #909090; font-size: 16px; line-height: 1;
+            width: 26px; height: 26px; border-radius: 6px; cursor: pointer; flex-shrink: 0; opacity: 0;
+        }
+        .chat-row:hover .cr-menu-btn, .chat-row.active .cr-menu-btn, .chat-row.menu-open .cr-menu-btn { opacity: 1; }
+        @media (hover: none) { .chat-row .cr-menu-btn { opacity: 1; } }
+        .cr-menu-btn:hover { background: #3a3a3a; color: #e0e0e0; }
+        .chat-menu {
+            position: fixed; z-index: 60; background: #2a2a2a; border: 1px solid #454545; border-radius: 10px;
+            min-width: 170px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.45); display: none;
+        }
+        .chat-menu.open { display: block; }
+        .chat-menu button {
+            display: block; width: 100%; text-align: left; background: transparent; border: none; color: #d0d0d0;
+            font-size: 13px; padding: 8px 10px; border-radius: 7px; cursor: pointer;
+        }
+        .chat-menu button:hover { background: #3a3a3a; }
+        .chat-menu button.danger { color: #dc7a7a; }
+        .chat-empty { padding: 20px 10px; font-size: 12px; color: #707070; text-align: center; }
+        /* Top bar: on desktop only the expand chevron when the sidebar is
+           hidden; on mobile always, with the hamburger and the chat title */
+        .assist-topbar {
+            display: none; align-items: center; gap: 8px; padding: 8px 12px; color: #a0a0a0; font-size: 13px;
+            border-bottom: 1px solid #2a2a2a; background: #1a1a1a; flex-shrink: 0;
+        }
+        .assist-topbar .tb-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .assist-layout.collapsed .assist-topbar { display: flex; }
+        .sidebar-backdrop { display: none; }
+
         /* Chat is the one place a max-width helps readability — the page itself
            is still full-width, the column is just centered within it. */
         .chat-container {
@@ -834,6 +897,18 @@
             .tab { padding: 0 10px; }
             .chat-container { padding: 16px 14px; }
             .input-container { padding: 12px 14px 16px; }
+            /* Sidebar becomes a slide-over drawer; the chat stays full-width */
+            .assist-topbar { display: flex; }
+            .assist-layout.collapsed .chat-sidebar { display: flex; }
+            .chat-sidebar {
+                position: fixed; top: 0; bottom: 0; left: 0; width: 280px; max-width: 85vw; z-index: 55;
+                transform: translateX(-100%); transition: transform 0.2s ease-out;
+                padding-top: env(safe-area-inset-top, 0px); box-shadow: 0 0 30px rgba(0,0,0,0.5);
+            }
+            .assist-layout.drawer-open .chat-sidebar { transform: none; }
+            .sidebar-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 54; }
+            .assist-layout.drawer-open .sidebar-backdrop { display: block; }
+            #sidebarCollapse { display: none; }
             .welcome-message { padding: 20px 10px; }
             .example-prompts { grid-template-columns: 1fr; gap: 8px; margin-top: 15px; }
             .example-prompt { height: 60px; padding: 10px; }
@@ -927,6 +1002,27 @@
 
         <!-- ================= PAGE 1: ASSIST ================= -->
         <section id="page-assist" class="page active">
+          <div class="assist-layout" id="assistLayout">
+            <aside class="chat-sidebar" id="chatSidebar" aria-label="Chats">
+                <div class="sidebar-head">
+                    <button type="button" class="new-chat" id="newChatBtn">+ New chat</button>
+                    <button type="button" class="sidebar-toggle" id="sidebarCollapse" title="Hide sidebar" aria-label="Hide sidebar">‹</button>
+                </div>
+                <div class="chat-search"><input id="chatSearch" type="search" autocomplete="off" placeholder="Search chats…"></div>
+                <div class="chat-list" id="chatList"></div>
+            </aside>
+            <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+            <div class="chat-menu" id="chatMenu" role="menu">
+                <button type="button" data-act="rename">Rename</button>
+                <button type="button" data-act="pin">Pin</button>
+                <button type="button" data-act="scrub">Scrub identifiers</button>
+                <button type="button" data-act="delete" class="danger">Delete</button>
+            </div>
+            <div class="assist-main">
+            <div class="assist-topbar">
+                <button type="button" class="sidebar-toggle" id="sidebarOpen" title="Show chats" aria-label="Show chats">☰</button>
+                <span class="tb-title" id="chatTitleBar"></span>
+            </div>
             <div class="chat-container">
               <div class="chat-inner" id="chatContainer">
                 <div class="welcome-message">
@@ -1018,6 +1114,8 @@
                 </div>
               </div>
             </div>
+            </div><!-- /assist-main -->
+          </div><!-- /assist-layout -->
         </section>
 
         <!-- ================= PAGE 2: DRAFT ================= -->
@@ -1799,7 +1897,13 @@
         const sendBtn = document.getElementById('sendBtn');
 
         let pendingAction = null;       // armed quick action
-        let chatHistory = [];           // [{role, content}] sent with each request for follow-up intelligence
+        // Conversations: every exchange posts into activeChat. A chat with
+        // id null is a new, not-yet-persisted chat (it gets its row — and its
+        // auto title — with the first saved exchange). Follow-up history is
+        // read server-side from the active chat, so nothing is sent from here.
+        let chats = [];
+        let activeChat = null;
+        const chatMessages = new Map();   // chat id -> [{role, content, action_type}] (also feeds search)
 
         const ACTION_HINTS = {
             impression: 'Paste the report body — I’ll generate an Impression: the findings that change management, one per line.',
@@ -1911,10 +2015,13 @@
             userInput.focus();
         }
 
-        // Welcome-grid quick options
-        document.querySelectorAll('.example-prompt').forEach(card => {
-            card.addEventListener('click', () => armAction(card.dataset.action));
+        // Welcome-grid quick options (delegated: the welcome block is re-added
+        // for every new chat)
+        chatContainer.addEventListener('click', (e) => {
+            const card = e.target.closest('.example-prompt');
+            if (card && card.dataset.action) armAction(card.dataset.action);
         });
+        const WELCOME_HTML = chatContainer.querySelector('.welcome-message').outerHTML;
 
         // ---- Generate Report panel ----
         // Yes/No toggle headers: Template? (default yes — assumed to be the
@@ -1960,22 +2067,17 @@
             disarmAction();
             const loading = addLoadingMessage('Generating report…');
             try {
+                const chatRef = activeChat;
                 const data = await api('/api/assist', { method: 'POST', body: {
                     action: 'generate', message: notes,
-                    template: template || null, prior: prior || null, history: []
+                    template: template || null, prior: prior || null, chat_id: chatRef.id
                 } });
                 loading.remove();
                 const plainText = data.text;
                 addAssistantResponse({ html: escapeHtml(data.text), plainText, actionType: 'generate', userText: notes,
-                    model: data.model, latencyMs: data.latency_ms, apiCallId: data.api_call_id });
-                chatHistory.push({ role: 'user', content: notes });
-                chatHistory.push({ role: 'assistant', content: plainText });
-                if (chatHistory.length > 24) chatHistory = chatHistory.slice(-24);
-                api('/api/assist/messages', { method: 'POST', body: {
-                    user_text: summary,
-                    assistant_text: plainText,
-                    action_type: 'generate'
-                }}).catch(e => console.error('History save failed:', e));
+                    model: data.model, latencyMs: data.latency_ms, apiCallId: data.api_call_id, chatRef });
+                persistExchange(chatRef, { userText: summary, assistantText: plainText, actionType: 'generate',
+                    title: autoTitle('generate', notes, data) });
                 // Notes and prior are per-study; the template often serves the
                 // next study of the same type, so it survives.
                 document.getElementById('genNotes').value = '';
@@ -2066,7 +2168,7 @@
         // Render an assistant response. plainText is EXACTLY what Copy places on the clipboard.
         // model/latencyMs/apiCallId ride along so a feedback submission carries
         // the telemetry and links to the call's api_calls ledger row.
-        function addAssistantResponse({ html, plainText, actionType, userText, model, latencyMs, apiCallId, copyText }) {
+        function addAssistantResponse({ html, plainText, actionType, userText, model, latencyMs, apiCallId, copyText, chatRef }) {
             const div = document.createElement('div');
             div.className = 'message assistant';
             const content = document.createElement('div');
@@ -2137,7 +2239,11 @@
                         comment,
                         model: model || null,
                         latency_ms: (typeof latencyMs === 'number') ? latencyMs : null,
-                        api_call_id: apiCallId || null
+                        api_call_id: apiCallId || null,
+                        // The chat this answer was posted into (its id lands
+                        // when the first exchange persists), not whichever
+                        // chat is open when the thumb is clicked
+                        chat_id: (chatRef && chatRef.id) || (activeChat && activeChat.id) || null
                     }});
                     finishFeedback('Feedback recorded — thanks.');
                 } catch (e) {
@@ -2196,8 +2302,8 @@
             userInput.value = '';
             userInput.style.height = 'auto';
 
-            const historyToSend = chatHistory.slice(-12);
-            const body = { action: actionType, message, history: historyToSend, references: includeRefs, template };
+            const chatRef = activeChat;
+            const body = { action: actionType, message, references: includeRefs, template, chat_id: chatRef.id };
             // Blank study type → the server detects it from the notes
             if (actionType === 'prelim') body.study_type = prelimStudyType.value.trim() || null;
             // Answers arrive whole. Text appearing a word at a time pulls the eye
@@ -2218,7 +2324,7 @@
                         '<span class="section-label">FINDINGS</span>' + escapeHtml(data.findings) +
                         '\n\n<span class="section-label">IMPRESSION</span>' + escapeHtml(data.impression);
                     addAssistantResponse({ html, plainText, actionType, userText: message,
-                        model: data.model, latencyMs: data.latency_ms, apiCallId: data.api_call_id });
+                        model: data.model, latencyMs: data.latency_ms, apiCallId: data.api_call_id, chatRef });
                 } else if (data.type === 'prelim') {
                     // The report block renders as the answer; omitted
                     // incidentals and confirm prompts sit beneath in a muted
@@ -2232,13 +2338,13 @@
                         html += '<div class="prelim-note">' + notes.map(escapeHtml).join('\n') + '</div>';
                     }
                     addAssistantResponse({ html, plainText, actionType, userText: message, copyText: data.text,
-                        model: data.model, latencyMs: data.latency_ms, apiCallId: data.api_call_id });
+                        model: data.model, latencyMs: data.latency_ms, apiCallId: data.api_call_id, chatRef });
                 } else if (actionType === 'proofread') {
                     plainText = data.text;
                     addAssistantResponse({
                         html: proofreadHtml(message, data.text),
                         plainText, actionType, userText: message,
-                        model: data.model, latencyMs: data.latency_ms, apiCallId: data.api_call_id
+                        model: data.model, latencyMs: data.latency_ms, apiCallId: data.api_call_id, chatRef
                     });
                 } else if (!actionType || actionType === 'radqa' || actionType === 'ddx') {
                     // Free text, Quick Rad Question, and Ddx share this render:
@@ -2268,25 +2374,15 @@
                         html += '\n\n<span style="color:#e0a832; font-size:12px">(Answer was cut off at the length limit — ask a follow-up to continue.)</span>';
                     }
                     addAssistantResponse({ html, plainText, actionType, userText: message,
-                        model: data.model, latencyMs: data.latency_ms, apiCallId: data.api_call_id });
+                        model: data.model, latencyMs: data.latency_ms, apiCallId: data.api_call_id, chatRef });
                 } else {
                     plainText = data.text;
                     addAssistantResponse({ html: escapeHtml(data.text), plainText, actionType, userText: message,
-                        model: data.model, latencyMs: data.latency_ms, apiCallId: data.api_call_id });
+                        model: data.model, latencyMs: data.latency_ms, apiCallId: data.api_call_id, chatRef });
                 }
 
-                chatHistory.push({ role: 'user', content: message });
-                chatHistory.push({ role: 'assistant', content: plainText });
-                if (chatHistory.length > 24) chatHistory = chatHistory.slice(-24);
-
-                // Persist the exchange server-side so history survives across
-                // sessions and devices. Fire-and-forget — a save failure never
-                // blocks the conversation.
-                api('/api/assist/messages', { method: 'POST', body: {
-                    user_text: message,
-                    assistant_text: plainText,
-                    action_type: actionType || 'freeform'
-                }}).catch(e => console.error('History save failed:', e));
+                persistExchange(chatRef, { userText: message, assistantText: plainText,
+                    actionType: actionType || 'freeform', title: autoTitle(actionType, message, data) });
             } catch (e) {
                 loading.querySelector('.message-content').innerHTML =
                     '<span style="color:#dc7a7a">⚠️ ' + escapeHtml(e.message) + '</span>';
@@ -2294,8 +2390,8 @@
             userInput.focus();
         }
 
-        // Restored history renders as plain text with a Copy button — no feedback
-        // bar (that moment has passed) and no proofread bolding, but links still work.
+        // Restored history renders as plain text — no feedback bar (that
+        // moment has passed) and no proofread bolding, but links still work.
         function addStoredAssistantMessage(text) {
             const div = document.createElement('div');
             div.className = 'message assistant';
@@ -2306,27 +2402,327 @@
             chatContainer.appendChild(div);
         }
 
-        // Load persistent history on page open (last 300 messages; older stay in
-        // the database untouched). Follow-up context is seeded from the tail.
-        async function loadChatHistory() {
-            let msgs = [];
-            try {
-                const data = await api('/api/assist/messages?limit=300');
-                msgs = data.messages || [];
-            } catch (e) {
-                console.error('Chat history load failed:', e);
-                return;
+        // ==================== Chats: sidebar + persistence ====================
+
+        const assistLayout = document.getElementById('assistLayout');
+        const chatListEl = document.getElementById('chatList');
+        const chatSearch = document.getElementById('chatSearch');
+        const chatMenu = document.getElementById('chatMenu');
+        const chatTitleBar = document.getElementById('chatTitleBar');
+        const SIDEBAR_KEY = 'assistSidebarCollapsed';
+        let menuChat = null;              // chat the … menu is open for
+
+        // Collapsed state is a per-device preference → localStorage
+        function setSidebarCollapsed(on) {
+            assistLayout.classList.toggle('collapsed', on);
+            try { localStorage.setItem(SIDEBAR_KEY, on ? '1' : '0'); } catch (e) { /* storage blocked */ }
+        }
+        try { if (localStorage.getItem(SIDEBAR_KEY) === '1') assistLayout.classList.add('collapsed'); } catch (e) { /* storage blocked */ }
+        document.getElementById('sidebarCollapse').addEventListener('click', () => setSidebarCollapsed(true));
+        // On mobile the same button opens the drawer; on desktop it re-expands
+        const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
+        document.getElementById('sidebarOpen').addEventListener('click', () => {
+            if (isMobile()) assistLayout.classList.add('drawer-open');
+            else setSidebarCollapsed(false);
+        });
+        const closeDrawer = () => assistLayout.classList.remove('drawer-open');
+        document.getElementById('sidebarBackdrop').addEventListener('click', closeDrawer);
+
+        function relTime(ts) {
+            const d = new Date(ts), now = Date.now();
+            const s = Math.max(0, (now - d.getTime()) / 1000);
+            if (s < 60) return 'just now';
+            if (s < 3600) return Math.floor(s / 60) + 'm ago';
+            if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+            if (s < 7 * 86400) return Math.floor(s / 86400) + 'd ago';
+            return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) +
+                (d.getFullYear() !== new Date().getFullYear() ? ' ' + d.getFullYear() : '');
+        }
+
+        // Auto title for a chat's first exchange: quick action label + study
+        // type (or the opening words) · otherwise the first ~6 words. Set
+        // once, at creation — a rename is never overwritten.
+        function autoTitle(actionType, message, data) {
+            const words = (n, s) => String(s || '').trim().split(/\s+/).filter(Boolean).slice(0, n).join(' ');
+            if (actionType && ACTION_LABELS[actionType]) {
+                const detail = (data && data.study_type) || words(4, message);
+                return ACTION_LABELS[actionType] + (detail ? ' · ' + detail : '');
             }
-            if (!msgs.length) return;
-            clearWelcome();
+            const t = words(6, message);
+            return t.length > 60 ? t.slice(0, 57) + '…' : t;
+        }
+
+        function chatMatches(c, q) {
+            if (!q) return true;
+            if ((c.title || '').toLowerCase().includes(q)) return true;
+            const msgs = chatMessages.get(c.id) || [];
+            return msgs.some(m => (m.content || '').toLowerCase().includes(q));
+        }
+
+        function renderChatList() {
+            const q = chatSearch.value.trim().toLowerCase();
+            const visible = chats.filter(c => chatMatches(c, q));
+            const pinned = visible.filter(c => c.pinned);
+            const recent = visible.filter(c => !c.pinned);
+            const byActivity = (a, b) => new Date(b.updated_at) - new Date(a.updated_at);
+            pinned.sort(byActivity); recent.sort(byActivity);
+            chatListEl.innerHTML = '';
+            const section = (label, list) => {
+                if (!list.length) return;
+                const h = document.createElement('div');
+                h.className = 'chat-section';
+                h.textContent = label;
+                chatListEl.appendChild(h);
+                list.forEach(c => chatListEl.appendChild(chatRow(c)));
+            };
+            // A new, unsaved chat shows at the top of Recent until its first exchange
+            if (activeChat && !activeChat.id && !q) recent.unshift(activeChat);
+            section('Pinned', pinned);
+            section('Recent', recent);
+            if (!visible.length && !(activeChat && !activeChat.id)) {
+                const e = document.createElement('div');
+                e.className = 'chat-empty';
+                e.textContent = q ? 'No chats match.' : 'No chats yet.';
+                chatListEl.appendChild(e);
+            }
+        }
+
+        function chatRow(c) {
+            const row = document.createElement('div');
+            row.className = 'chat-row' + (c === activeChat || (c.id && activeChat && c.id === activeChat.id) ? ' active' : '');
+            row.dataset.id = c.id || '';
+            const main = document.createElement('div');
+            main.className = 'cr-main';
+            const title = document.createElement('div');
+            title.className = 'cr-title';
+            title.innerHTML = (c.pinned ? '<span class="pin">★</span>' : '') + escapeHtml(c.title || 'New chat');
+            const time = document.createElement('div');
+            time.className = 'cr-time';
+            time.textContent = c.id ? relTime(c.updated_at) : 'unsaved';
+            main.appendChild(title); main.appendChild(time);
+            row.appendChild(main);
+            if (c.id) {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'cr-menu-btn';
+                btn.title = 'Chat options';
+                btn.textContent = '…';
+                btn.addEventListener('click', (e) => { e.stopPropagation(); openChatMenu(c, btn); });
+                row.appendChild(btn);
+                // Long-press opens the same menu on touch
+                let pressTimer = null;
+                row.addEventListener('touchstart', () => {
+                    pressTimer = setTimeout(() => { pressTimer = null; openChatMenu(c, btn); }, 500);
+                }, { passive: true });
+                const cancelPress = () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; } };
+                row.addEventListener('touchend', cancelPress);
+                row.addEventListener('touchmove', cancelPress, { passive: true });
+            }
+            row.addEventListener('click', () => { if (!row.querySelector('input')) openChat(c); });
+            return row;
+        }
+
+        function openChatMenu(c, anchor) {
+            menuChat = c;
+            chatMenu.querySelector('[data-act="pin"]').textContent = c.pinned ? 'Unpin' : 'Pin';
+            chatMenu.querySelector('[data-act="scrub"]').textContent = c.scrubbed_at ? 'Scrub identifiers (done)' : 'Scrub identifiers';
+            chatMenu.classList.add('open');
+            document.querySelectorAll('.chat-row.menu-open').forEach(r => r.classList.remove('menu-open'));
+            anchor.closest('.chat-row').classList.add('menu-open');
+            const r = anchor.getBoundingClientRect();
+            const mw = chatMenu.offsetWidth || 170, mh = chatMenu.offsetHeight || 160;
+            chatMenu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - mw - 8)) + 'px';
+            chatMenu.style.top = (r.bottom + mh + 8 > window.innerHeight ? r.top - mh - 4 : r.bottom + 4) + 'px';
+        }
+        function closeChatMenu() {
+            chatMenu.classList.remove('open');
+            document.querySelectorAll('.chat-row.menu-open').forEach(r => r.classList.remove('menu-open'));
+            menuChat = null;
+        }
+        document.addEventListener('click', (e) => { if (!chatMenu.contains(e.target)) closeChatMenu(); });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeChatMenu(); closeDrawer(); } });
+
+        chatMenu.addEventListener('click', async (e) => {
+            const btn = e.target.closest('button[data-act]');
+            if (!btn || !menuChat) return;
+            const c = menuChat;
+            closeChatMenu();
+            try {
+                if (btn.dataset.act === 'rename') return startRename(c);
+                if (btn.dataset.act === 'pin') {
+                    const data = await api('/api/chats/' + c.id, { method: 'PATCH', body: { pinned: !c.pinned } });
+                    upsertChat(data.chat);
+                } else if (btn.dataset.act === 'scrub') {
+                    if (!confirm('Scrub identifiers in “' + (c.title || 'this chat') + '”?\n\n' +
+                        'Names, dates, MRNs and other identifiers in every message are replaced permanently. This cannot be undone.')) return;
+                    showToast('Scrubbing…', 4000);
+                    const data = await api('/api/chats/' + c.id + '/scrub', { method: 'POST' });
+                    upsertChat(data.chat);
+                    chatMessages.delete(c.id);
+                    if (activeChat && activeChat.id === c.id) await openChat(data.chat, { force: true });
+                    const n = Object.values(data.counts || {}).reduce((a, b) => a + b, 0) + (data.model_applied || 0);
+                    showToast(data.model_ok
+                        ? 'Scrubbed ' + data.messages + ' message' + (data.messages === 1 ? '' : 's') + ' — ' + n + ' identifier' + (n === 1 ? '' : 's') + ' replaced'
+                        : 'Pattern scrub applied; the model pass failed — try again later', 4000);
+                } else if (btn.dataset.act === 'delete') {
+                    if (!confirm('Delete “' + (c.title || 'this chat') + '” and all its messages?\n\nThis cannot be undone.')) return;
+                    await api('/api/chats/' + c.id, { method: 'DELETE' });
+                    chats = chats.filter(x => x.id !== c.id);
+                    chatMessages.delete(c.id);
+                    if (activeChat && activeChat.id === c.id) {
+                        const next = chats.slice().sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))[0];
+                        if (next) await openChat(next); else newChat();
+                    } else {
+                        renderChatList();
+                    }
+                }
+            } catch (err) {
+                showToast(err.message, 4000);
+            }
+        });
+
+        function startRename(c) {
+            const row = chatListEl.querySelector('.chat-row[data-id="' + c.id + '"]');
+            if (!row) return;
+            const titleEl = row.querySelector('.cr-title');
+            const input = document.createElement('input');
+            input.value = c.title || '';
+            input.maxLength = 120;
+            titleEl.innerHTML = '';
+            titleEl.appendChild(input);
+            input.focus(); input.select();
+            let done = false;
+            const finish = async (save) => {
+                if (done) return;
+                done = true;
+                const t = input.value.trim();
+                if (save && t && t !== c.title) {
+                    try {
+                        const data = await api('/api/chats/' + c.id, { method: 'PATCH', body: { title: t } });
+                        upsertChat(data.chat);
+                        return;
+                    } catch (err) { showToast(err.message, 4000); }
+                }
+                renderChatList();
+            };
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+                else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+                e.stopPropagation();
+            });
+            input.addEventListener('blur', () => finish(true));
+            input.addEventListener('click', (e) => e.stopPropagation());
+        }
+
+        // Replace or insert a chat row from a server response; keeps the
+        // active chat object identity (so in-flight answers still point at it)
+        function upsertChat(fresh) {
+            if (!fresh) return;
+            const i = chats.findIndex(x => x.id === fresh.id);
+            if (i === -1) chats.unshift(fresh); else Object.assign(chats[i], fresh);
+            if (activeChat && activeChat.id === fresh.id && activeChat !== chats[i === -1 ? 0 : i]) Object.assign(activeChat, fresh);
+            if (activeChat && activeChat.id === fresh.id) chatTitleBar.textContent = activeChat.title || '';
+            renderChatList();
+        }
+
+        function clearTranscript() {
+            [...chatContainer.children].forEach(el => { if (el.id !== 'genCard') el.remove(); });
+        }
+
+        function showWelcome() {
+            if (!chatContainer.querySelector('.welcome-message')) {
+                chatContainer.insertAdjacentHTML('afterbegin', WELCOME_HTML);
+            }
+        }
+
+        // Open a chat: its messages render (cached after the first load);
+        // a new chat shows the welcome grid.
+        async function openChat(c, { force } = {}) {
+            if (!force && activeChat === c && chatContainer.querySelector('.message:not(#genCard)')) { closeDrawer(); return; }
+            activeChat = c;
+            chatTitleBar.textContent = c.title || 'New chat';
+            closeDrawer();
+            clearTranscript();
+            if (pendingAction === 'generate') disarmAction();
+            if (!c.id) { showWelcome(); renderChatList(); userInput.focus(); return; }
+            let msgs = chatMessages.get(c.id);
+            if (!msgs) {
+                const loading = addLoadingMessage('Loading chat…');
+                try {
+                    const data = await api('/api/assist/messages?chat_id=' + encodeURIComponent(c.id) + '&limit=300');
+                    msgs = data.messages || [];
+                    chatMessages.set(c.id, msgs);
+                } catch (e) {
+                    loading.querySelector('.message-content').innerHTML =
+                        '<span style="color:#dc7a7a">⚠️ ' + escapeHtml(e.message) + '</span>';
+                    renderChatList();
+                    return;
+                }
+                if (activeChat !== c) return;   // switched again while loading
+                loading.remove();
+            }
+            if (!msgs.length) showWelcome();
             for (const m of msgs) {
                 if (m.role === 'user') addUserMessage(m.content);
                 else addStoredAssistantMessage(m.content);
             }
-            chatHistory = msgs.slice(-24).map(m => ({ role: m.role, content: m.content }));
+            renderChatList();
             scrollChat();
         }
-        loadChatHistory();
+
+        function newChat() {
+            // Reuse an existing unsaved chat rather than stacking blank ones
+            const existing = (activeChat && !activeChat.id) ? activeChat : null;
+            openChat(existing || { id: null, title: 'New chat', pinned: false, updated_at: new Date().toISOString() }, { force: true });
+            userInput.focus();
+        }
+        document.getElementById('newChatBtn').addEventListener('click', newChat);
+        chatSearch.addEventListener('input', renderChatList);
+
+        // Save an exchange into its chat. For an unsaved chat the server creates
+        // the row in the same transaction and returns it (id, auto title), and
+        // the same activeChat object picks the id up — nothing in flight is
+        // lost. Fire-and-forget: a save failure never blocks the conversation.
+        function persistExchange(chatRef, { userText, assistantText, actionType, title }) {
+            const cached = chatRef.id ? chatMessages.get(chatRef.id) : null;
+            if (cached) cached.push({ role: 'user', content: userText, action_type: actionType },
+                                    { role: 'assistant', content: assistantText, action_type: actionType });
+            api('/api/assist/messages', { method: 'POST', body: {
+                chat_id: chatRef.id,
+                title: chatRef.id ? undefined : title,
+                user_text: userText,
+                assistant_text: assistantText,
+                action_type: actionType
+            }}).then(data => {
+                if (!data.chat) return;
+                if (!chatRef.id) {
+                    Object.assign(chatRef, data.chat);
+                    if (!chats.includes(chatRef)) chats.unshift(chatRef);
+                    chatMessages.set(chatRef.id, [
+                        { role: 'user', content: userText, action_type: actionType },
+                        { role: 'assistant', content: assistantText, action_type: actionType }]);
+                } else {
+                    Object.assign(chatRef, data.chat);
+                    if (!chats.includes(chatRef)) chats.unshift(chatRef);
+                }
+                if (activeChat === chatRef) chatTitleBar.textContent = chatRef.title || '';
+                renderChatList();
+            }).catch(e => { console.error('History save failed:', e); showToast('Chat could not be saved: ' + e.message, 4000); });
+        }
+
+        // Opening Assist: the most recently active chat, or a fresh one.
+        async function initChats() {
+            try {
+                const data = await api('/api/chats');
+                chats = data.chats || [];
+            } catch (e) {
+                console.error('Chats load failed:', e);
+                chats = [];
+            }
+            const latest = chats.slice().sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))[0];
+            if (latest) await openChat(latest, { force: true }); else newChat();
+        }
+        initChats();
 
         sendBtn.addEventListener('click', sendMessage);
         userInput.addEventListener('keypress', (e) => {

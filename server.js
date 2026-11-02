@@ -218,7 +218,9 @@ function setSessionCookie(res, subject) {
   });
 }
 
-const PUBLIC_PATHS = new Set(['/login', '/auth/login/google', '/auth/password', '/auth/logout', '/api/health']);
+// /api/chats/scrub-inactive is the Cloud Scheduler target: it does its own
+// auth (session, scheduler OIDC token, or job secret) inside the handler.
+const PUBLIC_PATHS = new Set(['/login', '/auth/login/google', '/auth/password', '/auth/logout', '/api/health', '/api/chats/scrub-inactive']);
 
 app.use((req, res, next) => {
   if (PUBLIC_PATHS.has(req.path) || req.path === '/auth/google/callback') return next();
@@ -1891,7 +1893,15 @@ function recordAssistAction(action) {
 app.post('/api/assist', async (req, res) => {
   try {
     if (!assistValidate(req, res)) return;
-    const { action, message, history, template, prior } = req.body;
+    const { action, message, template, prior } = req.body;
+    // Follow-up context comes from the ACTIVE CHAT's stored messages, never
+    // from the request: a client-supplied history is ignored, so no other
+    // chat's text can enter this payload (a de-id property as much as a UX
+    // one — the redaction map stays per-request). chat_id null = a chat the
+    // client has not persisted yet (no messages, so no history).
+    const chatId = parseChatId(req.body.chat_id);
+    if (chatId === false) return res.status(400).json({ error: 'chat_id must be a uuid or null' });
+    const history = chatId ? await loadChatHistory(chatId) : [];
     recordAssistAction(action);
     const instruction = action && ASSIST_ACTIONS[action] ? ASSIST_ACTIONS[action] : null;
     const messages = assistMessages({ action, instruction, message, template, prior, history });
@@ -2032,6 +2042,7 @@ app.post('/api/assist/feedback', async (req, res) => {
   if (!requireDb(res)) return;
   try {
     const { action_type, user_input, model_response, rating, comment, model, latency_ms, api_call_id } = req.body;
+    const chatId = parseChatId(req.body.chat_id) || null;   // bad/unknown → unlinked, never a failure
     if (rating !== 'up' && rating !== 'down') {
       return res.status(400).json({ error: 'rating must be "up" or "down"' });
     }
@@ -2040,12 +2051,12 @@ app.post('/api/assist/feedback', async (req, res) => {
     const apiCallId = typeof api_call_id === 'string' && /^[0-9a-f-]{36}$/i.test(api_call_id)
       ? api_call_id : null;
     await db.query(
-      `insert into assist_feedback (action_type, user_input, model_response, rating, comment, model, latency_ms, api_call_id)
-       values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      `insert into assist_feedback (action_type, user_input, model_response, rating, comment, model, latency_ms, api_call_id, chat_id)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [action_type || 'freeform', user_input || '', model_response || '', rating, comment || null,
        typeof model === 'string' && model ? model.slice(0, 120) : null,
        Number.isFinite(latency_ms) ? Math.round(latency_ms) : null,
-       apiCallId]);
+       apiCallId, chatId]);
     res.json({ success: true });
   } catch (error) {
     console.error('Feedback error:', error.message);
@@ -2053,18 +2064,239 @@ app.post('/api/assist/feedback', async (req, res) => {
   }
 });
 
-// ============ Assist chat history (persistent, cross-device) ============
+// ============ Assist chats (persistent, cross-device) ============
+// Every Assist exchange lives in a chat (assist_chats); the old single global
+// stream became the "Earlier conversations" chat at migration. History sent
+// to the model is read per chat (see /api/assist), so chats are context
+// islands. Chat text can carry pasted report content, so chats have the same
+// scrub obligation as reports: a per-chat Scrub action and a daily
+// inactivity scrub (14 days, Cloud Scheduler → /api/chats/scrub-inactive).
+// No endpoint returns chat text in bulk today (GET /api/assist/messages is
+// the one-chat UI read); any future export of chat text must scrub
+// unscrubbed chats in memory the way /api/training/impression-pairs does.
 
-// Last N messages, returned oldest-first for rendering. History lives in
-// Supabase so it follows the login across browsers/computers and is never
-// cleared by the app.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// uuid string → itself · null/undefined/'' → null · anything else → false
+function parseChatId(v) {
+  if (v === null || v === undefined || v === '') return null;
+  return (typeof v === 'string' && UUID_RE.test(v)) ? v.toLowerCase() : false;
+}
+
+// The follow-up context for a model call: this chat's most recent turns,
+// oldest first (budgetHistory trims to its token budget from the newest end).
+const CHAT_HISTORY_ROWS = 24;
+async function loadChatHistory(chatId) {
+  if (!db.configured) return [];
+  const rows = await db.many(
+    `select role, content from assist_messages where chat_id = $1 order by id desc limit $2`,
+    [chatId, CHAT_HISTORY_ROWS]);
+  return rows.reverse();
+}
+
+const CHAT_COLS = `c.id, c.title, c.pinned, c.created_at, c.updated_at, c.last_action_type, c.scrubbed_at,
+  (select count(*)::int from assist_messages m where m.chat_id = c.id) as message_count`;
+const chatById = id => db.one(`select ${CHAT_COLS} from assist_chats c where c.id = $1`, [id]);
+
+const cleanTitle = t => (typeof t === 'string' ? t.replace(/\s+/g, ' ').trim().slice(0, 120) : '');
+
+// Pinned first, then most recently active
+app.get('/api/chats', async (req, res) => {
+  if (!requireDb(res)) return;
+  try {
+    const rows = await db.many(
+      `select ${CHAT_COLS} from assist_chats c order by c.pinned desc, c.updated_at desc limit 500`);
+    res.json({ chats: rows });
+  } catch (error) {
+    console.error('Chats list error:', error.message);
+    res.status(500).json({ error: 'Failed to load chats', details: error.message });
+  }
+});
+
+app.post('/api/chats', async (req, res) => {
+  if (!requireDb(res)) return;
+  try {
+    const title = cleanTitle(req.body && req.body.title) || 'New chat';
+    const row = await db.one(`insert into assist_chats (title) values ($1) returning id`, [title]);
+    res.json({ chat: await chatById(row.id) });
+  } catch (error) {
+    console.error('Chat create error:', error.message);
+    res.status(500).json({ error: 'Failed to create chat', details: error.message });
+  }
+});
+
+// Rename and/or pin. A user-set title is simply the title from then on — the
+// auto-title is only ever written at creation, so nothing can replace it.
+app.patch('/api/chats/:id', async (req, res) => {
+  if (!requireDb(res)) return;
+  const id = parseChatId(req.params.id);
+  if (!id) return res.status(400).json({ error: 'Bad chat id' });
+  try {
+    const sets = [];
+    const params = [id];
+    if (req.body && 'title' in req.body) {
+      const t = cleanTitle(req.body.title);
+      if (!t) return res.status(400).json({ error: 'Title cannot be empty' });
+      params.push(t); sets.push(`title = $${params.length}`);
+    }
+    if (req.body && 'pinned' in req.body) {
+      params.push(!!req.body.pinned); sets.push(`pinned = $${params.length}`);
+    }
+    if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+    const r = await db.query(`update assist_chats set ${sets.join(', ')} where id = $1`, params);
+    if (!r.rowCount) return res.status(404).json({ error: 'Chat not found' });
+    res.json({ chat: await chatById(id) });
+  } catch (error) {
+    console.error('Chat update error:', error.message);
+    res.status(500).json({ error: 'Failed to update chat', details: error.message });
+  }
+});
+
+// Messages cascade (FK); feedback rows keep their text and lose the link
+// (FK on delete set null).
+app.delete('/api/chats/:id', async (req, res) => {
+  if (!requireDb(res)) return;
+  const id = parseChatId(req.params.id);
+  if (!id) return res.status(400).json({ error: 'Bad chat id' });
+  try {
+    const r = await db.query(`delete from assist_chats where id = $1`, [id]);
+    if (!r.rowCount) return res.status(404).json({ error: 'Chat not found' });
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Chat delete error:', error.message);
+    res.status(500).json({ error: 'Failed to delete chat', details: error.message });
+  }
+});
+
+// Destructive scrub of one chat: title + every message, pattern pass plus the
+// model pass in batches (one long chat can't go to the model in one piece).
+// scrubbed_at is stamped only when every model batch ran — otherwise the
+// pattern pass is applied and the chat stays eligible for a retry, exactly
+// as reports behave. Idempotent. Logs counts only.
+const CHAT_SCRUB_BATCH_CHARS = 40000;
+async function scrubChat(chatId) {
+  const chat = await db.one(`select id, title from assist_chats where id = $1`, [chatId]);
+  if (!chat) return null;
+  const rows = await db.many(`select id, content from assist_messages where chat_id = $1 order by id`, [chatId]);
+  const items = [{ key: 'title', text: chat.title || '' }, ...rows.map(r => ({ key: String(r.id), text: r.content }))];
+  const batches = [];
+  let cur = [], size = 0;
+  for (const it of items) {
+    if (cur.length && size + it.text.length > CHAT_SCRUB_BATCH_CHARS) { batches.push(cur); cur = []; size = 0; }
+    cur.push(it); size += it.text.length;
+  }
+  if (cur.length) batches.push(cur);
+  const counts = {};
+  let modelOk = true, modelApplied = 0, changed = 0;
+  for (const batch of batches) {
+    const texts = Object.fromEntries(batch.map(it => [it.key, it.text]));
+    const s = await scrubTexts(texts, null);
+    modelOk = modelOk && s.modelOk;
+    modelApplied += s.modelApplied;
+    for (const [t, n] of Object.entries(s.counts)) counts[t] = (counts[t] || 0) + n;
+    for (const it of batch) {
+      const out = s.texts[it.key];
+      if (typeof out !== 'string' || out === it.text) continue;
+      changed++;
+      if (it.key === 'title') await db.query(`update assist_chats set title = $2 where id = $1`, [chatId, out]);
+      else await db.query(`update assist_messages set content = $2 where id = $1`, [Number(it.key), out]);
+    }
+  }
+  if (modelOk) await db.query(`update assist_chats set scrubbed_at = now() where id = $1`, [chatId]);
+  console.log(`[scrub] chat=${chatId} messages=${rows.length} changed=${changed} pattern=${JSON.stringify(counts)} model_applied=${modelApplied} model_ok=${modelOk}`);
+  return { chat_id: chatId, messages: rows.length, changed, counts, model_applied: modelApplied, model_ok: modelOk };
+}
+
+// Daily job body: every chat idle for `days` and not yet scrubbed. Bounded per
+// run so a backlog drains over a few days rather than one long request.
+const CHAT_SCRUB_IDLE_DAYS = parseInt(process.env.CHAT_SCRUB_IDLE_DAYS, 10) || 14;
+async function scrubInactiveChats(days = CHAT_SCRUB_IDLE_DAYS, limit = 50) {
+  const due = await db.many(
+    `select id from assist_chats
+      where scrubbed_at is null and updated_at < now() - ($1::int * interval '1 day')
+      order by updated_at asc limit $2`, [days, limit]);
+  const results = [];
+  for (const row of due) {
+    try {
+      results.push(await scrubChat(row.id));
+    } catch (e) {
+      console.error(`[scrub] inactive chat ${row.id} failed: ${e.message}`);
+      results.push({ chat_id: row.id, error: e.message });
+    }
+  }
+  const scrubbed = results.filter(r => r && r.model_ok).length;
+  console.log(`[scrub] inactive-chat run: due=${due.length} scrubbed=${scrubbed} idle_days=${days}`);
+  return { due: due.length, scrubbed, idle_days: days, results };
+}
+
+// Who may trigger the scheduled scrub: a signed-in user (manual run), Cloud
+// Scheduler via an OIDC token for SCHEDULER_SERVICE_ACCOUNT, or a shared
+// JOB_SECRET header. The route is outside the session gate, so nothing is
+// trusted until one of these passes.
+const SCHEDULER_SERVICE_ACCOUNT = (process.env.SCHEDULER_SERVICE_ACCOUNT || '').toLowerCase();
+const JOB_SECRET = process.env.JOB_SECRET || '';
+async function schedulerAuthorized(req) {
+  if (readSession(getCookie(req, COOKIE_NAME))) return 'session';
+  const secret = req.get('x-job-secret');
+  if (JOB_SECRET && typeof secret === 'string' && secretMatches(secret, JOB_SECRET)) return 'job-secret';
+  const auth = req.get('authorization') || '';
+  const m = /^Bearer\s+(\S+)$/i.exec(auth);
+  if (m && SCHEDULER_SERVICE_ACCOUNT) {
+    try {
+      // Audience = this endpoint's URL, as the scheduler job is configured;
+      // both the custom domain and the run.app URL are accepted.
+      const audiences = [`https://${req.get('host')}${req.path}`];
+      if (process.env.SCHEDULER_AUDIENCE) audiences.push(process.env.SCHEDULER_AUDIENCE);
+      const ticket = await new OAuth2Client().verifyIdToken({ idToken: m[1], audience: audiences });
+      const p = ticket.getPayload() || {};
+      if (p.email_verified && String(p.email || '').toLowerCase() === SCHEDULER_SERVICE_ACCOUNT) return 'oidc';
+      console.warn('[scrub] scheduler token rejected: wrong service account');
+    } catch (e) {
+      console.warn(`[scrub] scheduler token rejected: ${e.message}`);
+    }
+  }
+  return null;
+}
+
+app.post('/api/chats/scrub-inactive', async (req, res) => {
+  const via = await schedulerAuthorized(req);
+  if (!via) return res.status(401).json({ error: 'Not authorized' });
+  if (!requireDb(res)) return;
+  try {
+    const days = Math.max(1, parseInt(req.query.days, 10) || CHAT_SCRUB_IDLE_DAYS);
+    const out = await scrubInactiveChats(days);
+    res.json({ via, ...out });
+  } catch (error) {
+    console.error('Inactive chat scrub error:', error.message);
+    res.status(500).json({ error: 'Inactive chat scrub failed', details: error.message });
+  }
+});
+
+app.post('/api/chats/:id/scrub', async (req, res) => {
+  if (!requireDb(res)) return;
+  const id = parseChatId(req.params.id);
+  if (!id) return res.status(400).json({ error: 'Bad chat id' });
+  try {
+    const out = await scrubChat(id);
+    if (!out) return res.status(404).json({ error: 'Chat not found' });
+    res.json({ ...out, chat: await chatById(id) });
+  } catch (error) {
+    console.error('Chat scrub error:', error.message);
+    res.status(500).json({ error: 'Chat scrub failed', details: error.message });
+  }
+});
+
+// One chat's messages, oldest-first for rendering. Capped at the newest N;
+// older rows stay in the database untouched.
 app.get('/api/assist/messages', async (req, res) => {
   if (!requireDb(res)) return;
+  const chatId = parseChatId(req.query.chat_id);
+  if (!chatId) return res.status(400).json({ error: 'chat_id is required' });
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 300, 1000);
     const rows = await db.many(
-      `select id, role, content, action_type, created_at from assist_messages order by id desc limit $1`,
-      [limit]);
+      `select id, role, content, action_type, created_at from assist_messages
+        where chat_id = $1 order by id desc limit $2`,
+      [chatId, limit]);
     res.json({ messages: rows.reverse() });
   } catch (error) {
     console.error('Assist history error:', error.message);
@@ -2072,8 +2304,12 @@ app.get('/api/assist/messages', async (req, res) => {
   }
 });
 
-// Save one user+assistant exchange. Array insert preserves order, so the
-// identity ids keep the pair in sequence.
+// Save one user+assistant exchange into a chat. chat_id null means "this is
+// the first exchange of a chat the client has not persisted yet": the chat
+// row is created in the same transaction (with the client's auto-title), so
+// an empty chat never exists in the database. The chat's updated_at and
+// last_action_type move with every exchange, and a previously scrubbed chat
+// becomes unscrubbed again — the new text has not been through the pass.
 app.post('/api/assist/messages', async (req, res) => {
   if (!requireDb(res)) return;
   try {
@@ -2081,14 +2317,32 @@ app.post('/api/assist/messages', async (req, res) => {
     if (!user_text || !assistant_text) {
       return res.status(400).json({ error: 'user_text and assistant_text are required' });
     }
+    let chatId = parseChatId(req.body.chat_id);
+    if (chatId === false) return res.status(400).json({ error: 'chat_id must be a uuid or null' });
     const at = action_type || 'freeform';
-    // One statement, two rows, in order — the identity ids keep the pair in sequence
-    await db.query(
-      `insert into assist_messages (role, content, action_type)
-       values ('user', $1, $3), ('assistant', $2, $3)`,
-      [user_text, assistant_text, at]);
-    res.json({ success: true });
+    const title = cleanTitle(req.body.title) || cleanTitle(String(user_text).split(/\s+/).slice(0, 6).join(' ')) || 'New chat';
+    chatId = await db.tx(async client => {
+      let id = chatId;
+      if (id) {
+        const r = await client.query(
+          `update assist_chats set updated_at = now(), last_action_type = $2, scrubbed_at = null where id = $1`,
+          [id, at]);
+        if (!r.rowCount) { const e = new Error('Chat not found'); e.status = 404; throw e; }
+      } else {
+        const r = await client.query(
+          `insert into assist_chats (title, last_action_type) values ($1, $2) returning id`, [title, at]);
+        id = r.rows[0].id;
+      }
+      // One statement, two rows, in order — the identity ids keep the pair in sequence
+      await client.query(
+        `insert into assist_messages (chat_id, role, content, action_type)
+         values ($1, 'user', $2, $4), ($1, 'assistant', $3, $4)`,
+        [id, user_text, assistant_text, at]);
+      return id;
+    });
+    res.json({ success: true, chat: await chatById(chatId) });
   } catch (error) {
+    if (error.status === 404) return res.status(404).json({ error: 'Chat not found' });
     console.error('Assist history save error:', error.message);
     res.status(500).json({ error: 'Failed to save chat history', details: error.message });
   }
@@ -4337,6 +4591,49 @@ async function ensureTelemetrySchema() {
   }
 }
 
+// Chats schema + one-time migration, idempotent. Mirrored in supabase.sql.
+// Every pre-existing assist_messages row (the old single global stream) is
+// attached to one chat, "Earlier conversations", before chat_id becomes NOT
+// NULL — nothing is lost, and the count is logged so it can be checked.
+async function ensureChatSchema() {
+  if (!db.configured) return;
+  try {
+    await db.query(`
+      create table if not exists assist_chats (
+        id uuid primary key default gen_random_uuid(),
+        title text,
+        pinned boolean not null default false,
+        created_at timestamptz not null default now(),
+        updated_at timestamptz not null default now(),
+        last_action_type text,
+        scrubbed_at timestamptz
+      )`);
+    await db.query(`create index if not exists assist_chats_order_idx on assist_chats (pinned desc, updated_at desc)`);
+    await db.query(`alter table assist_messages add column if not exists chat_id uuid references assist_chats(id) on delete cascade`);
+    await db.query(`create index if not exists assist_messages_chat_idx on assist_messages (chat_id, created_at)`);
+    await db.query(`alter table assist_feedback add column if not exists chat_id uuid references assist_chats(id) on delete set null`);
+    const orphans = await db.one(`select count(*)::int as n, min(created_at) as first, max(created_at) as last
+                                    from assist_messages where chat_id is null`);
+    if (orphans && orphans.n > 0) {
+      const attached = await db.tx(async client => {
+        let chat = (await client.query(`select id from assist_chats where title = 'Earlier conversations' limit 1`)).rows[0];
+        if (!chat) {
+          chat = (await client.query(
+            `insert into assist_chats (title, created_at, updated_at) values ('Earlier conversations', $1, $2) returning id`,
+            [orphans.first, orphans.last])).rows[0];
+        }
+        const r = await client.query(`update assist_messages set chat_id = $1 where chat_id is null`, [chat.id]);
+        return r.rowCount;
+      });
+      console.log(`✅ Chats migration: attached ${attached} existing messages to "Earlier conversations"`);
+    }
+    await db.query(`alter table assist_messages alter column chat_id set not null`);
+    console.log('✅ Chats schema ensured (assist_chats + assist_messages.chat_id + assist_feedback.chat_id)');
+  } catch (e) {
+    console.error('Chats schema ensure failed:', e.message);
+  }
+}
+
 // One-time backfill: if shifts exist but none is active (first deploy after
 // the is_active migration), activate the most recently started one. The SQL
 // migration also does this; this covers the case where the code deploys first.
@@ -4388,7 +4685,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`🏥 Flow Dictation running on port ${PORT}`);
   console.log(`✨ Models: ${MODEL_REPORT} (reports), ${MODEL_REVIEW} (review, de-identified pipeline) — full routing table above`);
   console.log(`🗄️  Database: ${db.configured ? db.describe() : 'NOT CONFIGURED'}`);
-  ensureTelemetrySchema();
+  ensureTelemetrySchema().then(ensureChatSchema);   // chats touch assist_feedback, ensured first
   ensureReportColumns();
   ensureAppSettingsSchema().then(loadAuthOverrides);
   backfillActiveShift();

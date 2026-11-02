@@ -232,10 +232,10 @@
         .assist-layout.collapsed .chat-sidebar { display: none; }
         .sidebar-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 8px; }
         .new-chat {
-            flex: 1; background: #3a3a3a; border: 1px solid #4a4a4a; color: #e0e0e0; font-size: 13px;
-            padding: 8px 12px; border-radius: 10px; cursor: pointer; text-align: left;
+            flex: 1; background: transparent; border: none; color: #ffffff; font-size: 13px;
+            padding: 8px 10px; border-radius: 10px; cursor: pointer; text-align: left;
         }
-        .new-chat:hover { background: #4a4a4a; }
+        .new-chat:hover { background: #2a2a2a; }
         .sidebar-toggle {
             background: transparent; border: 1px solid transparent; color: #909090; font-size: 16px;
             width: 32px; height: 32px; border-radius: 8px; cursor: pointer; line-height: 1; flex-shrink: 0;
@@ -1005,7 +1005,7 @@
           <div class="assist-layout" id="assistLayout">
             <aside class="chat-sidebar" id="chatSidebar" aria-label="Chats">
                 <div class="sidebar-head">
-                    <button type="button" class="new-chat" id="newChatBtn">+ New chat</button>
+                    <button type="button" class="new-chat" id="newChatBtn">+ New Chat</button>
                     <button type="button" class="sidebar-toggle" id="sidebarCollapse" title="Hide sidebar" aria-label="Hide sidebar">‹</button>
                 </div>
                 <div class="chat-search"><input id="chatSearch" type="search" autocomplete="off" placeholder="Search chats…"></div>

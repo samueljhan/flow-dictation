@@ -259,7 +259,8 @@ alter table assist_feedback add column if not exists latency_ms int;
 -- 'readout_integrate', 'detect', 'scrub', 'assist_proofread', 'assist_reword',
 -- 'assist_describe', 'assist_impression', 'assist_fullreport',
 -- 'assist_fullreport_impression', 'assist_radqa', 'assist_freetext',
--- 'synthesize' — deliberately unconstrained so new labels need no migration.
+-- 'assist_ddx', 'assist_prelim', 'synthesize' — deliberately unconstrained
+-- so new labels need no migration.
 -- Rows carry tokens/cost/type only, never report text — exempt from the
 -- finalization scrub, retained indefinitely. This table is the source of
 -- truth for spend: /api/usage/summary and the admin dashboard both read it,

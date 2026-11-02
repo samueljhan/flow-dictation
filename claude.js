@@ -39,6 +39,11 @@ const client = configured ? new Anthropic() : null;
 // prior shows...") doesn't trip the guard — real headings take "WORD:" form.
 const FORBIDDEN_HEADINGS = /^[ \t]*(?:\*\*)?[ \t]*(EXAMINATION|EXAM|CLINICAL HISTORY|CLINICAL INDICATION|INDICATION|HISTORY|TECHNIQUE|COMPARISON|PROCEDURE|PATIENT|DOB|MRN|ACCESSION)[ \t]*(?:\*\*)?[ \t]*:/im;
 
+// Exposed so a caller assembling a section-based payload from conversation
+// history can drop turns that carry report structure (an earlier Generate
+// Report answer) instead of tripping the guard on the whole request.
+const hasReportHeadings = text => FORBIDDEN_HEADINGS.test(String(text || ''));
+
 function guardError(detail) {
   const err = new Error(`De-identification guard refused this Claude call (${detail}) — falling back is the caller's job`);
   err.code = 'PHI_GUARD';
@@ -211,4 +216,4 @@ async function generate({ model, system, contents, maxTokens, effort, deidentifi
   };
 }
 
-module.exports = { generate, configured };
+module.exports = { generate, configured, hasReportHeadings };

@@ -327,6 +327,22 @@
         }
         .quick-chip:hover { background: #4a4a4a; color: #e0e0e0; }
         .quick-chip.armed { background: #565656; border-color: #8a8a8a; color: #fff; font-weight: 600; }
+        /* Prelim: optional study type above the composer; its dropdown opens
+           upward so it never covers the textarea */
+        .prelim-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 12px; color: #a0a0a0; }
+        .prelim-bar[hidden] { display: none; }
+        .prelim-bar .combobox { flex: 1 1 auto; max-width: 360px; }
+        .prelim-bar input { font-size: 13px; padding: 6px 10px; }
+        .prelim-bar .dropdown { top: auto; bottom: 100%; margin-top: 0; margin-bottom: 4px; }
+        /* Prelim answer: omitted incidentals / confirm prompts sit beneath the
+           report, outside what Copy report places on the clipboard */
+        .prelim-note { margin-top: 10px; padding-top: 8px; border-top: 1px dashed #404040; color: #8a8a8a; font-size: 12px; font-style: italic; }
+        .prelim-copy-row { margin-top: 10px; }
+        .prelim-copy {
+            background: #3a3a3a; border: 1px solid #4a4a4a; color: #c0c0c0; font-size: 12px;
+            padding: 4px 10px; border-radius: 999px; cursor: pointer;
+        }
+        .prelim-copy:hover { background: #4a4a4a; color: #e0e0e0; }
         .section-label {
             display: block; font-weight: 700; color: #909090; font-size: 11px;
             letter-spacing: 0.8px; margin-bottom: 2px;
@@ -925,6 +941,10 @@
                             <strong>Generate Report</strong>
                             <span>Full report from your notes, template, and prior</span>
                         </div>
+                        <div class="example-prompt" data-action="prelim">
+                            <strong>Prelim</strong>
+                            <span>On-call preliminary from scattered notes: impression-only, management-focused</span>
+                        </div>
                         <div class="example-prompt" data-action="ddx">
                             <strong>Ddx</strong>
                             <span>Ranked differential from a finding + patient context; ask for references to add links</span>
@@ -981,6 +1001,13 @@
             <div class="input-container">
               <div class="input-inner">
                 <div class="quick-bar" id="quickBar"></div>
+                <div class="prelim-bar" id="prelimBar" hidden>
+                    <label for="prelimStudyType">Study type</label>
+                    <div class="combobox">
+                        <input id="prelimStudyType" autocomplete="off" placeholder="Optional — detected from the notes when blank">
+                        <div id="prelimStudyTypeDropdown" class="dropdown" style="display:none"></div>
+                    </div>
+                </div>
                 <div class="input-wrapper">
                     <textarea id="userInput" placeholder="Ask a question, or paste text to work on…" rows="1"></textarea>
                     <button id="sendBtn" title="Send message">
@@ -1777,6 +1804,7 @@
         const ACTION_HINTS = {
             impression: 'Paste the report body — I’ll generate an Impression: the findings that change management, one per line.',
             generate: 'Fill in the form below: template and prior report are optional; the findings/impression notes drive the report. Review it carefully before use.',
+            prelim: 'Paste whatever you have for the case and I’ll draft the FINDINGS/IMPRESSION block of an on-call prelim — significant findings first, with measurements, series/image references, and recommendations; incidentals I leave out are listed beneath so you can restore them. Study type is optional. Prelim stays on for follow-ups and the next case — click the chip to turn it off.',
             ddx: 'Describe the finding WITH patient context — age, sex, relevant history — and I’ll rank a differential weighted by them. Ask for references to add Radiopaedia and StatDx links.',
             radqa: 'Ask your question — I’ll search Radiopaedia, ACR and RadioGraphics and cite what I used. Slower than asking plainly; skip it when you just want the answer.'
         };
@@ -1786,14 +1814,15 @@
             describe: 'Describe a Finding', reword: 'Reword', proofread: 'Proofread',
             impression: 'Generate Impression', fullreport: 'Generate Full Report',
             synthesize: 'Synthesize Report', generate: 'Generate Report',
-            ddx: 'Ddx', radqa: 'Quick Rad Question'
+            ddx: 'Ddx', radqa: 'Quick Rad Question', prelim: 'Prelim'
         };
-        const QUICK_ACTIONS = ['impression', 'generate', 'ddx', 'radqa'];
+        const QUICK_ACTIONS = ['impression', 'generate', 'prelim', 'ddx', 'radqa'];
 
         // Arming Ddx swaps the composer placeholder for an input pattern
         const DEFAULT_INPUT_PLACEHOLDER = 'Ask a question, or paste text to work on…';
         const ACTION_PLACEHOLDERS = {
-            ddx: 'e.g. pediatric male, CT showing a hyperdense suprasellar mass with calcifications…'
+            ddx: 'e.g. pediatric male, CT showing a hyperdense suprasellar mass with calcifications…',
+            prelim: 'Paste whatever you have — scattered findings, measurements, series/image refs, prior comparison notes…'
         };
 
         // Quick options are always available above the composer. Using one is
@@ -1849,9 +1878,19 @@
             return true;
         }
 
+        // The optional study-type field shows only while Prelim is armed. The
+        // list is the Draft page's; it loads on first use here.
+        const prelimStudyType = document.getElementById('prelimStudyType');
+        function syncPrelimBar() {
+            const on = pendingAction === 'prelim';
+            document.getElementById('prelimBar').hidden = !on;
+            if (on && !studyTypes.length) loadStudyTypes().then(() => {});
+        }
+
         function armAction(action) {
             pendingAction = action;
             syncQuickBar();
+            syncPrelimBar();
             userInput.placeholder = ACTION_PLACEHOLDERS[action] || DEFAULT_INPUT_PLACEHOLDER;
             addHintMessage(ACTION_LABELS[action] + ' — ' + ACTION_HINTS[action]);
             syncGeneratePanel();   // after the hint, so the card sits last in the flow
@@ -1866,6 +1905,7 @@
         function disarmAction() {
             pendingAction = null;
             syncQuickBar();
+            syncPrelimBar();
             syncGeneratePanel();
             userInput.placeholder = DEFAULT_INPUT_PLACEHOLDER;
             userInput.focus();
@@ -2026,14 +2066,32 @@
         // Render an assistant response. plainText is EXACTLY what Copy places on the clipboard.
         // model/latencyMs/apiCallId ride along so a feedback submission carries
         // the telemetry and links to the call's api_calls ledger row.
-        function addAssistantResponse({ html, plainText, actionType, userText, model, latencyMs, apiCallId }) {
+        function addAssistantResponse({ html, plainText, actionType, userText, model, latencyMs, apiCallId, copyText }) {
             const div = document.createElement('div');
             div.className = 'message assistant';
             const content = document.createElement('div');
             content.className = 'message-content';
             content.innerHTML = html;
 
-            // No Copy button: selecting any text in the transcript copies it.
+            // No Copy button in general: selecting any text in the transcript
+            // copies it. Prelim is the exception — its answer carries notes
+            // beneath the report that must not travel into PACS, so it gets a
+            // button that copies the report alone (copyText).
+            if (copyText) {
+                const row = document.createElement('div');
+                row.className = 'prelim-copy-row';
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'prelim-copy';
+                btn.textContent = 'Copy report';
+                btn.addEventListener('click', () => {
+                    navigator.clipboard.writeText(copyText)
+                        .then(() => showToast('Report copied', 1100))
+                        .catch(() => showToast('Copy blocked — select the report text instead', 2000));
+                });
+                row.appendChild(btn);
+                content.appendChild(row);
+            }
 
             // Feedback UI
             const fb = document.createElement('div');
@@ -2119,10 +2177,14 @@
 
             const actionType = pendingAction;
             const template = null;   // Generate Report sends its own structured body
-            pendingAction = null;
-            syncQuickBar();
-            syncGeneratePanel();
-            userInput.placeholder = DEFAULT_INPUT_PLACEHOLDER;
+            // Prelim stays armed: follow-ups ("shorten it", "add the right
+            // occipital lesion back") and the next case run the same pipeline.
+            if (actionType !== 'prelim') {
+                pendingAction = null;
+                syncQuickBar();
+                syncGeneratePanel();
+                userInput.placeholder = DEFAULT_INPUT_PLACEHOLDER;
+            }
             // Reference search is what Quick Rad Question is for; asking plainly
             // answers from knowledge, which is markedly faster. Ddx searches only
             // when the message asks for references/links (mirrors the server).
@@ -2136,12 +2198,15 @@
 
             const historyToSend = chatHistory.slice(-12);
             const body = { action: actionType, message, history: historyToSend, references: includeRefs, template };
+            // Blank study type → the server detects it from the notes
+            if (actionType === 'prelim') body.study_type = prelimStudyType.value.trim() || null;
             // Answers arrive whole. Text appearing a word at a time pulls the eye
             // back to a half-formed sentence; a report you can read in one go is
             // worth the wait.
             // A searched answer takes ~20s, most of it before any text exists —
             // say what the wait is for rather than showing a bare spinner
-            const loading = addLoadingMessage(searches ? 'Searching references…' : 'Thinking…');
+            const loading = addLoadingMessage(searches ? 'Searching references…'
+                : actionType === 'prelim' ? 'Drafting prelim…' : 'Thinking…');
             try {
                 const data = await api('/api/assist', { method: 'POST', body });
                 loading.remove();
@@ -2153,6 +2218,20 @@
                         '<span class="section-label">FINDINGS</span>' + escapeHtml(data.findings) +
                         '\n\n<span class="section-label">IMPRESSION</span>' + escapeHtml(data.impression);
                     addAssistantResponse({ html, plainText, actionType, userText: message,
+                        model: data.model, latencyMs: data.latency_ms, apiCallId: data.api_call_id });
+                } else if (data.type === 'prelim') {
+                    // The report block renders as the answer; omitted
+                    // incidentals and confirm prompts sit beneath in a muted
+                    // note. History carries both (a follow-up may ask an
+                    // omitted item back in); Copy report takes the block alone.
+                    const notes = data.notes || [];
+                    const reportBody = data.text.replace(/^FINDINGS\/IMPRESSION:\s*/, '');
+                    plainText = data.text + (notes.length ? '\n\n' + notes.join('\n') : '');
+                    let html = '<span class="section-label">FINDINGS/IMPRESSION</span>' + escapeHtml(reportBody);
+                    if (notes.length) {
+                        html += '<div class="prelim-note">' + notes.map(escapeHtml).join('\n') + '</div>';
+                    }
+                    addAssistantResponse({ html, plainText, actionType, userText: message, copyText: data.text,
                         model: data.model, latencyMs: data.latency_ms, apiCallId: data.api_call_id });
                 } else if (actionType === 'proofread') {
                     plainText = data.text;
@@ -2504,32 +2583,39 @@
             }
         }
 
-        function renderStudyTypeDropdown() {
-            const q = studyTypeInput.value.trim().toLowerCase();
-            const matches = studyTypes.filter(t => !q || t.name.toLowerCase().includes(q));
-            if (matches.length === 0 && !q) {
-                studyTypeDropdown.style.display = 'none';
-                return;
-            }
-            let html = matches.slice(0, 30).map(t =>
-                '<div class="dropdown-item" data-name="' + escapeHtml(t.name) + '">' + escapeHtml(t.name) + '</div>'
-            ).join('');
-            if (q && !studyTypes.some(t => t.name.toLowerCase() === q)) {
-                html += '<div class="dropdown-empty">New study type — will be saved on save</div>';
-            }
-            studyTypeDropdown.innerHTML = html || '<div class="dropdown-empty">No matches</div>';
-            studyTypeDropdown.style.display = '';
-            studyTypeDropdown.querySelectorAll('.dropdown-item').forEach(item => {
-                item.addEventListener('mousedown', (e) => {
-                    e.preventDefault();
-                    studyTypeInput.value = item.dataset.name;
-                    studyTypeDropdown.style.display = 'none';
+        // Study-type combobox over the shared `studyTypes` list. Used by the
+        // Draft page (where an unknown name is saved with the report, hence
+        // newHint) and by the Prelim bar on the Assist page.
+        function wireStudyTypeCombobox(input, dropdown, { newHint } = {}) {
+            function render() {
+                const q = input.value.trim().toLowerCase();
+                const matches = studyTypes.filter(t => !q || t.name.toLowerCase().includes(q));
+                if (matches.length === 0 && !q) {
+                    dropdown.style.display = 'none';
+                    return;
+                }
+                let html = matches.slice(0, 30).map(t =>
+                    '<div class="dropdown-item" data-name="' + escapeHtml(t.name) + '">' + escapeHtml(t.name) + '</div>'
+                ).join('');
+                if (newHint && q && !studyTypes.some(t => t.name.toLowerCase() === q)) {
+                    html += '<div class="dropdown-empty">' + escapeHtml(newHint) + '</div>';
+                }
+                dropdown.innerHTML = html || '<div class="dropdown-empty">No matches</div>';
+                dropdown.style.display = '';
+                dropdown.querySelectorAll('.dropdown-item').forEach(item => {
+                    item.addEventListener('mousedown', (e) => {
+                        e.preventDefault();
+                        input.value = item.dataset.name;
+                        dropdown.style.display = 'none';
+                    });
                 });
-            });
+            }
+            input.addEventListener('focus', render);
+            input.addEventListener('input', render);
+            input.addEventListener('blur', () => setTimeout(() => { dropdown.style.display = 'none'; }, 150));
         }
-        studyTypeInput.addEventListener('focus', renderStudyTypeDropdown);
-        studyTypeInput.addEventListener('input', renderStudyTypeDropdown);
-        studyTypeInput.addEventListener('blur', () => setTimeout(() => { studyTypeDropdown.style.display = 'none'; }, 150));
+        wireStudyTypeCombobox(studyTypeInput, studyTypeDropdown, { newHint: 'New study type — will be saved on save' });
+        wireStudyTypeCombobox(prelimStudyType, document.getElementById('prelimStudyTypeDropdown'));
 
         // Autofill Study Type from the report header: most reports name the exam
         // after "Exam:" / "Examination:" in the top lines. The exam name is used

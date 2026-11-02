@@ -50,6 +50,18 @@ const AGE_90_PLUS = {
   re: /\b(?:9\d|1[0-4]\d)(?:[- ]?(?:year|yr)s?[- ]old|[- ]?y\/?o\b)/gi
 };
 
+// Bare years tied to events — "not seen on 2018 CT", "resected in 2019",
+// "the 2024 PET" — are partial dates. The destructive scrub leaves them to
+// its model pass; OUTBOUND reversible redaction tokenizes them
+// deterministically so comparison notes never depend on the model noticing.
+// 1900–2099 only, standing alone: not part of a longer number or decimal,
+// and not followed by a unit (2000 mL, 2000 ms, 1900 HU are measurements).
+// Runs after PATTERNS, so a year inside a full date is already a token.
+const BARE_YEAR = {
+  type: 'DATE',
+  re: /(?<![\d.\-\/])\b(?:19|20)\d{2}\b(?![.\-\/]\d|\s?(?:mm|cm|mL|ml|cc|HU|ms)\b)/g
+};
+
 // One text -> { text, counts } where counts is {TYPE: n} for types that hit
 function patternScrub(text) {
   const counts = {};
@@ -169,10 +181,10 @@ function tokenFor(state, type, identifier) {
 }
 
 // Pattern pass, reversible flavor: same PATTERNS plus the outbound-only
-// 90+ age rule, indexed tokens instead of bare placeholders.
+// 90+ age and bare-year rules, indexed tokens instead of bare placeholders.
 function patternRedact(text, state) {
   let out = String(text);
-  for (const { type, re } of [...PATTERNS, AGE_90_PLUS]) {
+  for (const { type, re } of [...PATTERNS, AGE_90_PLUS, BARE_YEAR]) {
     out = out.replace(re, m => tokenFor(state, type, m));
   }
   return out;

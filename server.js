@@ -8,6 +8,7 @@ const db = require('./db');
 const gemini = require('./gemini');
 const claude = require('./claude');
 const scrub = require('./scrub');
+const prelim = require('./prelim');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -61,6 +62,7 @@ const MODEL_SYNTHESIZE = process.env.MODEL_SYNTHESIZE || 'claude-opus-5';   // p
 const MODEL_RADQA = process.env.MODEL_RADQA || 'gemini-2.5-pro';            // Gemini fallback for free text (Google grounding when refs ON)
 const MODEL_RADQA_GROUNDED = process.env.MODEL_RADQA_GROUNDED || 'claude-opus-5'; // references ON (Anthropic web search)
 const MODEL_DDX = process.env.MODEL_DDX || 'claude-opus-5';                 // Ddx (whole-text pipeline + Anthropic web search, always on)
+const MODEL_PRELIM = process.env.MODEL_PRELIM || 'claude-opus-5';           // Prelim — on-call preliminary report (de-identified pipeline, high effort, no search)
 const MODEL_CHAT = process.env.MODEL_CHAT || 'claude-opus-5';               // plain free text (whole-text de-identified pipeline)
 const MODEL_SCRUB = process.env.MODEL_SCRUB || 'gemini-2.5-flash-lite';     // PHI scrub + reversible redaction model pass
 // Where a Claude-routed task lands when the de-identified pipeline can't run
@@ -375,6 +377,7 @@ app.get('/api/settings', (req, res) => {
         providerFor(MODEL_DDX) === 'claude'
           ? 'whole-text de-identified pipeline; Anthropic web search when references requested'
           : 'Google Search grounding when references requested'),
+      entry('Prelim (on-call preliminary report)', MODEL_PRELIM, 'de-identified pipeline; history redacted per-request; no web search'),
       entry('Quick Rad Question — references ON', MODEL_RADQA_GROUNDED,
         providerFor(MODEL_RADQA_GROUNDED) === 'claude'
           ? 'whole-text de-identified pipeline + Anthropic web search'
@@ -406,6 +409,7 @@ console.log(`  reword=${routed(MODEL_REWORD)} describe=${routed(MODEL_DESCRIBE)}
 console.log(`  proofread+fullreport=${routed(MODEL_REPORT)} — whole-text pipeline (full input redacted and sent whole)`);
 console.log(`  chat=${routed(MODEL_CHAT)} — whole-text pipeline, history redacted per-request; Gemini fallback ${MODEL_RADQA}`);
 console.log(`  radqa: references ON → ${routed(MODEL_RADQA_GROUNDED)} + web search (Anthropic on claude, Google on gemini) · gemini fallback for free text: ${MODEL_RADQA}`);
+console.log(`  ddx=${routed(MODEL_DDX)} prelim=${routed(MODEL_PRELIM)} — prelim: section-based pipeline, history redacted per-request, no search`);
 console.log(`  gemini fallback for pipeline-ineligible requests: ${MODEL_GEMINI_FALLBACK}`);
 console.log('========================');
 
@@ -705,7 +709,8 @@ const ACTION_EFFORT = {
   impression: 'medium',
   fullreport: 'high',
   synthesize: 'high',
-  generate: 'high'
+  generate: 'high',
+  prelim: 'high'       // triage + ordering judgement is the whole task
 };
 const DRAFT_REVIEW_EFFORT = 'high';  // typo/essential-edit review; high curbs false "inconsistency" flags
 // Free text is the most-used path, so it is also the most latency-sensitive.
@@ -1213,7 +1218,12 @@ const KNOWLEDGE_PROFILES = {
   generate:   { style: true,  language: 'all',              exemplars: 2 },
   review:     { style: true,  language: ['words_to_avoid'], exemplars: 1 },
   readout:    { style: true,  language: ['words_to_avoid'], exemplars: 1 },
-  freeform:   { style: true,  language: 'all',              exemplars: 2 }
+  freeform:   { style: true,  language: 'all',              exemplars: 2 },
+  // Prelim writes impression-register prose: stored impressions for the
+  // study type teach that voice; a full templated report would teach the
+  // findings-by-organ structure the action exists to avoid — never fall
+  // back to one.
+  prelim:     { style: true,  language: 'all',              exemplars: 2, impressionPairs: true, impressionOnly: true }
 };
 const DEFAULT_PROFILE = { style: true, language: 'all', exemplars: DEFAULT_EXEMPLARS };
 const profileFor = key => KNOWLEDGE_PROFILES[key] || DEFAULT_PROFILE;
@@ -1427,6 +1437,7 @@ async function buildExemplarText(studyType, profile) {
     const pairs = await selectImpressionExemplars(studyType, profile.exemplars);
     const text = impressionBlockText(pairs);
     if (text) return text;      // fall through to full reports when none stored yet
+    if (profile.impressionOnly) return '';
   }
   return exemplarBlockText(await selectExemplars(studyType, profile.exemplars));
 }
@@ -1797,6 +1808,76 @@ async function runClaudeFreeform({ message, history, useRefs, system, label, mod
   }
 }
 
+// ---- Prelim: on-call preliminary report (impression-only, management-focused) ----
+// Section-based de-identified pipeline. The notes ARE the findings/impression
+// payload; study type is the only other context (user-supplied, else detected
+// on Gemini — detection sees raw text). The message and the budgeted history
+// are redacted together under one request-scoped map so follow-ups ("add the
+// right occipital lesion back", "compare to the 2024 PET") work, then
+// restored before the answer leaves. No web search. Falls back to Gemini when
+// the pipeline can't run. Returns the /api/assist response body.
+async function runPrelim({ message, history, studyType }) {
+  const t0 = Date.now();
+  const timing = {};
+  let st = (typeof studyType === 'string' && studyType.trim()) ? studyType.trim().slice(0, 120) : null;
+  if (!st) st = await detectStudyType(message).catch(() => null);
+  // A pasted structured report contributes its findings/impression only;
+  // header sections never leave the server.
+  const parts = splitReportSections(message);
+  const payload = (parts && parts.findings)
+    ? parts.findings + (parts.impression ? '\n\nIMPRESSION:\n' + parts.impression : '')
+    : message;
+  const userTurn = notes =>
+    `${prelim.PRELIM_INSTRUCTION}\n\nStudy type: ${st || 'not specified — infer from the notes'}\n\nNOTES:\n${notes}`;
+
+  let raw = null;
+  let served = MODEL_PRELIM;
+  if (providerFor(MODEL_PRELIM) === 'claude' && claude.configured) {
+    try {
+      // History turns carrying report structure (an earlier Generate Report
+      // answer) would trip the section guard — drop them, keep the rest.
+      const kept = budgetHistory(history).filter(h => !claude.hasReportHeadings(h.content));
+      const texts = { notes: payload };
+      kept.forEach((h, i) => { texts['h' + i] = h.content; });
+      const red = await redactReversible(texts, null);
+      if (red.ok) {
+        const { system, injected } = await buildKnowledgeSystem(
+          prelim.PRELIM_SYSTEM + CLAUDE_DEID_CONTRACT, st, 'prelim', { scrubForClaude: true });
+        const msgs = kept.map((h, i) => ({ role: h.role, content: red.texts['h' + i] }));
+        msgs.push({ role: 'user', content: userTurn(red.texts.notes) });
+        const text = await llmText({
+          model: MODEL_PRELIM, label: 'assist_prelim', system, injected, messages: msgs,
+          maxTokens: 8000, effort: ACTION_EFFORT.prelim, timing, deidentified: true
+        });
+        raw = scrub.restoreRedaction(text, red.map);
+      }
+    } catch (e) {
+      if (e.isRefusal) throw e;
+      console.warn(`[deid] prelim falling back to Gemini: ${e.message}`);
+      raw = null;
+    }
+  }
+  if (raw === null) {
+    served = providerFor(MODEL_PRELIM) === 'claude' ? MODEL_GEMINI_FALLBACK : MODEL_PRELIM;
+    const { system, injected } = await buildKnowledgeSystem(prelim.PRELIM_SYSTEM, st, 'prelim');
+    const msgs = budgetHistory(history);
+    msgs.push({ role: 'user', content: userTurn(payload) });
+    raw = await llmText({
+      model: served, label: 'assist_prelim', system, injected, messages: msgs,
+      maxTokens: 8000, effort: ACTION_EFFORT.prelim, timing
+    });
+  }
+
+  const parsed = prelim.parsePrelimOutput(raw);
+  const body = parsed.kind === 'prelim'
+    ? { type: 'prelim', text: parsed.report, notes: parsed.notes }
+    : { type: 'text', text: parsed.text };
+  return {
+    ...body, study_type: st,
+    model: timing.model || served, latency_ms: Date.now() - t0, api_call_id: timing.api_call_id || null
+  };
+}
+
 // Quick-action usage counter: which chip was armed for this send, 'freetext'
 // when none. Fire-and-forget — a failed insert costs the count, never the
 // assist call.
@@ -1839,6 +1920,11 @@ app.post('/api/assist', async (req, res) => {
       // client-side citation appendix for Ddx.
       out.citations = [];
       return res.json({ type: 'text', ...out });
+    }
+
+    // Prelim: on-call preliminary report block from scattered notes.
+    if (action === 'prelim') {
+      return res.json(await runPrelim({ message, history, studyType: req.body.study_type }));
     }
 
     // Free text (no quick action armed): one prompt that works out for itself
@@ -3886,7 +3972,7 @@ app.get('/api/health', (req, res) => {
       anthropic_first_party: claude.configured,
       detect: MODEL_DETECT, report: MODEL_REPORT, review: MODEL_REVIEW,
       impression: MODEL_IMPRESSION, reword: MODEL_REWORD, describe: MODEL_DESCRIBE,
-      radqa: MODEL_RADQA, radqa_grounded: MODEL_RADQA_GROUNDED,
+      radqa: MODEL_RADQA, radqa_grounded: MODEL_RADQA_GROUNDED, ddx: MODEL_DDX, prelim: MODEL_PRELIM,
       synthesize: MODEL_SYNTHESIZE, chat: MODEL_CHAT, gemini_fallback: MODEL_GEMINI_FALLBACK
     },
     auth: { google: googleLoginConfigured, password: !!APP_PASSWORD, allowed_emails: ALLOWED_EMAILS.length },
